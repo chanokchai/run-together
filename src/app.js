@@ -1,11 +1,16 @@
 import express from 'express';
+import { CANONICAL_TIME_ZONE } from './calendar.js';
 
-export function createApp() {
+export function createApp({ databaseReady = false } = {}) {
   const app = express();
   app.disable('x-powered-by');
 
   app.get('/health', (_request, response) => {
-    response.json({ status: 'ok' });
+    response.json({
+      status: 'ok',
+      database: databaseReady ? 'ready' : 'not_ready',
+      timeZone: CANONICAL_TIME_ZONE,
+    });
   });
 
   app.get('/', (_request, response) => {

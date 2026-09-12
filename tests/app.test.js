@@ -1,10 +1,17 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { once } from 'node:events';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 import { createServer } from '../src/server.js';
 
 async function withServer(callback) {
-  const server = createServer();
+  const directory = await mkdtemp(join(tmpdir(), 'run-together-server-'));
+  const server = createServer({
+    databasePath: join(directory, 'test.sqlite'),
+    env: { ADMIN_NAME: 'Synthetic Coach', ADMIN_PIN: '4826', PIN_PEPPER: 'synthetic-pepper' },
+  });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
 
@@ -14,14 +21,20 @@ async function withServer(callback) {
   } finally {
     server.close();
     await once(server, 'close');
+    server.database.close();
+    await rm(directory, { recursive: true, force: true });
   }
 }
 
-test('GET /health returns the documented healthy JSON response', async () => {
+test('GET /health returns compatible status and safe database readiness', async () => {
   await withServer(async (baseUrl) => {
     const response = await fetch(`${baseUrl}/health`);
     assert.equal(response.status, 200);
-    assert.deepEqual(await response.json(), { status: 'ok' });
+    assert.deepEqual(await response.json(), {
+      status: 'ok',
+      database: 'ready',
+      timeZone: 'Asia/Bangkok',
+    });
   });
 });
 
