@@ -10,7 +10,7 @@ The initial foundation provides a minimal Express server and SQLite domain found
 - `GET /` returning a placeholder landing page in English and Thai.
 - Graceful shutdown on `SIGINT` and `SIGTERM`.
 - Versioned transactional SQLite migrations for users, votes, sessions, and the migration ledger.
-- Strict Bangkok-calendar helpers for ISO dates, Monday weeks, ISO week identity, and the two-week future window.
+- Strict Bangkok-calendar helpers for ISO dates, Monday weeks, ISO week identity, and the current week plus two full future weeks.
 - A single idempotent admin bootstrap using `ADMIN_NAME`, `ADMIN_PIN`, and server-only `PIN_PEPPER`.
 
 Product features are intentionally out of scope for this foundation.

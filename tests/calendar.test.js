@@ -38,6 +38,8 @@ test('allows the current Bangkok day through midnight and limits future weeks', 
   const atNextBangkokDay = () => new Date('2024-02-29T17:00:00.000Z');
   assert.equal(isDateWritable('2024-02-29', atBangkokDay), true);
   assert.equal(isDateWritable('2024-02-28', atBangkokDay), false);
+  assert.equal(isDateWritable('2024-03-17', atBangkokDay), true);
+  assert.equal(isDateWritable('2024-03-18', atBangkokDay), false);
   assert.equal(isDateWritable('2024-02-29', atNextBangkokDay), false);
   assert.equal(isWeekNavigable('2024-02-26', atBangkokDay), true);
   assert.equal(isWeekNavigable('2024-03-11', atBangkokDay), true);

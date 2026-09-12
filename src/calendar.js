@@ -68,7 +68,8 @@ export function getIsoWeek(date) {
 export function isDateWritable(date, clock = () => new Date()) {
   const target = toEpochDay(parseIsoDate(date));
   const today = toEpochDay(parseIsoDate(getBangkokDate(clock)));
-  return target >= today && target <= today + 14;
+  const currentMonday = toEpochDay(parseIsoDate(getCurrentWeekMonday(clock)));
+  return target >= today && target <= currentMonday + 20;
 }
 
 export function isWeekNavigable(mondayDate, clock = () => new Date()) {
