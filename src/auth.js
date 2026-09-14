@@ -52,7 +52,7 @@ function codePointLength(value) {
   return Array.from(value).length;
 }
 
-export function validateCredentials({ name, pin, pinConfirmation } = {}) {
+export function validateCredentials({ name, pin, pinConfirmation } = {}, { requirePinConfirmation = false } = {}) {
   if (typeof name !== 'string') throw new AuthError(400, 'INVALID_NAME', MESSAGES.invalidName);
   const displayName = name.trim().normalize('NFKC');
   if (!displayName || codePointLength(displayName) > MAX_NAME_CODE_POINTS) {
@@ -61,7 +61,8 @@ export function validateCredentials({ name, pin, pinConfirmation } = {}) {
   if (typeof pin !== 'string' || !/^\d{4}$/.test(pin)) {
     throw new AuthError(400, 'INVALID_PIN', MESSAGES.invalidPin);
   }
-  if (pinConfirmation !== undefined && (typeof pinConfirmation !== 'string' || pin !== pinConfirmation)) {
+  if ((requirePinConfirmation || pinConfirmation !== undefined)
+    && (typeof pinConfirmation !== 'string' || pin !== pinConfirmation)) {
     throw new AuthError(400, 'PIN_MISMATCH', MESSAGES.pinMismatch);
   }
   return { name: displayName, nameKey: normalizeName(displayName), pin };
@@ -223,7 +224,7 @@ export function createAuthService({ database, env = process.env, now = () => new
 
 
   async function register({ name, pin, pinConfirmation, sourceKey }) {
-    const credentials = validateCredentials({ name, pin, pinConfirmation });
+    const credentials = validateCredentials({ name, pin, pinConfirmation }, { requirePinConfirmation: true });
     const source = sourceKey ?? 'unknown';
     const release = limiter.reserve(source);
     if (!release) throw new AuthError(429, 'REGISTRATION_LIMIT', MESSAGES.registrationLimit);

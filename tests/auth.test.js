@@ -59,6 +59,27 @@ test('registration validates Unicode code points and exact string PIN rules', as
   });
 });
 
+test('registration requires PIN confirmation and does not consume quota when omitted', async () => {
+  await withServer(async (baseUrl, server) => {
+    const response = await fetch(`${baseUrl}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Missing Confirmation', pin: '0042' }),
+    });
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).code, 'PIN_MISMATCH');
+    assert.equal(server.database.prepare('SELECT COUNT(*) AS count FROM users WHERE name_key = ?').get('missing confirmation').count, 0);
+    const nonString = await fetch(`${baseUrl}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Non-string Confirmation', pin: '0042', pinConfirmation: 42 }),
+    });
+    assert.equal(nonString.status, 400);
+    assert.equal((await nonString.json()).code, 'PIN_MISMATCH');
+    assert.equal((await register(baseUrl, 'Missing Confirmation', '0042', '0042')).status, 201);
+  });
+});
+
 test('credential validation normalizes names and enforces 1–40 Unicode code points', () => {
   assert.equal(validateCredentials({ name: '  Ａlice  ', pin: '0042', pinConfirmation: '0042' }).name, 'Alice');
   assert.equal(validateCredentials({ name: 'x'.repeat(40), pin: '0042', pinConfirmation: '0042' }).name.length, 40);
