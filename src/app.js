@@ -1,9 +1,101 @@
 import express from 'express';
 import { CANONICAL_TIME_ZONE } from './calendar.js';
+import { AuthError, createAuthService } from './auth.js';
 
-export function createApp({ databaseReady = false } = {}) {
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  })[character]);
+}
+
+function page({ title, content, script = '' }) {
+  return `<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>${title}</title>
+    <style>
+      :root { color-scheme: light; font-family: system-ui, sans-serif; }
+      body { margin: 0; background: #f3f6fa; color: #14213d; }
+      main { max-width: 34rem; margin: 0 auto; padding: 2rem 1rem; }
+      section { background: white; border-radius: 1rem; padding: 1.5rem; box-shadow: 0 0.25rem 1rem #14213d18; }
+      label { display: block; margin-top: 1rem; font-weight: 600; }
+      input, button { box-sizing: border-box; width: 100%; min-height: 2.75rem; margin-top: .35rem; padding: .55rem .7rem; font: inherit; }
+      button { cursor: pointer; background: #1769aa; color: white; border: 0; border-radius: .45rem; font-weight: 700; }
+      a { color: #145da0; }
+      .message { min-height: 1.5rem; margin-top: 1rem; }
+      .actions { display: grid; gap: .75rem; margin-top: 1rem; }
+      .secondary { background: #52606d; }
+    </style>
+  </head>
+  <body><main>${content}</main>${script ? `<script>${script}</script>` : ''}</body>
+</html>`;
+}
+
+const loginPage = () => page({
+  title: 'Run Together | เข้าสู่ระบบ',
+  content: `<section>
+    <h1>Run Together</h1>
+    <p>วิ่งไปด้วยกัน / Run together</p>
+    <p>เข้าสู่ระบบ / Sign in</p>
+    <form id="login-form">
+      <label>ชื่อ / Name <input name="name" autocomplete="username" required maxlength="40"></label>
+      <label>PIN 4 หลัก / 4-digit PIN <input name="pin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="current-password" required></label>
+      <button>เข้าสู่ระบบ / Sign in</button>
+    </form>
+    <p id="message" class="message" role="status"></p>
+    <a href="/register">สมัครสมาชิก / Register</a>
+  </section>`,
+  script: `document.querySelector('#login-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const response = await fetch('/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: form.get('name'), pin: form.get('pin') }) });
+    const result = await response.json();
+    if (response.ok) location.href = '/vote';
+    else document.querySelector('#message').textContent = result.message;
+  });`,
+});
+
+const registerPage = () => page({
+  title: 'Run Together | สมัครสมาชิก',
+  content: `<section>
+    <h1>Run Together</h1>
+    <p>สมัครสมาชิก / Register</p>
+    <form id="register-form">
+      <label>ชื่อ / Name <input name="name" autocomplete="username" required maxlength="40"></label>
+      <label>PIN 4 หลัก / 4-digit PIN <input name="pin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="new-password" required></label>
+      <label>ยืนยัน PIN / Confirm PIN <input name="pinConfirmation" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="new-password" required></label>
+      <button>สมัครและเข้าสู่ระบบ / Register and sign in</button>
+    </form>
+    <p id="message" class="message" role="status"></p>
+    <a href="/">เข้าสู่ระบบ / Sign in</a>
+  </section>`,
+  script: `document.querySelector('#register-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const response = await fetch('/api/auth/register', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: form.get('name'), pin: form.get('pin'), pinConfirmation: form.get('pinConfirmation') }) });
+    const result = await response.json();
+    if (response.ok) location.href = '/vote';
+    else document.querySelector('#message').textContent = result.message;
+  });`,
+});
+
+export function createApp({ databaseReady = false, database, env = process.env, now = () => new Date() } = {}) {
   const app = express();
   app.disable('x-powered-by');
+  app.use(express.json({ limit: '10kb' }));
+  const auth = database ? createAuthService({ database, env, now }) : null;
+
+  const sendError = (response, error) => {
+    const safe = error instanceof AuthError ? error : new AuthError(500, 'SERVER_ERROR', 'เกิดข้อผิดพลาด กรุณาลองใหม่ / Something went wrong; please try again.');
+    if (!(error instanceof AuthError)) console.error('Request failed:', error);
+    response.status(safe.status).json({ code: safe.code, message: safe.message });
+  };
 
   app.get('/health', (_request, response) => {
     response.json({
@@ -14,22 +106,84 @@ export function createApp({ databaseReady = false } = {}) {
   });
 
   app.get('/', (_request, response) => {
-    response.type('html').send(`<!doctype html>
-<html lang="th">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Run Together | วิ่งไปด้วยกัน</title>
-  </head>
-  <body>
-    <main>
-      <h1>Run Together</h1>
-      <p>วิ่งไปด้วยกัน</p>
-      <p>Bilingual running practice voting is coming soon.</p>
-      <p>ระบบโหวตวันซ้อมวิ่งสองภาษากำลังจะมาเร็ว ๆ นี้</p>
-    </main>
-  </body>
-</html>`);
+    response.type('html').send(loginPage());
+  });
+
+  app.get('/register', (_request, response) => response.type('html').send(registerPage()));
+
+  if (auth) {
+    app.post('/api/auth/register', async (request, response) => {
+      try {
+        auth.assertSameOrigin(request);
+        const result = await auth.register({ ...request.body, sourceKey: auth.effectiveSourceKey(request) });
+        response.status(201).setHeader('set-cookie', auth.sessionCookie(result.session.token, result.session.expiresAt));
+        response.json({ user: result.user, sessionRestored: true });
+      } catch (error) {
+        sendError(response, error);
+      }
+    });
+
+    app.post('/api/auth/login', async (request, response) => {
+      try {
+        auth.assertSameOrigin(request);
+        const result = await auth.login(request.body);
+        response.setHeader('set-cookie', auth.sessionCookie(result.session.token, result.session.expiresAt));
+        response.json({ user: result.user, sessionRestored: true });
+      } catch (error) {
+        sendError(response, error);
+      }
+    });
+
+    app.get('/api/session', (request, response) => {
+      const session = auth.requireSession(request, response);
+      if (session) response.json(auth.sessionPayload(session));
+    });
+
+    app.get('/vote', (request, response) => {
+      const session = auth.requireSession(request, response);
+      if (!session) return;
+      const displayName = escapeHtml(session.name);
+      response.type('html').send(page({
+        title: 'Run Together | Vote',
+        content: `<section><h1>Run Together</h1><p>ยินดีต้อนรับ / Welcome, <strong id="display-name">${displayName}</strong></p><p>กระดานโหวตจะมาเร็ว ๆ นี้ / The voting board is coming soon.</p><p id="message" class="message" role="status"></p><form id="pin-form"><h2>เปลี่ยน PIN / Change PIN</h2><label>PIN ปัจจุบัน / Current PIN <input name="currentPin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required></label><label>PIN ใหม่ / New PIN <input name="newPin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required></label><label>ยืนยัน PIN ใหม่ / Confirm new PIN <input name="newPinConfirmation" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required></label><button>เปลี่ยน PIN / Change PIN</button></form><div class="actions"><button id="logout" class="secondary">ออกจากระบบ / Logout</button></div></section>`,
+        script: `let csrfToken = '';
+          async function loadSession() { const response = await fetch('/api/session'); if (!response.ok) { location.href = '/'; return; } const session = await response.json(); csrfToken = session.csrfToken; document.querySelector('#display-name').textContent = session.displayName; }
+          document.querySelector('#pin-form').addEventListener('submit', async (event) => { event.preventDefault(); const form = new FormData(event.currentTarget); const response = await fetch('/api/account/pin', { method: 'PUT', headers: { 'content-type': 'application/json', 'x-csrf-token': csrfToken }, body: JSON.stringify(Object.fromEntries(form)) }); const result = response.status === 204 ? { message: 'เปลี่ยน PIN สำเร็จ / PIN changed successfully.' } : await response.json(); document.querySelector('#message').textContent = result.message; if (response.status === 401) location.href = '/'; });
+          document.querySelector('#logout').addEventListener('click', async () => { const response = await fetch('/api/auth/logout', { method: 'POST', headers: { 'x-csrf-token': csrfToken } }); if (response.ok) location.href = '/'; });
+          loadSession();`,
+      }));
+    });
+
+    app.put('/api/account/pin', async (request, response) => {
+      const session = auth.requireSession(request, response);
+      if (!session) return;
+      try {
+        auth.assertCsrf(request, session);
+        await auth.changePin(session, request.body);
+        response.status(204).end();
+      } catch (error) {
+        sendError(response, error);
+      }
+    });
+
+    app.post('/api/auth/logout', (request, response) => {
+      const session = auth.requireSession(request, response);
+      if (!session) return;
+      try {
+        auth.assertCsrf(request, session);
+        auth.logout(session, response);
+        response.status(204).end();
+      } catch (error) {
+        sendError(response, error);
+      }
+    });
+  }
+
+  app.use((error, _request, response, _next) => {
+    if (error?.type === 'entity.parse.failed' || error instanceof SyntaxError) {
+      return response.status(400).json({ code: 'INVALID_REQUEST', message: 'ข้อมูลไม่ถูกต้อง / The submitted information is invalid.' });
+    }
+    return response.status(500).json({ code: 'SERVER_ERROR', message: 'เกิดข้อผิดพลาด กรุณาลองใหม่ / Something went wrong; please try again.' });
   });
 
   return app;

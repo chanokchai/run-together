@@ -23,7 +23,7 @@ export function createServer({
   now = () => new Date(),
 } = {}) {
   const database = initializeDatabase({ databasePath, env, now });
-  const server = createHttpServer(createApp({ databaseReady: true }));
+  const server = createHttpServer(createApp({ database, databaseReady: true, env, now }));
   server.database = database;
   return server;
 }
