@@ -1,6 +1,13 @@
 import { randomBytes, scryptSync } from 'node:crypto';
 import { normalizeName } from './names.js';
-import { parseIsoDate } from './calendar.js';
+import {
+  addDays,
+  getIsoWeek,
+  getWeekRange,
+  isDateWritable,
+  isWeekNavigable,
+  parseIsoDate,
+} from './calendar.js';
 
 function timestamp(now = () => new Date()) {
   const value = now instanceof Date || typeof now === 'string' ? now : now();
@@ -20,7 +27,7 @@ export function createUser(database, {
   role = 'user',
   now = () => new Date(),
 }) {
-  const displayName = String(name ?? '').trim();
+  const displayName = String(name ?? '').trim().normalize('NFKC');
   const nameKey = normalizeName(displayName);
   if (!displayName || !nameKey) throw new Error('name is required');
   if (role !== 'admin' && role !== 'user') throw new Error('invalid user role');
@@ -74,6 +81,46 @@ export function addVote(database, { userId, voteDate, createdAt = new Date().toI
     INSERT INTO votes (user_id, vote_date, created_at) VALUES (?, ?, ?)
   `).run(userId, canonicalDate, createdAt);
   return database.prepare('SELECT * FROM votes WHERE id = ?').get(result.lastInsertRowid);
+}
+
+export function getWeekState(database, { monday, currentUserId, now = () => new Date() }) {
+  const { sunday } = getWeekRange(monday);
+  const rows = database.prepare(`
+    SELECT votes.vote_date AS date, votes.user_id AS userId, users.name AS voterName
+    FROM votes
+    JOIN users ON users.id = votes.user_id
+    WHERE votes.vote_date >= ? AND votes.vote_date <= ?
+    ORDER BY votes.vote_date ASC, users.name_key ASC, users.name ASC, votes.user_id ASC
+  `).all(monday, sunday);
+  const byDate = new Map();
+  const currentUserSelectedDates = [];
+  for (const row of rows) {
+    const names = byDate.get(row.date) ?? [];
+    names.push(row.voterName);
+    byDate.set(row.date, names);
+    if (row.userId === currentUserId) currentUserSelectedDates.push(row.date);
+  }
+  const days = Array.from({ length: 7 }, (_, index) => {
+    const date = addDays(monday, index);
+    const voterNames = byDate.get(date) ?? [];
+    return {
+      date,
+      eligible: isDateWritable(date, now),
+      voteCount: voterNames.length,
+      voterNames,
+    };
+  });
+  const isoWeek = getIsoWeek(monday);
+  const nextMonday = addDays(monday, 7);
+  return {
+    week: { monday, sunday, isoWeek: isoWeek.week, isoWeekYear: isoWeek.weekYear },
+    navigation: {
+      previousMonday: addDays(monday, -7),
+      nextMonday: isWeekNavigable(nextMonday, now) ? nextMonday : null,
+    },
+    currentUserSelectedDates: [...new Set(currentUserSelectedDates)].sort(),
+    days,
+  };
 }
 
 export function createSession(database, {
