@@ -118,6 +118,31 @@ test('registration immediately authenticates and session response is safe', asyn
   });
 });
 
+test('protected HTML and session responses are not cacheable', async () => {
+  await withServer(async (baseUrl) => {
+    const registration = await register(baseUrl, 'Cache Runner', '0042');
+    const cookie = cookieFrom(registration);
+
+    const sessionResponse = await fetch(`${baseUrl}/api/session`, { headers: { cookie } });
+    const votePage = await fetch(`${baseUrl}/vote`, { headers: { cookie } });
+
+    assert.equal(sessionResponse.headers.get('cache-control'), 'no-store');
+    assert.equal(votePage.headers.get('cache-control'), 'no-store');
+  });
+});
+
+test('protected page guards BFCache restoration with pageshow session revalidation', async () => {
+  await withServer(async (baseUrl) => {
+    const registration = await register(baseUrl, 'BFCache Runner', '0042');
+    const votePage = await fetch(`${baseUrl}/vote`, { headers: { cookie: cookieFrom(registration) } });
+    const body = await votePage.text();
+
+    assert.match(body, /id="protected-content" hidden/);
+    assert.match(body, /addEventListener\('pageshow', loadSession\)/);
+    assert.match(body, /location\.replace\('\/'\)/);
+  });
+});
+
 test('unknown and wrong PIN failures are generic and delayed without blocking another request', async () => {
   await withServer(async (baseUrl) => {
     const registration = await register(baseUrl, 'Timing Runner', '0042');

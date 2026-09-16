@@ -135,26 +135,37 @@ export function createApp({ databaseReady = false, database, env = process.env, 
     });
 
     app.get('/api/session', (request, response) => {
+      response.setHeader('Cache-Control', 'no-store');
       const session = auth.requireSession(request, response);
       if (session) response.json(auth.sessionPayload(session));
     });
 
     app.get('/vote', (request, response) => {
+      response.setHeader('Cache-Control', 'no-store');
       const session = auth.requireSession(request, response);
       if (!session) return;
       const displayName = escapeHtml(session.name);
       response.type('html').send(page({
         title: 'Run Together | Vote',
-        content: `<section><h1>Run Together</h1><p>ยินดีต้อนรับ / Welcome, <strong id="display-name">${displayName}</strong></p><p>กระดานโหวตจะมาเร็ว ๆ นี้ / The voting board is coming soon.</p><p id="message" class="message" role="status"></p><form id="pin-form"><h2>เปลี่ยน PIN / Change PIN</h2><label>PIN ปัจจุบัน / Current PIN <input name="currentPin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required></label><label>PIN ใหม่ / New PIN <input name="newPin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required></label><label>ยืนยัน PIN ใหม่ / Confirm new PIN <input name="newPinConfirmation" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required></label><button>เปลี่ยน PIN / Change PIN</button></form><div class="actions"><button id="logout" class="secondary">ออกจากระบบ / Logout</button></div></section>`,
+        content: `<section id="protected-content" hidden><h1>Run Together</h1><p>ยินดีต้อนรับ / Welcome, <strong id="display-name">${displayName}</strong></p><p>กระดานโหวตจะมาเร็ว ๆ นี้ / The voting board is coming soon.</p><p id="message" class="message" role="status"></p><form id="pin-form"><h2>เปลี่ยน PIN / Change PIN</h2><label>PIN ปัจจุบัน / Current PIN <input name="currentPin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required></label><label>PIN ใหม่ / New PIN <input name="newPin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required></label><label>ยืนยัน PIN ใหม่ / Confirm new PIN <input name="newPinConfirmation" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required></label><button>เปลี่ยน PIN / Change PIN</button></form><div class="actions"><button id="logout" class="secondary">ออกจากระบบ / Logout</button></div></section>`,
         script: `let csrfToken = '';
-          async function loadSession() { const response = await fetch('/api/session'); if (!response.ok) { location.href = '/'; return; } const session = await response.json(); csrfToken = session.csrfToken; document.querySelector('#display-name').textContent = session.displayName; }
-          document.querySelector('#pin-form').addEventListener('submit', async (event) => { event.preventDefault(); const form = new FormData(event.currentTarget); const response = await fetch('/api/account/pin', { method: 'PUT', headers: { 'content-type': 'application/json', 'x-csrf-token': csrfToken }, body: JSON.stringify(Object.fromEntries(form)) }); const result = response.status === 204 ? { message: 'เปลี่ยน PIN สำเร็จ / PIN changed successfully.' } : await response.json(); document.querySelector('#message').textContent = result.message; if (response.status === 401) location.href = '/'; });
+          let sessionCheck = 0;
+          const protectedContent = document.querySelector('#protected-content');
+          const displayName = document.querySelector('#display-name');
+          const pinForm = document.querySelector('#pin-form');
+          const message = document.querySelector('#message');
+          function guardProtectedContent() { protectedContent.hidden = true; csrfToken = ''; displayName.textContent = ''; pinForm.reset(); message.textContent = ''; }
+          function redirectToLogin() { guardProtectedContent(); location.replace('/'); }
+          async function loadSession() { const currentCheck = ++sessionCheck; guardProtectedContent(); try { const response = await fetch('/api/session', { cache: 'no-store' }); if (currentCheck !== sessionCheck) return; if (!response.ok) { redirectToLogin(); return; } const session = await response.json(); if (currentCheck !== sessionCheck) return; csrfToken = session.csrfToken; displayName.textContent = session.displayName; protectedContent.hidden = false; } catch { if (currentCheck === sessionCheck) redirectToLogin(); } }
+          pinForm.addEventListener('submit', async (event) => { event.preventDefault(); const form = new FormData(event.currentTarget); const response = await fetch('/api/account/pin', { method: 'PUT', headers: { 'content-type': 'application/json', 'x-csrf-token': csrfToken }, body: JSON.stringify(Object.fromEntries(form)) }); const result = response.status === 204 ? { message: 'เปลี่ยน PIN สำเร็จ / PIN changed successfully.' } : await response.json(); message.textContent = result.message; if (response.status === 401) redirectToLogin(); });
           document.querySelector('#logout').addEventListener('click', async () => { const response = await fetch('/api/auth/logout', { method: 'POST', headers: { 'x-csrf-token': csrfToken } }); if (response.ok) location.href = '/'; });
+          window.addEventListener('pageshow', loadSession);
           loadSession();`,
       }));
     });
 
     app.put('/api/account/pin', async (request, response) => {
+      response.setHeader('Cache-Control', 'no-store');
       const session = auth.requireSession(request, response);
       if (!session) return;
       try {
@@ -167,6 +178,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
     });
 
     app.post('/api/auth/logout', (request, response) => {
+      response.setHeader('Cache-Control', 'no-store');
       const session = auth.requireSession(request, response);
       if (!session) return;
       try {
