@@ -37,6 +37,8 @@ function page({ title, content, script = '' }) {
       a { color: #145da0; }
       .message { min-height: 1.5rem; margin-top: 1rem; }
       .actions { display: grid; gap: .75rem; margin-top: 1rem; }
+      .week-navigation { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .4rem; }
+      .week-navigation button { min-width: 0; padding-inline: .25rem; font-size: clamp(.65rem, 2.6vw, 1rem); line-height: 1.2; overflow-wrap: anywhere; }
       .secondary { background: #52606d; }
     </style>
   </head>
@@ -187,8 +189,9 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           <p>ยินดีต้อนรับ / Welcome, <strong id="display-name">${displayName}</strong></p>
           <h2 id="week-heading">สัปดาห์ / Week</h2>
           <p id="week-range"></p>
-          <nav class="actions" aria-label="Week navigation">
+          <nav class="week-navigation actions" aria-label="Week navigation">
             <button id="previous-week" type="button" class="secondary">สัปดาห์ก่อน / Previous week</button>
+            <button id="current-week" type="button">สัปดาห์นี้ / Now</button>
             <button id="next-week" type="button">สัปดาห์ถัดไป / Next week</button>
           </nav>
           <p id="message" class="message" role="status"></p>
@@ -198,13 +201,15 @@ export function createApp({ databaseReady = false, database, env = process.env, 
         </section>`,
         script: `let csrfToken = '';
           let sessionCheck = 0;
-          let weekMonday = '${currentWeek}';
+          const currentWeekMonday = '${currentWeek}';
+          let weekMonday = currentWeekMonday;
           const protectedContent = document.querySelector('#protected-content');
           const displayName = document.querySelector('#display-name');
           const weekHeading = document.querySelector('#week-heading');
           const weekRange = document.querySelector('#week-range');
           const weekDays = document.querySelector('#week-days');
           const previousWeek = document.querySelector('#previous-week');
+          const currentWeekButton = document.querySelector('#current-week');
           const nextWeek = document.querySelector('#next-week');
           const pinForm = document.querySelector('#pin-form');
           const message = document.querySelector('#message');
@@ -217,6 +222,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
             weekRange.textContent = state.week.monday + ' – ' + state.week.sunday;
             previousWeek.disabled = false;
             previousWeek.dataset.monday = state.navigation.previousMonday;
+            currentWeekButton.disabled = state.week.monday === currentWeekMonday;
             nextWeek.disabled = !state.navigation.nextMonday;
             nextWeek.dataset.monday = state.navigation.nextMonday || '';
             const rows = state.days.map((day) => {
@@ -233,6 +239,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           async function loadWeek(monday) { message.textContent = ''; try { const response = await fetch('/api/weeks/' + encodeURIComponent(monday), { cache: 'no-store' }); const state = await response.json(); if (!response.ok) { message.textContent = state.message; return; } renderWeek(state); } catch { message.textContent = 'โหลดสัปดาห์ไม่สำเร็จ / Could not load this week.'; } }
           async function loadSession() { const currentCheck = ++sessionCheck; guardProtectedContent(); try { const response = await fetch('/api/session', { cache: 'no-store' }); if (currentCheck !== sessionCheck) return; if (!response.ok) { redirectToLogin(); return; } const session = await response.json(); if (currentCheck !== sessionCheck) return; csrfToken = session.csrfToken; displayName.textContent = session.displayName; protectedContent.hidden = false; await loadWeek(weekMonday); } catch { if (currentCheck === sessionCheck) redirectToLogin(); } }
           previousWeek.addEventListener('click', () => loadWeek(previousWeek.dataset.monday));
+          currentWeekButton.addEventListener('click', () => loadWeek(currentWeekMonday));
           nextWeek.addEventListener('click', () => { if (!nextWeek.disabled) loadWeek(nextWeek.dataset.monday); });
           pinForm.addEventListener('submit', async (event) => { event.preventDefault(); const form = new FormData(event.currentTarget); const response = await fetch('/api/account/pin', { method: 'PUT', headers: { 'content-type': 'application/json', 'x-csrf-token': csrfToken }, body: JSON.stringify(Object.fromEntries(form)) }); const result = response.status === 204 ? { message: 'เปลี่ยน PIN สำเร็จ / PIN changed successfully.' } : await response.json(); message.textContent = result.message; if (response.status === 401) redirectToLogin(); });
           document.querySelector('#logout').addEventListener('click', async () => { const response = await fetch('/api/auth/logout', { method: 'POST', headers: { 'x-csrf-token': csrfToken } }); if (response.ok) location.href = '/'; });

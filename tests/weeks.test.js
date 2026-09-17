@@ -115,15 +115,27 @@ test('week API rejects malformed, non-Monday, and too-far requests safely', asyn
   });
 });
 
-test('vote page exposes a hidden bilingual read-only week navigator with safe DOM rendering', async () => {
+test('vote page exposes the three-button one-row navigator bound to the injected current week', async () => {
   await withServer(async (baseUrl) => {
     const registration = await register(baseUrl, 'Navigator Runner');
     const response = await fetch(`${baseUrl}/vote`, { headers: { cookie: cookieFrom(registration) } });
     const body = await response.text();
     assert.equal(response.status, 200);
     assert.match(body, /id="protected-content" hidden/);
-    assert.match(body, /id="previous-week"/);
-    assert.match(body, /id="next-week"/);
+    const previousIndex = body.indexOf('id="previous-week"');
+    const currentIndex = body.indexOf('id="current-week"');
+    const nextIndex = body.indexOf('id="next-week"');
+    assert.ok(previousIndex >= 0 && previousIndex < currentIndex && currentIndex < nextIndex);
+    assert.match(body, /สัปดาห์ก่อน \/ Previous week/);
+    assert.match(body, /สัปดาห์นี้ \/ Now/);
+    assert.match(body, /สัปดาห์ถัดไป \/ Next week/);
+    assert.match(body, /class="week-navigation actions"/);
+    assert.match(body, /\.week-navigation\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)/s);
+    assert.match(body, /\.week-navigation button\s*\{[^}]*min-width:\s*0/);
+    assert.match(body, /const currentWeekMonday = '2024-02-26'/);
+    assert.match(body, /currentWeekButton\.addEventListener\('click',\s*\(\) => loadWeek\(currentWeekMonday\)\)/);
+    assert.match(body, /currentWeekButton\.disabled\s*=\s*state\.week\.monday === currentWeekMonday/);
+    assert.equal(body.includes('new Date('), false);
     assert.match(body, /id="week-heading"/);
     assert.match(body, /id="week-days"/);
     assert.match(body, /\/api\/weeks\//);
