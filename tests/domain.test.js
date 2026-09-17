@@ -27,9 +27,9 @@ async function withDatabase(callback) {
 
 const pinMaterial = () => ({ pinSalt: Buffer.from('synthetic-salt'), pinHash: Buffer.from('synthetic-hash') });
 
-test('user names are trimmed and case-insensitively unique', async () => {
+test('user names are trimmed, Unicode-normalized, and case-insensitively unique', async () => {
   await withDatabase((database) => {
-    const user = createUser(database, { name: '  Alice  ', ...pinMaterial(), now: '2026-09-12T00:00:00.000Z' });
+    const user = createUser(database, { name: '  Ａlice  ', ...pinMaterial(), now: '2026-09-12T00:00:00.000Z' });
     assert.equal(user.name, 'Alice');
     assert.throws(
       () => createUser(database, { name: ' alice ', ...pinMaterial(), now: '2026-09-12T00:00:00.000Z' }),

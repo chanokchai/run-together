@@ -52,6 +52,19 @@ export function getWeekRange(mondayDate) {
   return { monday, sunday };
 }
 
+export function addDays(date, days) {
+  if (!Number.isInteger(days)) throw new TypeError('days must be an integer');
+  return fromEpochDay(toEpochDay(parseIsoDate(date)) + days);
+}
+
+export function isMonday(date) {
+  try {
+    return getWeekMonday(date) === date;
+  } catch {
+    return false;
+  }
+}
+
 export function getIsoWeek(date) {
   const parsed = parseIsoDate(date);
   const epochDay = toEpochDay(parsed);
@@ -73,7 +86,8 @@ export function isDateWritable(date, clock = () => new Date()) {
 }
 
 export function isWeekNavigable(mondayDate, clock = () => new Date()) {
-  const monday = getWeekMonday(mondayDate);
+  if (!isMonday(mondayDate)) return false;
+  const monday = mondayDate;
   const currentMonday = getCurrentWeekMonday(clock);
   return toEpochDay(parseIsoDate(monday)) <= toEpochDay(parseIsoDate(currentMonday)) + 14;
 }

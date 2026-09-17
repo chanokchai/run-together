@@ -2,11 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   CANONICAL_TIME_ZONE,
+  addDays,
   getBangkokDate,
   getCurrentWeekMonday,
   getIsoWeek,
   getWeekRange,
   isDateWritable,
+  isMonday,
   isWeekNavigable,
   parseIsoDate,
 } from '../src/calendar.js';
@@ -45,4 +47,13 @@ test('allows the current Bangkok day through midnight and limits future weeks', 
   assert.equal(isWeekNavigable('2024-03-11', atBangkokDay), true);
   assert.equal(isWeekNavigable('2024-03-18', atBangkokDay), false);
   assert.equal(isWeekNavigable('1900-01-01', atBangkokDay), true);
+});
+
+test('adds calendar days without host timezone parsing and identifies only canonical Mondays', () => {
+  assert.equal(addDays('2020-12-28', 6), '2021-01-03');
+  assert.equal(addDays('2021-01-04', -7), '2020-12-28');
+  assert.equal(addDays('2024-02-26', 7), '2024-03-04');
+  assert.equal(isMonday('2024-02-26'), true);
+  assert.equal(isMonday('2024-02-28'), false);
+  assert.equal(isMonday('2024-02-30'), false);
 });
