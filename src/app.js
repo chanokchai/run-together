@@ -1,4 +1,5 @@
 import express from 'express';
+import { readFileSync } from 'node:fs';
 import {
   CANONICAL_TIME_ZONE,
   getCurrentWeekMonday,
@@ -8,6 +9,8 @@ import {
 } from './calendar.js';
 import { AuthError, createAuthService } from './auth.js';
 import { getWeekState } from './domain.js';
+
+const voteBoardScript = readFileSync(new URL('./vote-board.js', import.meta.url), 'utf8');
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (character) => ({
@@ -40,9 +43,26 @@ function page({ title, content, script = '' }) {
       .week-navigation { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .4rem; }
       .week-navigation button { min-width: 0; padding-inline: .25rem; font-size: clamp(.65rem, 2.6vw, 1rem); line-height: 1.2; overflow-wrap: anywhere; }
       .secondary { background: #52606d; }
+      .vote-board { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: .25rem; list-style: none; margin: 1rem 0; padding: 0; }
+      .vote-day { min-width: 0; }
+      .vote-card { display: flex; flex-direction: column; align-items: stretch; gap: .3rem; width: 100%; min-width: 0; min-height: 13rem; margin: 0; padding: .45rem .2rem; border: .2rem solid transparent; border-radius: .6rem; background: var(--day-bg); color: var(--day-fg); font-size: clamp(.62rem, 2.3vw, .95rem); text-align: center; overflow: hidden; }
+      .vote-card:hover, .vote-card:focus-visible, .vote-card.is-selected { border-color: #f5c542; }
+      .vote-card:focus-visible { outline: .2rem solid #14213d; outline-offset: .15rem; }
+      .vote-card__header { display: flex; justify-content: space-between; gap: .15rem; min-width: 0; font-weight: 700; }
+      .vote-card__weekday, .vote-card__date { overflow-wrap: anywhere; }
+      .vote-card__date { font-variant-numeric: tabular-nums; }
+      .vote-card__count { margin: auto 0; font-size: clamp(1.15rem, 6vw, 2.1rem); line-height: 1; font-variant-numeric: tabular-nums; }
+      .vote-card__state, .vote-card__eligibility { min-height: 1.2em; font-size: .78em; line-height: 1.2; }
+      .vote-card__names { min-width: 0; overflow: hidden; text-align: left; }
+      .vote-card__names-track { display: inline-flex; max-width: max-content; white-space: nowrap; animation: voter-name-loop 24s linear infinite; }
+      .vote-card__names-track span { flex: 0 0 auto; }
+      .vote-card.is-touch-paused .vote-card__names-track, .vote-card:hover .vote-card__names-track, .vote-card:focus-within .vote-card__names-track { animation-play-state: paused; }
+      @keyframes voter-name-loop { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+      @media (prefers-reduced-motion: reduce) { .vote-card__names-track { animation: none; display: block; white-space: normal; overflow-wrap: anywhere; } }
+      @media (max-width: 380px) { main { padding-inline: .5rem; } .vote-card { min-height: 11rem; padding-inline: .12rem; } .vote-card__state, .vote-card__eligibility { font-size: .68em; } }
     </style>
   </head>
-  <body><main>${content}</main>${script ? `<script>${script}</script>` : ''}</body>
+  <body><main>${content}</main>${script ? `<script type="module">${script}</script>` : ''}</body>
 </html>`;
 }
 
@@ -135,6 +155,8 @@ export function createApp({ databaseReady = false, database, env = process.env, 
 
   app.get('/register', (_request, response) => response.type('html').send(registerPage()));
 
+  app.get('/vote-board.js', (_request, response) => response.type('application/javascript').send(voteBoardScript));
+
   if (auth) {
     app.post('/api/auth/register', async (request, response) => {
       try {
@@ -195,11 +217,12 @@ export function createApp({ databaseReady = false, database, env = process.env, 
             <button id="next-week" type="button">สัปดาห์ถัดไป / Next week</button>
           </nav>
           <p id="message" class="message" role="status"></p>
-          <ol id="week-days"></ol>
+          <ol id="week-days" class="vote-board" aria-label="Seven-day voting board / กระดานเลือกวันทั้งเจ็ด"></ol>
           <form id="pin-form"><h2>เปลี่ยน PIN / Change PIN</h2><label>PIN ปัจจุบัน / Current PIN <input name="currentPin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required></label><label>PIN ใหม่ / New PIN <input name="newPin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required></label><label>ยืนยัน PIN ใหม่ / Confirm new PIN <input name="newPinConfirmation" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required></label><button>เปลี่ยน PIN / Change PIN</button></form>
           <div class="actions"><button id="logout" type="button" class="secondary">ออกจากระบบ / Logout</button></div>
         </section>`,
-        script: `let csrfToken = '';
+        script: `import { colorForDay, formatDisplayDate } from '/vote-board.js?v=issue-5-1';
+          let csrfToken = '';
           let sessionCheck = 0;
           const currentWeekMonday = '${currentWeek}';
           let weekMonday = currentWeekMonday;
@@ -216,6 +239,31 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           function guardProtectedContent() { protectedContent.hidden = true; csrfToken = ''; displayName.textContent = ''; weekDays.replaceChildren(); pinForm.reset(); message.textContent = ''; }
           function redirectToLogin() { guardProtectedContent(); location.replace('/'); }
           function addText(parent, tag, text) { const element = document.createElement(tag); element.textContent = text; parent.append(element); return element; }
+          const weekdays = [
+            { thai: 'จ.', english: 'Mon' }, { thai: 'อ.', english: 'Tue' }, { thai: 'พ.', english: 'Wed' },
+            { thai: 'พฤ.', english: 'Thu' }, { thai: 'ศ.', english: 'Fri' }, { thai: 'ส.', english: 'Sat' }, { thai: 'อา.', english: 'Sun' },
+          ];
+          function appendVoterNames(parent, names) {
+            const region = document.createElement('div');
+            region.className = 'vote-card__names';
+            region.setAttribute('aria-label', 'รายชื่อผู้เลือก / Voter names');
+            const track = document.createElement('div');
+            track.className = 'vote-card__names-track';
+            const values = names.length ? names : ['ยังไม่มีผู้เลือก / No voters'];
+            values.forEach((name, index) => {
+              if (index) track.append(document.createTextNode(', '));
+              addText(track, 'span', name);
+            });
+            if (names.length) {
+              track.append(document.createTextNode(' • '));
+              values.forEach((name, index) => {
+                if (index) track.append(document.createTextNode(', '));
+                addText(track, 'span', name);
+              });
+            }
+            region.append(track);
+            parent.append(region);
+          }
           function renderWeek(state) {
             weekMonday = state.week.monday;
             weekHeading.textContent = 'สัปดาห์ที่ ' + state.week.isoWeek + ' / ISO week ' + state.week.isoWeek + ' (' + state.week.isoWeekYear + ')';
@@ -225,13 +273,32 @@ export function createApp({ databaseReady = false, database, env = process.env, 
             currentWeekButton.disabled = state.week.monday === currentWeekMonday;
             nextWeek.disabled = !state.navigation.nextMonday;
             nextWeek.dataset.monday = state.navigation.nextMonday || '';
-            const rows = state.days.map((day) => {
+            const weeklyMaximum = Math.max(...state.days.map(({ voteCount }) => voteCount), 0);
+            const rows = state.days.map((day, index) => {
+              const selected = state.currentUserSelectedDates.includes(day.date);
+              const weekday = weekdays[index];
+              const colors = colorForDay(day.voteCount, weeklyMaximum);
               const row = document.createElement('li');
-              addText(row, 'strong', day.date);
-              addText(row, 'span', day.eligible ? ' พร้อมเลือก / Eligible' : ' อ่านอย่างเดียว / Read-only');
-              addText(row, 'span', ' จำนวน ' + day.voteCount + ' / Count ' + day.voteCount);
-              addText(row, 'span', day.voterNames.length ? ' ผู้เลือก: ' + day.voterNames.join(', ') : ' ยังไม่มีผู้เลือก / No voters');
-              addText(row, 'span', state.currentUserSelectedDates.includes(day.date) ? ' เลือกโดยคุณ / Selected by you' : ' ยังไม่ได้เลือก / Not selected');
+              row.className = 'vote-day';
+              const card = document.createElement('button');
+              card.type = 'button';
+              card.className = selected ? 'vote-card is-selected' : 'vote-card';
+              card.style.setProperty('--day-bg', colors.background);
+              card.style.setProperty('--day-fg', colors.foreground);
+              card.setAttribute('aria-pressed', String(selected));
+              card.setAttribute('aria-disabled', String(!day.eligible));
+              card.setAttribute('aria-label', weekday.english + ' ' + weekday.thai + ', ' + formatDisplayDate(day.date) + ', ' + day.voteCount + ' votes, ' + (day.eligible ? 'Eligible' : 'Read-only') + ', ' + (selected ? 'Selected' : 'Not selected'));
+              const header = document.createElement('span');
+              header.className = 'vote-card__header';
+              addText(header, 'span', weekday.thai + ' / ' + weekday.english);
+              addText(header, 'span', formatDisplayDate(day.date));
+              card.append(header);
+              addText(card, 'span', String(day.voteCount)).className = 'vote-card__count';
+              addText(card, 'span', day.eligible ? 'พร้อมเลือก / Eligible' : 'อ่านอย่างเดียว / Read-only').className = 'vote-card__eligibility';
+              appendVoterNames(card, day.voterNames);
+              addText(card, 'span', selected ? '✓ เลือกโดยคุณ / Selected' : 'ยังไม่ได้เลือก / Not selected').className = 'vote-card__state';
+              card.addEventListener('pointerdown', (event) => { if (event.pointerType === 'touch') card.classList.add('is-touch-paused'); });
+              row.append(card);
               return row;
             });
             weekDays.replaceChildren(...rows);
