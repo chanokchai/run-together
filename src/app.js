@@ -60,10 +60,11 @@ function page({ title, content, script = '', mainClass = '' }) {
       .vote-card__names { display: flex; min-width: 0; min-height: 1.3rem; align-items: center; overflow: hidden; text-align: left; }
       .vote-card__names-empty { display: block; width: 100%; text-align: center; }
       .vote-card__names-track { display: inline-flex; max-width: max-content; white-space: nowrap; animation: voter-name-loop 24s linear infinite; }
+      .vote-card__names-copy { display: inline-flex; flex: 0 0 auto; }
       .vote-card__names-track span { flex: 0 0 auto; }
       .vote-card.is-touch-paused .vote-card__names-track, .vote-card:hover .vote-card__names-track, .vote-card:focus-within .vote-card__names-track { animation-play-state: paused; }
       @keyframes voter-name-loop { from { transform: translateX(0); } to { transform: translateX(-50%); } }
-      @media (prefers-reduced-motion: reduce) { .vote-card__names-track { animation: none; display: block; white-space: normal; overflow-wrap: anywhere; } }
+      @media (prefers-reduced-motion: reduce) { .vote-card__names-track { animation: none; display: block; white-space: normal; overflow-wrap: anywhere; } .vote-card__names-copy--canonical { display: block; } .vote-card__names-copy--duplicate, .vote-card__names-separator { display: none; } }
       @media (max-width: 44rem) {
         .vote-page-main { padding-inline: .75rem; }
         .vote-page-main > section { padding: 1rem .75rem; }
@@ -269,18 +270,26 @@ export function createApp({ databaseReady = false, database, env = process.env, 
             region.setAttribute('aria-label', names.length ? 'รายชื่อผู้เลือก / Voter names' : 'รายชื่อผู้เลือก / Voter names: ยังไม่มีผู้เลือก / No voters');
             const track = document.createElement('div');
             track.className = 'vote-card__names-track';
+            const canonical = document.createElement('span');
+            canonical.className = 'vote-card__names-copy vote-card__names-copy--canonical';
             if (names.length) {
-              names.forEach((name, index) => {
-                if (index) track.append(document.createTextNode(', '));
-                addText(track, 'span', name);
+              const appendNames = (copy) => names.forEach((name, index) => {
+                if (index) copy.append(document.createTextNode(', '));
+                addText(copy, 'span', name);
               });
-              track.append(document.createTextNode(' • '));
-              names.forEach((name, index) => {
-                if (index) track.append(document.createTextNode(', '));
-                addText(track, 'span', name);
-              });
+              appendNames(canonical);
+              const separator = document.createElement('span');
+              separator.className = 'vote-card__names-separator';
+              separator.setAttribute('aria-hidden', 'true');
+              separator.textContent = ' • ';
+              const duplicate = document.createElement('span');
+              duplicate.className = 'vote-card__names-copy vote-card__names-copy--duplicate';
+              duplicate.setAttribute('aria-hidden', 'true');
+              appendNames(duplicate);
+              track.append(canonical, separator, duplicate);
             } else {
-              addText(track, 'span', '—').className = 'vote-card__names-empty';
+              addText(canonical, 'span', '—').className = 'vote-card__names-empty';
+              track.append(canonical);
             }
             region.append(track);
             parent.append(region);

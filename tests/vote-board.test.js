@@ -61,3 +61,12 @@ test('keeps narrow card text legible and two-digit counts inside each card', () 
   assert.match(appSource, /\.vote-card__count\s*\{[^}]*font-size:\s*clamp\(1rem,\s*5vw,/s);
   assert.match(appSource, /\.vote-card__count\s*\{[^}]*letter-spacing:\s*-\.08em/s);
 });
+
+test('hides the decorative marquee copy and separator for reduced motion', () => {
+  assert.match(appSource, /vote-card__names-copy--canonical/);
+  assert.match(appSource, /vote-card__names-copy--duplicate/);
+  assert.match(appSource, /vote-card__names-separator/);
+  assert.match(appSource, /names-copy--duplicate[\s\S]*setAttribute\('aria-hidden', 'true'\)/);
+  assert.match(appSource, /names-separator[\s\S]*setAttribute\('aria-hidden', 'true'\)/);
+  assert.match(appSource, /@media \(prefers-reduced-motion: reduce\)[\s\S]*\.vote-card__names-copy--duplicate, \.vote-card__names-separator \{ display: none; \}/);
+});
