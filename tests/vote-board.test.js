@@ -41,3 +41,15 @@ test('keeps the board one-row, accessible, safe, and read-only', () => {
   assert.equal(appSource.includes("fetch('/api/votes"), false);
   assert.equal(appSource.includes("fetch('/api/vote"), false);
 });
+
+test('gives the vote page a wide shell and equal-height compact card layout', () => {
+  assert.match(appSource, /mainClass:\s*'vote-page-main'/);
+  assert.match(appSource, /\.vote-page-main\s*\{[^}]*max-width:\s*90rem/s);
+  assert.match(appSource, /\.vote-day\s*\{[^}]*display:\s*flex/s);
+  assert.match(appSource, /\.vote-card\s*\{[^}]*height:\s*100%/s);
+  assert.match(appSource, /\.vote-card__weekday--compact/);
+  assert.match(appSource, /\.vote-card__date--compact/);
+  assert.match(appSource, /\.vote-card__eligibility-icon/);
+  assert.match(appSource, /\.vote-board__legend/);
+  assert.match(appSource, /\.vote-card__names-empty/);
+});
