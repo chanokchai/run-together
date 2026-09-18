@@ -53,3 +53,11 @@ test('gives the vote page a wide shell and equal-height compact card layout', ()
   assert.match(appSource, /\.vote-board__legend/);
   assert.match(appSource, /\.vote-card__names-empty/);
 });
+
+test('keeps narrow card text legible and two-digit counts inside each card', () => {
+  assert.match(appSource, /\.vote-card\s*\{[^}]*font-size:\s*clamp\(\.625rem,/s);
+  assert.match(appSource, /\.vote-card__weekday--compact\s*\{[^}]*font-size:\s*clamp\(\.6875rem,/s);
+  assert.match(appSource, /\.vote-card__date--compact\s*\{[^}]*font-size:\s*clamp\(\.6875rem,/s);
+  assert.match(appSource, /\.vote-card__count\s*\{[^}]*font-size:\s*clamp\(1rem,/s);
+  assert.match(appSource, /\.vote-card__count\s*\{[^}]*letter-spacing:\s*-\.04em/s);
+});

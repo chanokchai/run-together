@@ -67,14 +67,14 @@ function page({ title, content, script = '', mainClass = '' }) {
       @media (max-width: 44rem) {
         .vote-page-main { padding-inline: .75rem; }
         .vote-page-main > section { padding: 1rem .75rem; }
-        .vote-card { min-height: 14rem; padding-inline: .18rem; font-size: clamp(.52rem, 2.1vw, .75rem); }
+        .vote-card { min-height: 14rem; padding-inline: .18rem; font-size: clamp(.625rem, 2.1vw, .75rem); }
         .vote-card__weekday--full, .vote-card__date--full, .vote-card__eligibility-detail, .vote-card__state-detail { display: none; }
         .vote-card__weekday--compact, .vote-card__date--compact, .vote-card__eligibility-icon, .vote-card__state-icon { display: block; }
-        .vote-card__weekday--compact { font-size: clamp(.48rem, 2.3vw, .7rem); line-height: 1.1; white-space: nowrap; }
-        .vote-card__date--compact { font-size: clamp(.48rem, 2.2vw, .7rem); line-height: 1; }
+        .vote-card__weekday--compact { font-size: clamp(.6875rem, 2.3vw, .75rem); line-height: 1.1; white-space: nowrap; }
+        .vote-card__date--compact { font-size: clamp(.6875rem, 2.2vw, .75rem); line-height: 1; }
         .vote-card__date--compact span { display: block; }
         .vote-card__eligibility-icon, .vote-card__state-icon { min-height: 1rem; font-size: 1rem; line-height: 1; }
-        .vote-card__count { font-size: clamp(1.35rem, 7vw, 2.5rem); }
+        .vote-card__count { width: 100%; min-width: 0; box-sizing: border-box; overflow: hidden; font-size: clamp(1rem, 5.8vw, 2.5rem); letter-spacing: -.04em; }
         .vote-card__names { min-height: 1.2rem; }
       }
       @media (max-width: 380px) { .vote-page-main { padding-inline: .5rem; } .vote-page-main > section { padding-inline: .5rem; } .vote-card { min-height: 13.5rem; } }
