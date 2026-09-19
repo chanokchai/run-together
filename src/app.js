@@ -59,7 +59,7 @@ function page({ title, content, script = '', mainClass = '' }) {
       .vote-card__state, .vote-card__eligibility { min-height: 1.2em; font-size: .78em; line-height: 1.2; }
       .vote-card__names { display: flex; min-width: 0; min-height: 1.3rem; align-items: center; overflow: hidden; text-align: left; }
       .vote-card__names-empty { display: block; width: 100%; text-align: center; }
-      .vote-card__names-track { display: inline-flex; max-width: max-content; white-space: nowrap; animation: voter-name-loop 24s linear infinite; }
+      .vote-card__names-track { display: inline-flex; max-width: max-content; white-space: nowrap; animation: voter-name-loop var(--vote-marquee-duration, 0s) linear infinite; }
       .vote-card__names-copy { display: inline-flex; flex: 0 0 auto; }
       .vote-card__names-track span { flex: 0 0 auto; }
       .vote-card.is-touch-paused .vote-card__names-track, .vote-card:hover .vote-card__names-track, .vote-card:focus-within .vote-card__names-track { animation-play-state: paused; }
@@ -68,14 +68,16 @@ function page({ title, content, script = '', mainClass = '' }) {
       @media (max-width: 44rem) {
         .vote-page-main { padding-inline: .75rem; }
         .vote-page-main > section { padding: 1rem .75rem; }
-        .vote-card { min-height: 14rem; padding-inline: .18rem; font-size: clamp(.625rem, 2.1vw, .75rem); }
+        .vote-board { grid-template-columns: minmax(0, 1fr); width: 100%; }
+        .vote-day { width: 100%; }
+        .vote-card { min-height: 9rem; padding: .75rem; font-size: 1rem; }
         .vote-card__weekday--full, .vote-card__date--full, .vote-card__eligibility-detail, .vote-card__state-detail { display: none; }
         .vote-card__weekday--compact, .vote-card__date--compact, .vote-card__eligibility-icon, .vote-card__state-icon { display: block; }
-        .vote-card__weekday--compact { font-size: clamp(.6875rem, 2.3vw, .75rem); line-height: 1.1; white-space: nowrap; }
-        .vote-card__date--compact { font-size: clamp(.6875rem, 2.2vw, .75rem); line-height: 1; }
+        .vote-card__weekday--compact { font-size: 1rem; line-height: 1.1; white-space: nowrap; }
+        .vote-card__date--compact { font-size: 1rem; line-height: 1; }
         .vote-card__date--compact span { display: block; }
         .vote-card__eligibility-icon, .vote-card__state-icon { min-height: 1rem; font-size: 1rem; line-height: 1; }
-        .vote-card__count { width: 100%; min-width: 0; box-sizing: border-box; overflow: hidden; font-size: clamp(1rem, 5vw, 2.5rem); letter-spacing: -.08em; }
+        .vote-card__count { width: 100%; min-width: 0; box-sizing: border-box; overflow: hidden; font-size: 2rem; letter-spacing: -.08em; }
         .vote-card__names { min-height: 1.2rem; }
       }
       @media (max-width: 380px) { .vote-page-main { padding-inline: .5rem; } .vote-page-main > section { padding-inline: .5rem; } .vote-card { min-height: 13.5rem; } }
@@ -232,17 +234,17 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           <h2 id="week-heading">สัปดาห์ / Week</h2>
           <p id="week-range"></p>
           <nav class="week-navigation actions" aria-label="Week navigation">
-            <button id="previous-week" type="button" class="secondary">สัปดาห์ก่อน / Previous week</button>
-            <button id="current-week" type="button">สัปดาห์นี้ / Now</button>
-            <button id="next-week" type="button">สัปดาห์ถัดไป / Next week</button>
+            <button id="previous-week" type="button" class="secondary">Previous week</button>
+            <button id="current-week" type="button">Now</button>
+            <button id="next-week" type="button">Next week</button>
           </nav>
           <p id="message" class="message" role="status"></p>
           <ol id="week-days" class="vote-board" aria-label="Seven-day voting board / กระดานเลือกวันทั้งเจ็ด"></ol>
           <p class="vote-board__legend" aria-label="Board key / คำอธิบายกระดาน"><span>● พร้อมเลือก / Eligible</span><span>◌ อ่านอย่างเดียว / Read-only</span><span>✓ เลือกโดยคุณ / Selected</span></p>
-          <form id="pin-form"><h2>เปลี่ยน PIN / Change PIN</h2><label>PIN ปัจจุบัน / Current PIN <input name="currentPin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required></label><label>PIN ใหม่ / New PIN <input name="newPin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required></label><label>ยืนยัน PIN ใหม่ / Confirm new PIN <input name="newPinConfirmation" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required></label><button>เปลี่ยน PIN / Change PIN</button></form>
-          <div class="actions"><button id="logout" type="button" class="secondary">ออกจากระบบ / Logout</button></div>
+          <form id="pin-form"><h2>เปลี่ยน PIN / Change PIN</h2><label>PIN ปัจจุบัน / Current PIN <input name="currentPin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required></label><label>PIN ใหม่ / New PIN <input name="newPin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required></label><label>ยืนยัน PIN ใหม่ / Confirm new PIN <input name="newPinConfirmation" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required></label><button>Change PIN</button></form>
+          <div class="actions"><button id="logout" type="button" class="secondary">Logout</button></div>
         </section>`,
-        script: `import { colorForDay, formatDisplayDate } from '/vote-board.js?v=issue-5-1';
+        script: `import { colorForDay, formatDisplayDate, marqueeDurationForDistance } from '/vote-board.js?v=issue-5-2';
           let csrfToken = '';
           let sessionCheck = 0;
           const currentWeekMonday = '${currentWeek}';
@@ -319,11 +321,11 @@ export function createApp({ databaseReady = false, database, env = process.env, 
               card.style.setProperty('--day-fg', colors.foreground);
               card.setAttribute('aria-pressed', String(selected));
               card.setAttribute('aria-disabled', String(!day.eligible));
-              card.setAttribute('aria-label', weekday.english + ' ' + weekday.thai + ', ' + formatDisplayDate(day.date) + ', ' + day.voteCount + ' votes, ' + (day.eligible ? 'Eligible' : 'Read-only') + ', ' + (selected ? 'Selected' : 'Not selected'));
+              card.setAttribute('aria-label', weekday.english + ', ' + formatDisplayDate(day.date) + ', ' + day.voteCount + ' votes, ' + (day.eligible ? 'Eligible' : 'Read-only') + ', ' + (selected ? 'Selected' : 'Not selected'));
               const header = document.createElement('span');
               header.className = 'vote-card__header';
-              addText(header, 'span', weekday.thai + ' / ' + weekday.english).className = 'vote-card__weekday--full';
-              addText(header, 'span', weekday.thai + ' / ' + weekday.english[0]).className = 'vote-card__weekday--compact';
+              addText(header, 'span', weekday.english).className = 'vote-card__weekday--full';
+              addText(header, 'span', weekday.english).className = 'vote-card__weekday--compact';
               addText(header, 'span', displayDate).className = 'vote-card__date--full';
               const compactDate = document.createElement('span');
               compactDate.className = 'vote-card__date--compact';
@@ -333,15 +335,18 @@ export function createApp({ databaseReady = false, database, env = process.env, 
               card.append(header);
               addText(card, 'span', String(day.voteCount)).className = 'vote-card__count';
               addText(card, 'span', day.eligible ? '●' : '◌').className = 'vote-card__eligibility-icon';
-              addText(card, 'span', day.eligible ? 'พร้อมเลือก / Eligible' : 'อ่านอย่างเดียว / Read-only').className = 'vote-card__eligibility vote-card__eligibility-detail';
+              addText(card, 'span', day.eligible ? 'Eligible' : 'Read-only').className = 'vote-card__eligibility vote-card__eligibility-detail';
               appendVoterNames(card, day.voterNames);
               addText(card, 'span', selected ? '✓' : '○').className = 'vote-card__state-icon';
-              addText(card, 'span', selected ? '✓ เลือกโดยคุณ / Selected' : 'ยังไม่ได้เลือก / Not selected').className = 'vote-card__state vote-card__state-detail';
+              addText(card, 'span', selected ? '✓ Selected' : 'Not selected').className = 'vote-card__state vote-card__state-detail';
               card.addEventListener('pointerdown', (event) => { if (event.pointerType === 'touch') card.classList.add('is-touch-paused'); });
               row.append(card);
               return row;
             });
             weekDays.replaceChildren(...rows);
+            weekDays.querySelectorAll('.vote-card__names-track').forEach((track) => {
+              if (track.querySelector('.vote-card__names-copy--duplicate')) track.style.setProperty('--vote-marquee-duration', marqueeDurationForDistance(track.scrollWidth / 2) + 's');
+            });
           }
           async function loadWeek(monday) { message.textContent = ''; try { const response = await fetch('/api/weeks/' + encodeURIComponent(monday), { cache: 'no-store' }); const state = await response.json(); if (!response.ok) { message.textContent = state.message; return; } renderWeek(state); } catch { message.textContent = 'โหลดสัปดาห์ไม่สำเร็จ / Could not load this week.'; } }
           async function loadSession() { const currentCheck = ++sessionCheck; guardProtectedContent(); try { const response = await fetch('/api/session', { cache: 'no-store' }); if (currentCheck !== sessionCheck) return; if (!response.ok) { redirectToLogin(); return; } const session = await response.json(); if (currentCheck !== sessionCheck) return; csrfToken = session.csrfToken; displayName.textContent = session.displayName; protectedContent.hidden = false; await loadWeek(weekMonday); } catch { if (currentCheck === sessionCheck) redirectToLogin(); } }

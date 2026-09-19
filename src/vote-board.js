@@ -1,5 +1,6 @@
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
+export const VOTER_MARQUEE_PIXELS_PER_SECOND = 7.1875;
 
 export function formatDisplayDate(value) {
   const match = ISO_DATE.exec(value);
@@ -27,4 +28,9 @@ export function colorForDay(voteCount, weeklyMaximum) {
     foreground: '#ffffff',
     brightness,
   };
+}
+
+export function marqueeDurationForDistance(loopDistance) {
+  const distance = Number.isFinite(loopDistance) ? Math.max(0, loopDistance) : 0;
+  return distance / VOTER_MARQUEE_PIXELS_PER_SECOND;
 }

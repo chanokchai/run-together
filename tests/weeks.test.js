@@ -126,9 +126,9 @@ test('vote page exposes the three-button one-row navigator bound to the injected
     const currentIndex = body.indexOf('id="current-week"');
     const nextIndex = body.indexOf('id="next-week"');
     assert.ok(previousIndex >= 0 && previousIndex < currentIndex && currentIndex < nextIndex);
-    assert.match(body, /สัปดาห์ก่อน \/ Previous week/);
-    assert.match(body, /สัปดาห์นี้ \/ Now/);
-    assert.match(body, /สัปดาห์ถัดไป \/ Next week/);
+    assert.match(body, />Previous week<\/button>/);
+    assert.match(body, />Now<\/button>/);
+    assert.match(body, />Next week<\/button>/);
     assert.match(body, /class="week-navigation actions"/);
     assert.match(body, /\.week-navigation\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)/s);
     assert.match(body, /\.week-navigation button\s*\{[^}]*min-width:\s*0/);
