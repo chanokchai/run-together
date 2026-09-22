@@ -8,7 +8,7 @@ import {
   parseIsoDate,
 } from './calendar.js';
 import { AuthError, createAuthService } from './auth.js';
-import { getWeekState } from './domain.js';
+import { getWeekState, setVote, VoteError } from './domain.js';
 
 const voteBoardScript = readFileSync(new URL('./vote-board.js', import.meta.url), 'utf8');
 
@@ -22,7 +22,7 @@ function escapeHtml(value) {
   })[character]);
 }
 
-function page({ title, content, script = '', mainClass = '' }) {
+function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
   return `<!doctype html>
 <html lang="th">
   <head>
@@ -83,7 +83,7 @@ function page({ title, content, script = '', mainClass = '' }) {
       @media (max-width: 380px) { .vote-page-main { padding-inline: .5rem; } .vote-page-main > section { padding-inline: .5rem; } .vote-card { min-height: 13.5rem; } }
     </style>
   </head>
-  <body><main${mainClass ? ` class="${mainClass}"` : ''}>${content}</main>${script ? `<script type="module">${script}</script>` : ''}</body>
+  <body><main${mainClass ? ` class="${mainClass}"` : ''}>${content}</main>${scriptSrc ? `<script src="${scriptSrc}"></script>` : ''}${script ? `<script type="module">${script}</script>` : ''}</body>
 </html>`;
 }
 
@@ -150,15 +150,17 @@ const registerPage = () => page({
   });`,
 });
 
-export function createApp({ databaseReady = false, database, env = process.env, now = () => new Date() } = {}) {
+export function createApp({ databaseReady = false, database, env = process.env, now = () => new Date(), onVoteChanged = () => {} } = {}) {
   const app = express();
   app.disable('x-powered-by');
   app.use(express.json({ limit: '10kb' }));
   const auth = database ? createAuthService({ database, env, now }) : null;
 
   const sendError = (response, error) => {
-    const safe = error instanceof AuthError ? error : new AuthError(500, 'SERVER_ERROR', 'เกิดข้อผิดพลาด กรุณาลองใหม่ / Something went wrong; please try again.');
-    if (!(error instanceof AuthError)) console.error('Request failed:', error);
+    const safe = error instanceof AuthError || error instanceof VoteError
+      ? error
+      : new AuthError(500, 'SERVER_ERROR', 'เกิดข้อผิดพลาด กรุณาลองใหม่ / Something went wrong; please try again.');
+    if (!(error instanceof AuthError) && !(error instanceof VoteError)) console.error('Request failed:', error);
     response.status(safe.status).json({ code: safe.code, message: safe.message });
   };
 
@@ -219,6 +221,25 @@ export function createApp({ databaseReady = false, database, env = process.env, 
       }
     });
 
+    app.put('/api/votes/:date', (request, response) => {
+      response.setHeader('Cache-Control', 'no-store');
+      const session = auth.requireSession(request, response);
+      if (!session) return;
+      try {
+        auth.assertCsrf(request, session);
+        const result = setVote(database, {
+          ...(request.body && typeof request.body === 'object' && !Array.isArray(request.body) ? request.body : {}),
+          userId: session.user_id,
+          voteDate: request.params.date,
+          now,
+        });
+        if (result.changed) onVoteChanged(result.patch.date);
+        response.json(result.patch);
+      } catch (error) {
+        sendError(response, error);
+      }
+    });
+
     app.get('/vote', (request, response) => {
       response.setHeader('Cache-Control', 'no-store');
       const session = auth.requireSession(request, response);
@@ -228,6 +249,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
       response.type('html').send(page({
         title: 'Run Together | Vote',
         mainClass: 'vote-page-main',
+        scriptSrc: '/socket.io/socket.io.js',
         content: `<section id="protected-content" hidden>
           <h1>Run Together</h1>
           <p>ยินดีต้อนรับ / Welcome, <strong id="display-name">${displayName}</strong></p>
@@ -314,8 +336,11 @@ export function createApp({ databaseReady = false, database, env = process.env, 
               const [dayNumber, monthName] = displayDate.split(' ');
               const row = document.createElement('li');
               row.className = 'vote-day';
+              row.dataset.date = day.date;
               const card = document.createElement('button');
               card.type = 'button';
+              card.dataset.date = day.date;
+              card.dataset.selected = String(selected);
               card.className = selected ? 'vote-card is-selected' : 'vote-card';
               card.style.setProperty('--day-bg', colors.background);
               card.style.setProperty('--day-fg', colors.foreground);
@@ -340,6 +365,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
               addText(card, 'span', selected ? '✓' : '○').className = 'vote-card__state-icon';
               addText(card, 'span', selected ? '✓ Selected' : 'Not selected').className = 'vote-card__state vote-card__state-detail';
               card.addEventListener('pointerdown', (event) => { if (event.pointerType === 'touch') card.classList.add('is-touch-paused'); });
+              if (day.eligible) card.addEventListener('click', () => toggleVote(day.date, card.dataset.selected !== 'true'));
               row.append(card);
               return row;
             });
@@ -348,13 +374,73 @@ export function createApp({ databaseReady = false, database, env = process.env, 
               if (track.querySelector('.vote-card__names-copy--duplicate')) track.style.setProperty('--vote-marquee-duration', marqueeDurationForDistance(track.scrollWidth / 2) + 's');
             });
           }
-          async function loadWeek(monday) { message.textContent = ''; try { const response = await fetch('/api/weeks/' + encodeURIComponent(monday), { cache: 'no-store' }); const state = await response.json(); if (!response.ok) { message.textContent = state.message; return; } renderWeek(state); } catch { message.textContent = 'โหลดสัปดาห์ไม่สำเร็จ / Could not load this week.'; } }
+          function recalculateColors() {
+            const cards = [...weekDays.querySelectorAll('.vote-card')];
+            const weeklyMaximum = Math.max(...cards.map((card) => Number(card.querySelector('.vote-card__count')?.textContent) || 0), 0);
+            cards.forEach((card) => {
+              const count = Number(card.querySelector('.vote-card__count')?.textContent) || 0;
+              const colors = colorForDay(count, weeklyMaximum);
+              card.style.setProperty('--day-bg', colors.background);
+              card.style.setProperty('--day-fg', colors.foreground);
+            });
+          }
+          function patchDay(patch) {
+            const card = weekDays.querySelector('.vote-card[data-date="' + patch.date + '"]');
+            if (!card) return;
+            card.dataset.selected = String(patch.selected);
+            card.classList.toggle('is-selected', patch.selected);
+            card.setAttribute('aria-pressed', String(patch.selected));
+            card.querySelector('.vote-card__count').textContent = String(patch.voteCount);
+            card.querySelector('.vote-card__state-icon').textContent = patch.selected ? '✓' : '○';
+            card.querySelector('.vote-card__state').textContent = patch.selected ? '✓ Selected' : 'Not selected';
+            card.setAttribute('aria-label', card.getAttribute('aria-label').replace(/, (Selected|Not selected)$/, ', ' + (patch.selected ? 'Selected' : 'Not selected')));
+            card.querySelector('.vote-card__names').replaceWith(createVoterNamesRegion(patch.voterNames));
+            const track = card.querySelector('.vote-card__names-track');
+            if (track.querySelector('.vote-card__names-copy--duplicate')) track.style.setProperty('--vote-marquee-duration', marqueeDurationForDistance(track.scrollWidth / 2) + 's');
+            recalculateColors();
+          }
+          function createVoterNamesRegion(names) {
+            const parent = document.createElement('div');
+            appendVoterNames(parent, names);
+            return parent.firstElementChild;
+          }
+          async function toggleVote(date, selected) {
+            const card = weekDays.querySelector('.vote-card[data-date="' + date + '"]');
+            if (!card || card.disabled || card.getAttribute('aria-disabled') === 'true') return;
+            card.disabled = true;
+            card.setAttribute('aria-busy', 'true');
+            message.textContent = '';
+            try {
+              const response = await fetch('/api/votes/' + encodeURIComponent(date), { method: 'PUT', headers: { 'content-type': 'application/json', 'x-csrf-token': csrfToken }, body: JSON.stringify({ selected }) });
+              const result = await response.json();
+              if (response.status === 401) { redirectToLogin(); return; }
+              if (!response.ok) { message.textContent = result.message; return; }
+              patchDay(result);
+            } catch {
+              message.textContent = 'บันทึกการเลือกไม่สำเร็จ / Could not save your selection.';
+            } finally {
+              card.disabled = false;
+              card.removeAttribute('aria-busy');
+            }
+          }
+          async function loadWeek(monday) { message.textContent = ''; try { const response = await fetch('/api/weeks/' + encodeURIComponent(monday), { cache: 'no-store' }); const state = await response.json(); if (response.status === 401) { redirectToLogin(); return; } if (!response.ok) { message.textContent = state.message; return; } renderWeek(state); } catch { message.textContent = 'โหลดสัปดาห์ไม่สำเร็จ / Could not load this week.'; } }
           async function loadSession() { const currentCheck = ++sessionCheck; guardProtectedContent(); try { const response = await fetch('/api/session', { cache: 'no-store' }); if (currentCheck !== sessionCheck) return; if (!response.ok) { redirectToLogin(); return; } const session = await response.json(); if (currentCheck !== sessionCheck) return; csrfToken = session.csrfToken; displayName.textContent = session.displayName; protectedContent.hidden = false; await loadWeek(weekMonday); } catch { if (currentCheck === sessionCheck) redirectToLogin(); } }
           previousWeek.addEventListener('click', () => loadWeek(previousWeek.dataset.monday));
           currentWeekButton.addEventListener('click', () => loadWeek(currentWeekMonday));
           nextWeek.addEventListener('click', () => { if (!nextWeek.disabled) loadWeek(nextWeek.dataset.monday); });
           pinForm.addEventListener('submit', async (event) => { event.preventDefault(); const form = new FormData(event.currentTarget); const response = await fetch('/api/account/pin', { method: 'PUT', headers: { 'content-type': 'application/json', 'x-csrf-token': csrfToken }, body: JSON.stringify(Object.fromEntries(form)) }); const result = response.status === 204 ? { message: 'เปลี่ยน PIN สำเร็จ / PIN changed successfully.' } : await response.json(); message.textContent = result.message; if (response.status === 401) redirectToLogin(); });
           document.querySelector('#logout').addEventListener('click', async () => { const response = await fetch('/api/auth/logout', { method: 'POST', headers: { 'x-csrf-token': csrfToken } }); if (response.ok) location.href = '/'; });
+          const socket = window.io();
+          let socketRepairing = false;
+          const queuedSocketPatches = [];
+          socket.on('vote:changed', (patch) => { if (socketRepairing) queuedSocketPatches.push(patch); else patchDay(patch); });
+          socket.on('connect', async () => {
+            socketRepairing = true;
+            await loadWeek(weekMonday);
+            socketRepairing = false;
+            queuedSocketPatches.splice(0).forEach(patchDay);
+          });
+          socket.on('connect_error', (error) => { if (error.message === 'unauthenticated') redirectToLogin(); });
           window.addEventListener('pageshow', loadSession);
           loadSession();`,
       }));
@@ -394,6 +480,8 @@ export function createApp({ databaseReady = false, database, env = process.env, 
     return response.status(500).json({ code: 'SERVER_ERROR', message: 'เกิดข้อผิดพลาด กรุณาลองใหม่ / Something went wrong; please try again.' });
   });
 
+  app.auth = auth;
+  app.database = database;
   return app;
 }
 

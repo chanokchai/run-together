@@ -11,6 +11,7 @@ import {
   createUser,
   deleteUser,
   listAdmins,
+  setVote,
 } from '../src/domain.js';
 
 async function withDatabase(callback) {
@@ -95,5 +96,27 @@ test('admin bootstrap fails closed for invalid configuration or conflicting admi
     const after = database.prepare('SELECT pin_hash FROM users WHERE role = \'admin\'').get().pin_hash;
     assert.equal(sameAdmin.id, 1);
     assert.deepEqual(after, before);
+  });
+});
+
+test('vote mutation is atomic, idempotent, recipient-specific, and calendar-bounded', async () => {
+  await withDatabase((database) => {
+    const runner = createUser(database, { name: 'Runner', ...pinMaterial() });
+    const alice = createUser(database, { name: 'Alice', ...pinMaterial() });
+    const now = () => new Date('2024-02-29T04:00:00.000Z');
+
+    const first = setVote(database, { userId: runner.id, voteDate: '2024-03-01', selected: true, now });
+    assert.deepEqual(first, {
+      changed: true,
+      patch: { date: '2024-03-01', voteCount: 1, voterNames: ['Runner'], selected: true },
+    });
+    assert.equal(setVote(database, { userId: runner.id, voteDate: '2024-03-01', selected: true, now }).changed, false);
+    const aliceView = setVote(database, { userId: alice.id, voteDate: '2024-03-01', selected: false, now });
+    assert.deepEqual(aliceView.patch, { date: '2024-03-01', voteCount: 1, voterNames: ['Runner'], selected: false });
+    assert.equal(setVote(database, { userId: runner.id, voteDate: '2024-03-01', selected: false, now }).changed, true);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM votes').get().count, 0);
+    assert.throws(() => setVote(database, { userId: alice.id, voteDate: '2024-02-28', selected: true, now }), /not available|เปิด/);
+    assert.throws(() => setVote(database, { userId: alice.id, voteDate: '2024-03-21', selected: true, now }), /not available|เปิด/);
+    assert.throws(() => setVote(database, { userId: alice.id, voteDate: '2024-03-01', selected: 'true', now }), /invalid|ไม่ถูกต้อง/);
   });
 });

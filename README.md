@@ -17,7 +17,7 @@ The application provides a bilingual Express server and SQLite domain foundation
 - Opaque `run_together_session` cookies backed by SHA-256 token hashes in SQLite. Cookies are `HttpOnly`, `Secure`, `SameSite=Lax`, scoped to `/`, and use a rolling 30-day lifetime.
 - Server-side scrypt PIN hashing with per-user salts and `PIN_PEPPER`, generic delayed credential failures, same-origin and CSRF checks, and a ten-successful-registration per source IP per ten-minute window.
 
-Voting/week behavior, realtime updates, and admin management remain intentionally out of scope for Issue #3.
+- Atomic authenticated voting with idempotent same-origin `PUT /api/votes/:date` mutations and recipient-safe realtime Socket.IO patches.
 
 ## Local development
 

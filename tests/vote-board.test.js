@@ -41,10 +41,15 @@ test('keeps the board one-row, accessible, safe, and read-only', () => {
   assert.match(appSource, /prefers-reduced-motion/);
   assert.match(appSource, /state\.days\.map/);
   assert.match(appSource, /import \{ colorForDay, formatDisplayDate, marqueeDurationForDistance \} from '\/vote-board\.js\?v=issue-5-2'/);
+  assert.match(appSource, /if \(day\.eligible\) card\.addEventListener\('click'/);
+  assert.match(appSource, /card\.querySelector\('\.vote-card__names'\)\.replaceWith/);
+  assert.match(appSource, /recalculateColors\(\)/);
+  assert.match(appSource, /socket\.on\('connect'/);
+  assert.match(appSource, /queuedSocketPatches/);
+  assert.match(appSource, /aria-busy/);
+  assert.match(appSource, /fetch\('\/api\/votes\//);
   assert.equal(appSource.includes('.innerHTML'), false);
   assert.equal(appSource.includes('insertAdjacentHTML'), false);
-  assert.equal(appSource.includes("fetch('/api/votes"), false);
-  assert.equal(appSource.includes("fetch('/api/vote"), false);
 });
 
 test('gives the vote page a wide shell and equal-height compact card layout', () => {

@@ -93,8 +93,11 @@ function clearedSessionCookie() {
 }
 
 function readCookie(request) {
-  const header = request.headers.cookie ?? '';
-  for (const part of header.split(';')) {
+  return readCookieHeader(request.headers.cookie);
+}
+
+function readCookieHeader(header = '') {
+  for (const part of String(header).split(';')) {
     const [name, ...value] = part.trim().split('=');
     if (name === SESSION_COOKIE) return value.join('=');
   }
@@ -193,8 +196,7 @@ export function createAuthService({ database, env = process.env, now = () => new
     session.expires_at = expiresAt;
   }
 
-  function findSession(request, response) {
-    const rawToken = readCookie(request);
+  function lookupSession(rawToken) {
     if (!rawToken || rawToken.length < 43) return null;
     const tokenHash = hashToken(rawToken);
     const session = database.prepare(`
@@ -208,8 +210,18 @@ export function createAuthService({ database, env = process.env, now = () => new
       return null;
     }
     session.rawToken = rawToken;
+    return session;
+  }
+
+  function findSession(request, response) {
+    const session = lookupSession(readCookie(request));
+    if (!session) return null;
     touchSession(session, response);
     return session;
+  }
+
+  function authenticateSocket(request) {
+    return lookupSession(readCookieHeader(request.headers.cookie));
   }
 
   function sessionPayload(session) {
@@ -357,6 +369,7 @@ export function createAuthService({ database, env = process.env, now = () => new
   return {
     assertCsrf,
     assertSameOrigin,
+    authenticateSocket,
     changePin,
     effectiveSourceKey,
     findSession,
