@@ -167,8 +167,11 @@ test('configures a single pass from the right edge fully past the left edge', ()
   region.clientWidth = 100;
   track.scrollWidth = 72.5;
   configureVoterNamesMarquee(region, { reducedMotion: false });
-  assert.equal(track.style.getPropertyValue('--vote-marquee-start'), '100px');
-  assert.equal(track.style.getPropertyValue('--vote-marquee-end'), '-172.5px');
+  const start = Number.parseFloat(track.style.getPropertyValue('--vote-marquee-start'));
+  const end = Number.parseFloat(track.style.getPropertyValue('--vote-marquee-end'));
+  assert.equal(start, 100);
+  assert.equal(end, -72.5);
+  assert.equal(start - end, marqueeTravelDistance(region.clientWidth, track.scrollWidth));
   assert.equal(track.style.getPropertyValue('--vote-marquee-duration'), '24s');
 });
 
@@ -261,7 +264,11 @@ test('patchVoteDay updates only the affected DOM card and recalculates weekly co
   assert.equal(first.parts['.vote-card__count'].textContent, '5');
   assert.equal(first.parts['.vote-card__names'], replacement);
   assert.strictEqual(configuredRegion, replacement);
-  assert.equal(replacement.track.style.getPropertyValue('--vote-marquee-end'), '-172.5px');
+  const patchedStart = Number.parseFloat(replacement.track.style.getPropertyValue('--vote-marquee-start'));
+  const patchedEnd = Number.parseFloat(replacement.track.style.getPropertyValue('--vote-marquee-end'));
+  assert.equal(patchedStart, 100);
+  assert.equal(patchedEnd, -72.5);
+  assert.equal(patchedStart - patchedEnd, marqueeTravelDistance(100, 72.5));
   assert.equal(replacement.track.style.getPropertyValue('--vote-marquee-duration'), '24s');
   assert.equal(first.dataset.selected, 'false');
   assert.equal(first.classList.contains('is-selected'), false);

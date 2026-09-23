@@ -93,7 +93,7 @@ function configureVoterNamesRegion(region, options = {}) {
   const textWidth = track.scrollWidth;
   const travelDistance = marqueeTravelDistance(containerWidth, textWidth);
   track.style.setProperty('--vote-marquee-start', `${containerWidth}px`);
-  track.style.setProperty('--vote-marquee-end', `${-travelDistance}px`);
+  track.style.setProperty('--vote-marquee-end', `${-textWidth}px`);
   track.style.setProperty('--vote-marquee-duration', `${marqueeDurationForDimensions(containerWidth, textWidth)}s`);
 }
 
