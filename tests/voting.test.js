@@ -63,7 +63,15 @@ test('PUT /api/votes validates CSRF/body/date, is idempotent, and returns only a
     const registration = await register(baseUrl, 'Atomic Runner');
     const cookie = cookieFrom(registration);
     const session = await sessionFor(baseUrl, cookie);
-    const invalidBodies = [{ selected: true, extra: 1 }, {}, { selected: 'true' }, []];
+    const invalidBodies = [
+      { selected: true, extra: 1 },
+      { selected: true, userId: 999 },
+      { selected: true, voteDate: '1999-01-01' },
+      { selected: true, now: 'bad' },
+      {},
+      { selected: 'true' },
+      [],
+    ];
     for (const body of invalidBodies) {
       const response = await putVote(baseUrl, cookie, session.csrfToken, '2024-03-01', body);
       assert.equal(response.status, 400);
@@ -124,6 +132,39 @@ test('Socket.IO authenticates session cookies and emits recipient-specific patch
     } finally {
       aliceSocket.close();
       bobSocket.close();
+    }
+  });
+});
+
+test('Socket.IO rejects expired sessions and does not broadcast or persist rolled-back votes', async () => {
+  await withServer(async (baseUrl, server) => {
+    const registration = await register(baseUrl, 'Rollback Runner');
+    const cookie = cookieFrom(registration);
+    const session = await sessionFor(baseUrl, cookie);
+    server.database.prepare('UPDATE sessions SET expires_at = ?').run('2024-02-28T00:00:00.000Z');
+    const expiredSocket = connectSocket(baseUrl, { extraHeaders: { origin: baseUrl, cookie } });
+    await assert.rejects(waitForSocket(expiredSocket), /unauthenticated/);
+    expiredSocket.close();
+
+    const freshRegistration = await register(baseUrl, 'Rollback Observer');
+    const freshCookie = cookieFrom(freshRegistration);
+    const freshSession = await sessionFor(baseUrl, freshCookie);
+    const observer = connectSocket(baseUrl, { extraHeaders: { origin: baseUrl, cookie: freshCookie } });
+    await waitForSocket(observer);
+    let eventSeen = false;
+    observer.on('vote:changed', () => { eventSeen = true; });
+    server.database.exec(`
+      CREATE TRIGGER fail_vote_insert AFTER INSERT ON votes
+      BEGIN SELECT RAISE(ABORT, 'forced vote rollback'); END
+    `);
+    try {
+      const response = await putVote(baseUrl, freshCookie, freshSession.csrfToken, '2024-03-01', { selected: true });
+      assert.equal(response.status, 500);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.equal(eventSeen, false);
+      assert.equal(server.database.prepare('SELECT COUNT(*) AS count FROM votes').get().count, 0);
+    } finally {
+      observer.close();
     }
   });
 });

@@ -105,7 +105,7 @@ function canonicalVoteDate(voteDate) {
   }
 }
 
-function assertVoteBody(body) {
+export function assertVoteBody(body) {
   if (body === null || typeof body !== 'object' || Array.isArray(body)
     || Object.keys(body).length !== 1 || !Object.hasOwn(body, 'selected')
     || typeof body.selected !== 'boolean') {
@@ -130,7 +130,7 @@ function getDayState(database, { date, currentUserId }) {
   };
 }
 
-export function setVote(database, { userId, voteDate, now = () => new Date(), ...body }) {
+export function setVote(database, { userId, voteDate, now = () => new Date(), body }) {
   assertVoteBody(body);
   const { selected } = body;
   const canonicalDate = canonicalVoteDate(voteDate);

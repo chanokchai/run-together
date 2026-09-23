@@ -8,7 +8,7 @@ import {
   parseIsoDate,
 } from './calendar.js';
 import { AuthError, createAuthService } from './auth.js';
-import { getWeekState, setVote, VoteError } from './domain.js';
+import { getWeekState, assertVoteBody, setVote, VoteError } from './domain.js';
 
 const voteBoardScript = readFileSync(new URL('./vote-board.js', import.meta.url), 'utf8');
 
@@ -227,11 +227,12 @@ export function createApp({ databaseReady = false, database, env = process.env, 
       if (!session) return;
       try {
         auth.assertCsrf(request, session);
+        assertVoteBody(request.body);
         const result = setVote(database, {
-          ...(request.body && typeof request.body === 'object' && !Array.isArray(request.body) ? request.body : {}),
           userId: session.user_id,
           voteDate: request.params.date,
           now,
+          body: request.body,
         });
         if (result.changed) onVoteChanged(result.patch.date);
         response.json(result.patch);
@@ -266,7 +267,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           <form id="pin-form"><h2>เปลี่ยน PIN / Change PIN</h2><label>PIN ปัจจุบัน / Current PIN <input name="currentPin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required></label><label>PIN ใหม่ / New PIN <input name="newPin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required></label><label>ยืนยัน PIN ใหม่ / Confirm new PIN <input name="newPinConfirmation" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required></label><button>Change PIN</button></form>
           <div class="actions"><button id="logout" type="button" class="secondary">Logout</button></div>
         </section>`,
-        script: `import { colorForDay, formatDisplayDate, marqueeDurationForDistance } from '/vote-board.js?v=issue-5-2';
+        script: `import { colorForDay, createSocketRepairController, formatDisplayDate, marqueeDurationForDistance, patchVoteDay } from '/vote-board.js?v=issue-6-1';
           let csrfToken = '';
           let sessionCheck = 0;
           const currentWeekMonday = '${currentWeek}';
@@ -374,30 +375,8 @@ export function createApp({ databaseReady = false, database, env = process.env, 
               if (track.querySelector('.vote-card__names-copy--duplicate')) track.style.setProperty('--vote-marquee-duration', marqueeDurationForDistance(track.scrollWidth / 2) + 's');
             });
           }
-          function recalculateColors() {
-            const cards = [...weekDays.querySelectorAll('.vote-card')];
-            const weeklyMaximum = Math.max(...cards.map((card) => Number(card.querySelector('.vote-card__count')?.textContent) || 0), 0);
-            cards.forEach((card) => {
-              const count = Number(card.querySelector('.vote-card__count')?.textContent) || 0;
-              const colors = colorForDay(count, weeklyMaximum);
-              card.style.setProperty('--day-bg', colors.background);
-              card.style.setProperty('--day-fg', colors.foreground);
-            });
-          }
           function patchDay(patch) {
-            const card = weekDays.querySelector('.vote-card[data-date="' + patch.date + '"]');
-            if (!card) return;
-            card.dataset.selected = String(patch.selected);
-            card.classList.toggle('is-selected', patch.selected);
-            card.setAttribute('aria-pressed', String(patch.selected));
-            card.querySelector('.vote-card__count').textContent = String(patch.voteCount);
-            card.querySelector('.vote-card__state-icon').textContent = patch.selected ? '✓' : '○';
-            card.querySelector('.vote-card__state').textContent = patch.selected ? '✓ Selected' : 'Not selected';
-            card.setAttribute('aria-label', card.getAttribute('aria-label').replace(/, \\d+ votes,/, ', ' + patch.voteCount + ' votes,').replace(/, (Selected|Not selected)$/, ', ' + (patch.selected ? 'Selected' : 'Not selected')));
-            card.querySelector('.vote-card__names').replaceWith(createVoterNamesRegion(patch.voterNames));
-            const track = card.querySelector('.vote-card__names-track');
-            if (track.querySelector('.vote-card__names-copy--duplicate')) track.style.setProperty('--vote-marquee-duration', marqueeDurationForDistance(track.scrollWidth / 2) + 's');
-            recalculateColors();
+            return patchVoteDay({ weekDays, patch, createVoterNamesRegion });
           }
           function createVoterNamesRegion(names) {
             const parent = document.createElement('div');
@@ -431,15 +410,9 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           pinForm.addEventListener('submit', async (event) => { event.preventDefault(); const form = new FormData(event.currentTarget); const response = await fetch('/api/account/pin', { method: 'PUT', headers: { 'content-type': 'application/json', 'x-csrf-token': csrfToken }, body: JSON.stringify(Object.fromEntries(form)) }); const result = response.status === 204 ? { message: 'เปลี่ยน PIN สำเร็จ / PIN changed successfully.' } : await response.json(); message.textContent = result.message; if (response.status === 401) redirectToLogin(); });
           document.querySelector('#logout').addEventListener('click', async () => { const response = await fetch('/api/auth/logout', { method: 'POST', headers: { 'x-csrf-token': csrfToken } }); if (response.ok) location.href = '/'; });
           const socket = window.io({ transports: ['websocket'] });
-          let socketRepairing = false;
-          const queuedSocketPatches = [];
-          socket.on('vote:changed', (patch) => { if (socketRepairing) queuedSocketPatches.push(patch); else patchDay(patch); });
-          socket.on('connect', async () => {
-            socketRepairing = true;
-            await loadWeek(weekMonday);
-            socketRepairing = false;
-            queuedSocketPatches.splice(0).forEach(patchDay);
-          });
+          const socketRepair = createSocketRepairController({ loadWeek: () => loadWeek(weekMonday), patchDay });
+          socket.on('vote:changed', socketRepair.handlePatch);
+          socket.on('connect', socketRepair.handleConnect);
           socket.on('connect_error', (error) => { if (error.message === 'unauthenticated') redirectToLogin(); });
           window.addEventListener('pageshow', loadSession);
           loadSession();`,

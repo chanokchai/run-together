@@ -6,6 +6,8 @@ import {
   formatDisplayDate,
   marqueeDurationForDistance,
   VOTER_MARQUEE_PIXELS_PER_SECOND,
+  createSocketRepairController,
+  patchVoteDay,
 } from '../src/vote-board.js';
 
 const appSource = readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
@@ -40,14 +42,7 @@ test('keeps the board one-row, accessible, safe, and read-only', () => {
   assert.match(appSource, /pointerdown/);
   assert.match(appSource, /prefers-reduced-motion/);
   assert.match(appSource, /state\.days\.map/);
-  assert.match(appSource, /import \{ colorForDay, formatDisplayDate, marqueeDurationForDistance \} from '\/vote-board\.js\?v=issue-5-2'/);
-  assert.match(appSource, /if \(day\.eligible\) card\.addEventListener\('click'/);
-  assert.match(appSource, /card\.querySelector\('\.vote-card__names'\)\.replaceWith/);
-  assert.equal(appSource.includes("replace(/, \\\\d+ votes,/, ', ' + patch.voteCount + ' votes,')"), true);
-  assert.match(appSource, /recalculateColors\(\)/);
-  assert.match(appSource, /socket\.on\('connect'/);
-  assert.match(appSource, /window\.io\(\{\s*transports:\s*\['websocket'\]\s*\}\)/);
-  assert.match(appSource, /queuedSocketPatches/);
+  assert.match(appSource, /import \{ colorForDay, createSocketRepairController, formatDisplayDate, marqueeDurationForDistance, patchVoteDay \} from '\/vote-board\.js\?v=issue-6-1'/);
   assert.match(appSource, /aria-busy/);
   assert.match(appSource, /fetch\('\/api\/votes\//);
   assert.equal(appSource.includes('.innerHTML'), false);
@@ -109,4 +104,96 @@ test('derives marquee duration from loop distance at a calibrated fixed speed', 
   assert.match(appSource, /marqueeDurationForDistance\(track\.scrollWidth\s*\/\s*2\)/);
   assert.match(appSource, /setProperty\('--vote-marquee-duration'/);
   assert.match(appSource, /weekDays\.replaceChildren\(\.\.\.rows\);[\s\S]*weekDays\.querySelectorAll\('\.vote-card__names-track'\)/);
+});
+
+class FakeClassList {
+  constructor(value = '') { this.values = new Set(value.split(/\s+/).filter(Boolean)); }
+  toggle(name, force) {
+    const shouldHave = force === undefined ? !this.values.has(name) : force;
+    if (shouldHave) this.values.add(name); else this.values.delete(name);
+    return shouldHave;
+  }
+  contains(name) { return this.values.has(name); }
+}
+
+class FakeStyle {
+  constructor() { this.values = new Map(); }
+  setProperty(name, value) { this.values.set(name, value); }
+  getPropertyValue(name) { return this.values.get(name) ?? ''; }
+}
+
+class FakeRegion {
+  constructor() { this.track = { querySelector: () => null, style: new FakeStyle() }; }
+  querySelector(selector) { return selector === '.vote-card__names-track' ? this.track : null; }
+}
+
+class FakeCard {
+  constructor(date, count, selected = false) {
+    this.dataset = { date, selected: String(selected) };
+    this.classList = new FakeClassList(selected ? 'vote-card is-selected' : 'vote-card');
+    this.attributes = new Map([[
+      'aria-label', `Mon, 1 Mar, ${count} votes, Eligible, ${selected ? 'Selected' : 'Not selected'}`,
+    ]]);
+    this.parts = {
+      '.vote-card__count': { textContent: String(count) },
+      '.vote-card__state-icon': { textContent: selected ? '✓' : '○' },
+      '.vote-card__state': { textContent: selected ? '✓ Selected' : 'Not selected' },
+      '.vote-card__names': { replaceWith: (replacement) => { this.parts['.vote-card__names'] = replacement; } },
+    };
+    this.style = new FakeStyle();
+  }
+  setAttribute(name, value) { this.attributes.set(name, String(value)); }
+  getAttribute(name) { return this.attributes.get(name) ?? null; }
+  querySelector(selector) {
+    if (selector === '.vote-card__names-track') return this.parts['.vote-card__names'].querySelector(selector);
+    return this.parts[selector] ?? null;
+  }
+}
+
+class FakeBoard {
+  constructor(cards) { this.cards = cards; }
+  querySelector(selector) {
+    const match = /^\.vote-card\[data-date="(.+)"\]$/.exec(selector);
+    return match ? this.cards.find((card) => card.dataset.date === match[1]) ?? null : null;
+  }
+  querySelectorAll(selector) { return selector === '.vote-card' ? this.cards : []; }
+}
+
+test('patchVoteDay updates only the affected DOM card and recalculates weekly colors', () => {
+  const first = new FakeCard('2024-03-01', 1, true);
+  const second = new FakeCard('2024-03-02', 4, false);
+  const board = new FakeBoard([first, second]);
+  const originalCards = board.cards;
+  const replacement = new FakeRegion();
+  const patched = patchVoteDay({
+    weekDays: board,
+    patch: { date: '2024-03-01', voteCount: 5, voterNames: ['A', 'B'], selected: false },
+    createVoterNamesRegion: () => replacement,
+  });
+  assert.equal(patched, true);
+  assert.strictEqual(board.cards, originalCards);
+  assert.equal(first.parts['.vote-card__count'].textContent, '5');
+  assert.equal(first.parts['.vote-card__names'], replacement);
+  assert.equal(first.dataset.selected, 'false');
+  assert.equal(first.classList.contains('is-selected'), false);
+  assert.equal(first.getAttribute('aria-pressed'), 'false');
+  assert.match(first.getAttribute('aria-label'), /, 5 votes,/);
+  assert.match(first.getAttribute('aria-label'), /, Not selected$/);
+  assert.notEqual(first.style.getPropertyValue('--day-bg'), second.style.getPropertyValue('--day-bg'));
+});
+
+test('socket reconnect controller fetches authoritative state before applying queued patches', async () => {
+  let resolveFetch;
+  let fetched = false;
+  const applied = [];
+  const controller = createSocketRepairController({
+    loadWeek: () => new Promise((resolve) => { resolveFetch = () => { fetched = true; resolve(); }; }),
+    patchDay: (patch) => applied.push({ patch, fetched }),
+  });
+  const reconnect = controller.handleConnect();
+  controller.handlePatch({ date: '2024-03-01', voteCount: 2 });
+  assert.deepEqual(applied, []);
+  resolveFetch();
+  await reconnect;
+  assert.deepEqual(applied, [{ patch: { date: '2024-03-01', voteCount: 2 }, fetched: true }]);
 });
