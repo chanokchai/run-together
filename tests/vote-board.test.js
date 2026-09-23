@@ -43,8 +43,10 @@ test('keeps the board one-row, accessible, safe, and read-only', () => {
   assert.match(appSource, /import \{ colorForDay, formatDisplayDate, marqueeDurationForDistance \} from '\/vote-board\.js\?v=issue-5-2'/);
   assert.match(appSource, /if \(day\.eligible\) card\.addEventListener\('click'/);
   assert.match(appSource, /card\.querySelector\('\.vote-card__names'\)\.replaceWith/);
+  assert.equal(appSource.includes("replace(/, \\\\d+ votes,/, ', ' + patch.voteCount + ' votes,')"), true);
   assert.match(appSource, /recalculateColors\(\)/);
   assert.match(appSource, /socket\.on\('connect'/);
+  assert.match(appSource, /window\.io\(\{\s*transports:\s*\['websocket'\]\s*\}\)/);
   assert.match(appSource, /queuedSocketPatches/);
   assert.match(appSource, /aria-busy/);
   assert.match(appSource, /fetch\('\/api\/votes\//);

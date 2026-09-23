@@ -393,7 +393,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
             card.querySelector('.vote-card__count').textContent = String(patch.voteCount);
             card.querySelector('.vote-card__state-icon').textContent = patch.selected ? '✓' : '○';
             card.querySelector('.vote-card__state').textContent = patch.selected ? '✓ Selected' : 'Not selected';
-            card.setAttribute('aria-label', card.getAttribute('aria-label').replace(/, (Selected|Not selected)$/, ', ' + (patch.selected ? 'Selected' : 'Not selected')));
+            card.setAttribute('aria-label', card.getAttribute('aria-label').replace(/, \\d+ votes,/, ', ' + patch.voteCount + ' votes,').replace(/, (Selected|Not selected)$/, ', ' + (patch.selected ? 'Selected' : 'Not selected')));
             card.querySelector('.vote-card__names').replaceWith(createVoterNamesRegion(patch.voterNames));
             const track = card.querySelector('.vote-card__names-track');
             if (track.querySelector('.vote-card__names-copy--duplicate')) track.style.setProperty('--vote-marquee-duration', marqueeDurationForDistance(track.scrollWidth / 2) + 's');
@@ -430,7 +430,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           nextWeek.addEventListener('click', () => { if (!nextWeek.disabled) loadWeek(nextWeek.dataset.monday); });
           pinForm.addEventListener('submit', async (event) => { event.preventDefault(); const form = new FormData(event.currentTarget); const response = await fetch('/api/account/pin', { method: 'PUT', headers: { 'content-type': 'application/json', 'x-csrf-token': csrfToken }, body: JSON.stringify(Object.fromEntries(form)) }); const result = response.status === 204 ? { message: 'เปลี่ยน PIN สำเร็จ / PIN changed successfully.' } : await response.json(); message.textContent = result.message; if (response.status === 401) redirectToLogin(); });
           document.querySelector('#logout').addEventListener('click', async () => { const response = await fetch('/api/auth/logout', { method: 'POST', headers: { 'x-csrf-token': csrfToken } }); if (response.ok) location.href = '/'; });
-          const socket = window.io();
+          const socket = window.io({ transports: ['websocket'] });
           let socketRepairing = false;
           const queuedSocketPatches = [];
           socket.on('vote:changed', (patch) => { if (socketRepairing) queuedSocketPatches.push(patch); else patchDay(patch); });
