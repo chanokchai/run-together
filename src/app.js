@@ -63,8 +63,8 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       .vote-card__names-copy { display: inline-flex; flex: 0 0 auto; }
       .vote-card__names-track span { flex: 0 0 auto; }
       .vote-card.is-touch-paused .vote-card__names-track, .vote-card:hover .vote-card__names-track, .vote-card:focus-within .vote-card__names-track { animation-play-state: paused; }
-      @keyframes voter-name-loop { from { transform: translateX(0); } to { transform: translateX(-50%); } }
-      @media (prefers-reduced-motion: reduce) { .vote-card__names-track { animation: none; display: block; white-space: normal; overflow-wrap: anywhere; } .vote-card__names-copy--canonical { display: block; } .vote-card__names-copy--duplicate, .vote-card__names-separator { display: none; } }
+      @keyframes voter-name-loop { from { transform: translateX(var(--vote-marquee-start, 100%)); } to { transform: translateX(var(--vote-marquee-end, -100%)); } }
+      @media (prefers-reduced-motion: reduce) { .vote-card__names-track { animation: none; display: block; white-space: normal; overflow-wrap: anywhere; } .vote-card__names-copy--canonical { display: block; } }
       @media (max-width: 44rem) {
         .vote-page-main { padding-inline: .75rem; }
         .vote-page-main > section { padding: 1rem .75rem; }
@@ -267,7 +267,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           <form id="pin-form"><h2>เปลี่ยน PIN / Change PIN</h2><label>PIN ปัจจุบัน / Current PIN <input name="currentPin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required></label><label>PIN ใหม่ / New PIN <input name="newPin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required></label><label>ยืนยัน PIN ใหม่ / Confirm new PIN <input name="newPinConfirmation" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required></label><button>Change PIN</button></form>
           <div class="actions"><button id="logout" type="button" class="secondary">Logout</button></div>
         </section>`,
-        script: `import { colorForDay, createSocketRepairController, formatDisplayDate, marqueeDurationForDistance, patchVoteDay } from '/vote-board.js?v=issue-6-1';
+        script: `import { colorForDay, configureVoterNamesMarquee, createSocketRepairController, createVoterNamesRegion as buildVoterNamesRegion, formatDisplayDate, patchVoteDay } from '/vote-board.js?v=issue-6-2';
           let csrfToken = '';
           let sessionCheck = 0;
           const currentWeekMonday = '${currentWeek}';
@@ -289,36 +289,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
             { thai: 'จ.', english: 'Mon' }, { thai: 'อ.', english: 'Tue' }, { thai: 'พ.', english: 'Wed' },
             { thai: 'พฤ.', english: 'Thu' }, { thai: 'ศ.', english: 'Fri' }, { thai: 'ส.', english: 'Sat' }, { thai: 'อา.', english: 'Sun' },
           ];
-          function appendVoterNames(parent, names) {
-            const region = document.createElement('div');
-            region.className = 'vote-card__names';
-            region.setAttribute('aria-label', names.length ? 'รายชื่อผู้เลือก / Voter names' : 'รายชื่อผู้เลือก / Voter names: ยังไม่มีผู้เลือก / No voters');
-            const track = document.createElement('div');
-            track.className = 'vote-card__names-track';
-            const canonical = document.createElement('span');
-            canonical.className = 'vote-card__names-copy vote-card__names-copy--canonical';
-            if (names.length) {
-              const appendNames = (copy) => names.forEach((name, index) => {
-                if (index) copy.append(document.createTextNode(', '));
-                addText(copy, 'span', name);
-              });
-              appendNames(canonical);
-              const separator = document.createElement('span');
-              separator.className = 'vote-card__names-separator';
-              separator.setAttribute('aria-hidden', 'true');
-              separator.textContent = ' • ';
-              const duplicate = document.createElement('span');
-              duplicate.className = 'vote-card__names-copy vote-card__names-copy--duplicate';
-              duplicate.setAttribute('aria-hidden', 'true');
-              appendNames(duplicate);
-              track.append(canonical, separator, duplicate);
-            } else {
-              addText(canonical, 'span', '—').className = 'vote-card__names-empty';
-              track.append(canonical);
-            }
-            region.append(track);
-            parent.append(region);
-          }
+          function appendVoterNames(parent, names) { parent.append(buildVoterNamesRegion(document, names)); }
           function renderWeek(state) {
             weekMonday = state.week.monday;
             weekHeading.textContent = 'สัปดาห์ที่ ' + state.week.isoWeek + ' / ISO week ' + state.week.isoWeek + ' (' + state.week.isoWeekYear + ')';
@@ -371,18 +342,12 @@ export function createApp({ databaseReady = false, database, env = process.env, 
               return row;
             });
             weekDays.replaceChildren(...rows);
-            weekDays.querySelectorAll('.vote-card__names-track').forEach((track) => {
-              if (track.querySelector('.vote-card__names-copy--duplicate')) track.style.setProperty('--vote-marquee-duration', marqueeDurationForDistance(track.scrollWidth / 2) + 's');
-            });
+            configureVoterNamesMarquee(weekDays);
           }
           function patchDay(patch) {
-            return patchVoteDay({ weekDays, patch, createVoterNamesRegion });
+            return patchVoteDay({ weekDays, patch, createVoterNamesRegion, configureVoterNamesMarquee });
           }
-          function createVoterNamesRegion(names) {
-            const parent = document.createElement('div');
-            appendVoterNames(parent, names);
-            return parent.firstElementChild;
-          }
+          function createVoterNamesRegion(names) { return buildVoterNamesRegion(document, names); }
           async function toggleVote(date, selected) {
             const card = weekDays.querySelector('.vote-card[data-date="' + date + '"]');
             if (!card || card.disabled || card.getAttribute('aria-disabled') === 'true') return;

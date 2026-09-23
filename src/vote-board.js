@@ -2,6 +2,10 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 export const VOTER_MARQUEE_PIXELS_PER_SECOND = 7.1875;
 
+function finiteNonNegative(value) {
+  return Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
 export function formatDisplayDate(value) {
   const match = ISO_DATE.exec(value);
   if (!match) throw new RangeError('invalid ISO date');
@@ -31,8 +35,73 @@ export function colorForDay(voteCount, weeklyMaximum) {
 }
 
 export function marqueeDurationForDistance(loopDistance) {
-  const distance = Number.isFinite(loopDistance) ? Math.max(0, loopDistance) : 0;
+  const distance = finiteNonNegative(loopDistance);
   return distance / VOTER_MARQUEE_PIXELS_PER_SECOND;
+}
+
+export function marqueeTravelDistance(containerWidth, textWidth) {
+  return finiteNonNegative(containerWidth) + finiteNonNegative(textWidth);
+}
+
+export function marqueeDurationForDimensions(containerWidth, textWidth) {
+  return marqueeDurationForDistance(marqueeTravelDistance(containerWidth, textWidth));
+}
+
+export function createVoterNamesRegion(document, names) {
+  const voterNames = Array.isArray(names) ? names : [];
+  const region = document.createElement('div');
+  region.className = 'vote-card__names';
+  region.setAttribute('aria-label', voterNames.length
+    ? 'รายชื่อผู้เลือก / Voter names'
+    : 'รายชื่อผู้เลือก / Voter names: ยังไม่มีผู้เลือก / No voters');
+  region.setAttribute('data-has-voters', String(voterNames.length > 0));
+
+  const track = document.createElement('div');
+  track.className = 'vote-card__names-track';
+  const canonical = document.createElement('span');
+  canonical.className = 'vote-card__names-copy vote-card__names-copy--canonical';
+  if (voterNames.length) {
+    voterNames.forEach((name, index) => {
+      if (index) canonical.append(document.createTextNode(', '));
+      canonical.append(document.createTextNode(String(name)));
+    });
+  } else {
+    const empty = document.createElement('span');
+    empty.className = 'vote-card__names-empty';
+    empty.textContent = '—';
+    canonical.append(empty);
+  }
+  track.append(canonical);
+  region.append(track);
+  return region;
+}
+
+function prefersReducedMotion(region, reducedMotion) {
+  if (reducedMotion !== undefined) return reducedMotion;
+  const view = region.ownerDocument?.defaultView;
+  return Boolean(view?.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
+}
+
+function configureVoterNamesRegion(region, options = {}) {
+  const track = region.querySelector('.vote-card__names-track');
+  if (!track || region.getAttribute('data-has-voters') !== 'true') return;
+  if (prefersReducedMotion(region, options.reducedMotion)) {
+    track.style.setProperty('animation', 'none');
+    return;
+  }
+  const containerWidth = region.clientWidth;
+  const textWidth = track.scrollWidth;
+  const travelDistance = marqueeTravelDistance(containerWidth, textWidth);
+  track.style.setProperty('--vote-marquee-start', `${containerWidth}px`);
+  track.style.setProperty('--vote-marquee-end', `${-travelDistance}px`);
+  track.style.setProperty('--vote-marquee-duration', `${marqueeDurationForDimensions(containerWidth, textWidth)}s`);
+}
+
+export function configureVoterNamesMarquee(root, options = {}) {
+  const regions = root.matches?.('.vote-card__names') || root.getAttribute?.('data-has-voters') !== null
+    ? [root]
+    : [...root.querySelectorAll('.vote-card__names')];
+  regions.forEach((region) => configureVoterNamesRegion(region, options));
 }
 
 export function recalculateVoteColors(weekDays) {
@@ -46,7 +115,7 @@ export function recalculateVoteColors(weekDays) {
   });
 }
 
-export function patchVoteDay({ weekDays, patch, createVoterNamesRegion }) {
+export function patchVoteDay({ weekDays, patch, createVoterNamesRegion, configureVoterNamesMarquee: configureMarquee }) {
   const card = weekDays.querySelector('.vote-card[data-date="' + patch.date + '"]');
   if (!card) return false;
   card.dataset.selected = String(patch.selected);
@@ -58,11 +127,9 @@ export function patchVoteDay({ weekDays, patch, createVoterNamesRegion }) {
   card.setAttribute('aria-label', card.getAttribute('aria-label')
     .replace(/, [0-9]+ votes,/, ', ' + patch.voteCount + ' votes,')
     .replace(/, (Selected|Not selected)$/, ', ' + (patch.selected ? 'Selected' : 'Not selected')));
-  card.querySelector('.vote-card__names').replaceWith(createVoterNamesRegion(patch.voterNames));
-  const track = card.querySelector('.vote-card__names-track');
-  if (track?.querySelector('.vote-card__names-copy--duplicate')) {
-    track.style.setProperty('--vote-marquee-duration', marqueeDurationForDistance(track.scrollWidth / 2) + 's');
-  }
+  const namesRegion = createVoterNamesRegion(patch.voterNames);
+  card.querySelector('.vote-card__names').replaceWith(namesRegion);
+  configureMarquee?.(namesRegion);
   recalculateVoteColors(weekDays);
   return true;
 }

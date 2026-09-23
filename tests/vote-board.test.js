@@ -3,14 +3,19 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
   colorForDay,
+  configureVoterNamesMarquee,
+  createVoterNamesRegion,
   formatDisplayDate,
   marqueeDurationForDistance,
+  marqueeDurationForDimensions,
+  marqueeTravelDistance,
   VOTER_MARQUEE_PIXELS_PER_SECOND,
   createSocketRepairController,
   patchVoteDay,
 } from '../src/vote-board.js';
 
 const appSource = readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
+const voteBoardSource = readFileSync(new URL('../src/vote-board.js', import.meta.url), 'utf8');
 
 test('formats canonical ISO dates as timezone-safe D Mon labels', () => {
   assert.equal(formatDisplayDate('2024-02-29'), '29 Feb');
@@ -42,7 +47,7 @@ test('keeps the board one-row, accessible, safe, and read-only', () => {
   assert.match(appSource, /pointerdown/);
   assert.match(appSource, /prefers-reduced-motion/);
   assert.match(appSource, /state\.days\.map/);
-  assert.match(appSource, /import \{ colorForDay, createSocketRepairController, formatDisplayDate, marqueeDurationForDistance, patchVoteDay \} from '\/vote-board\.js\?v=issue-6-1'/);
+  assert.match(appSource, /import \{ colorForDay, configureVoterNamesMarquee, createSocketRepairController, createVoterNamesRegion as buildVoterNamesRegion, formatDisplayDate, patchVoteDay \} from '\/vote-board\.js\?v=issue-6-2'/);
   assert.match(appSource, /aria-busy/);
   assert.match(appSource, /fetch\('\/api\/votes\//);
   assert.equal(appSource.includes('.innerHTML'), false);
@@ -69,13 +74,11 @@ test('keeps narrow card text legible and two-digit counts inside each card', () 
   assert.match(appSource, /\.vote-card__count\s*\{[^}]*letter-spacing:\s*-\.08em/s);
 });
 
-test('hides the decorative marquee copy and separator for reduced motion', () => {
+test('uses one canonical voter-name copy and no decorative separator or duplicate', () => {
   assert.match(appSource, /vote-card__names-copy--canonical/);
-  assert.match(appSource, /vote-card__names-copy--duplicate/);
-  assert.match(appSource, /vote-card__names-separator/);
-  assert.match(appSource, /names-copy--duplicate[\s\S]*setAttribute\('aria-hidden', 'true'\)/);
-  assert.match(appSource, /names-separator[\s\S]*setAttribute\('aria-hidden', 'true'\)/);
-  assert.match(appSource, /@media \(prefers-reduced-motion: reduce\)[\s\S]*\.vote-card__names-copy--duplicate, \.vote-card__names-separator \{ display: none; \}/);
+  assert.doesNotMatch(appSource, /vote-card__names-copy--duplicate/);
+  assert.doesNotMatch(appSource, /vote-card__names-separator/);
+  assert.match(appSource, /@media \(prefers-reduced-motion: reduce\)[\s\S]*\.vote-card__names-track \{ animation: none/s);
 });
 
 test('stacks full-width day rows only on narrow screens while preserving the desktop seven-column grid', () => {
@@ -96,14 +99,87 @@ test('keeps vote-page buttons English-only while login and registration remain b
   assert.match(appSource, /<button>สมัครและเข้าสู่ระบบ \/ Register and sign in<\/button>/);
 });
 
-test('derives marquee duration from loop distance at a calibrated fixed speed', () => {
+test('derives single-pass marquee geometry and duration at a calibrated fixed speed', () => {
   assert.equal(VOTER_MARQUEE_PIXELS_PER_SECOND, 7.1875);
   assert.equal(marqueeDurationForDistance(172.5), 24);
-  assert.ok(marqueeDurationForDistance(517.5) > marqueeDurationForDistance(172.5));
+  assert.equal(marqueeTravelDistance(100, 72.5), 172.5);
+  assert.equal(marqueeDurationForDimensions(100, 72.5), 24);
   assert.match(appSource, /animation:\s*voter-name-loop\s*var\(--vote-marquee-duration,\s*0s\)/);
-  assert.match(appSource, /marqueeDurationForDistance\(track\.scrollWidth\s*\/\s*2\)/);
-  assert.match(appSource, /setProperty\('--vote-marquee-duration'/);
-  assert.match(appSource, /weekDays\.replaceChildren\(\.\.\.rows\);[\s\S]*weekDays\.querySelectorAll\('\.vote-card__names-track'\)/);
+  assert.match(voteBoardSource, /setProperty\('--vote-marquee-start'/);
+  assert.match(voteBoardSource, /setProperty\('--vote-marquee-end'/);
+  assert.match(voteBoardSource, /marqueeDurationForDimensions\(containerWidth, textWidth\)/);
+  assert.match(appSource, /weekDays\.replaceChildren\(\.\.\.rows\);[\s\S]*configureVoterNamesMarquee\(weekDays\)/);
+});
+
+class FakeElement {
+  constructor(tagName) {
+    this.tagName = tagName;
+    this.className = '';
+    this.children = [];
+    this.attributes = new Map();
+    this.style = new FakeStyle();
+    this.textContent = '';
+    this.clientWidth = 0;
+    this.scrollWidth = 0;
+  }
+  append(...children) {
+    children.forEach((child) => {
+      this.children.push(child);
+      if (child.textContent) this.textContent += child.textContent;
+    });
+  }
+  setAttribute(name, value) { this.attributes.set(name, String(value)); }
+  getAttribute(name) { return this.attributes.get(name) ?? null; }
+  querySelectorAll(selector) {
+    const matches = [];
+    const visit = (element) => {
+      if (element.className?.split(/\s+/).includes(selector.slice(1))) matches.push(element);
+      element.children?.forEach((child) => { if (child.tagName) visit(child); });
+    };
+    visit(this);
+    return matches;
+  }
+  querySelector(selector) { return this.querySelectorAll(selector)[0] ?? null; }
+}
+
+class FakeDocument {
+  createElement(tagName) { return new FakeElement(tagName); }
+  createTextNode(text) { return { textContent: String(text) }; }
+}
+
+test('renders one exact canonical DOM copy for one or many real voter names', () => {
+  const one = createVoterNamesRegion(new FakeDocument(), ['bank3']);
+  assert.equal(one.textContent, 'bank3');
+  assert.equal(one.querySelectorAll('.vote-card__names-copy--canonical').length, 1);
+  assert.equal(one.querySelectorAll('.vote-card__names-copy--duplicate').length, 0);
+  assert.equal(one.querySelectorAll('.vote-card__names-separator').length, 0);
+
+  const many = createVoterNamesRegion(new FakeDocument(), ['bank3', 'runner4']);
+  assert.equal(many.textContent, 'bank3, runner4');
+  assert.equal(many.querySelectorAll('.vote-card__names-copy--canonical').length, 1);
+  assert.equal(many.querySelectorAll('.vote-card__names-copy--duplicate').length, 0);
+  assert.equal(many.querySelectorAll('.vote-card__names-separator').length, 0);
+});
+
+test('configures a single pass from the right edge fully past the left edge', () => {
+  const region = createVoterNamesRegion(new FakeDocument(), ['bank3']);
+  const track = region.querySelector('.vote-card__names-track');
+  region.clientWidth = 100;
+  track.scrollWidth = 72.5;
+  configureVoterNamesMarquee(region, { reducedMotion: false });
+  assert.equal(track.style.getPropertyValue('--vote-marquee-start'), '100px');
+  assert.equal(track.style.getPropertyValue('--vote-marquee-end'), '-172.5px');
+  assert.equal(track.style.getPropertyValue('--vote-marquee-duration'), '24s');
+});
+
+test('reduced motion keeps one canonical voter copy static', () => {
+  const region = createVoterNamesRegion(new FakeDocument(), ['bank3']);
+  const track = region.querySelector('.vote-card__names-track');
+  configureVoterNamesMarquee(region, { reducedMotion: true });
+  assert.equal(track.style.getPropertyValue('animation'), 'none');
+  assert.equal(region.textContent, 'bank3');
+  assert.equal(region.querySelectorAll('.vote-card__names-copy--canonical').length, 1);
+  assert.equal(region.querySelectorAll('.vote-card__names-copy--duplicate').length, 0);
 });
 
 class FakeClassList {
@@ -123,7 +199,12 @@ class FakeStyle {
 }
 
 class FakeRegion {
-  constructor() { this.track = { querySelector: () => null, style: new FakeStyle() }; }
+  constructor() {
+    this.attributes = new Map([['data-has-voters', 'true']]);
+    this.clientWidth = 100;
+    this.track = { querySelector: () => null, style: new FakeStyle(), scrollWidth: 72.5 };
+  }
+  getAttribute(name) { return this.attributes.get(name) ?? null; }
   querySelector(selector) { return selector === '.vote-card__names-track' ? this.track : null; }
 }
 
@@ -165,15 +246,23 @@ test('patchVoteDay updates only the affected DOM card and recalculates weekly co
   const board = new FakeBoard([first, second]);
   const originalCards = board.cards;
   const replacement = new FakeRegion();
+  let configuredRegion;
   const patched = patchVoteDay({
     weekDays: board,
     patch: { date: '2024-03-01', voteCount: 5, voterNames: ['A', 'B'], selected: false },
     createVoterNamesRegion: () => replacement,
+    configureVoterNamesMarquee: (region) => {
+      configuredRegion = region;
+      configureVoterNamesMarquee(region, { reducedMotion: false });
+    },
   });
   assert.equal(patched, true);
   assert.strictEqual(board.cards, originalCards);
   assert.equal(first.parts['.vote-card__count'].textContent, '5');
   assert.equal(first.parts['.vote-card__names'], replacement);
+  assert.strictEqual(configuredRegion, replacement);
+  assert.equal(replacement.track.style.getPropertyValue('--vote-marquee-end'), '-172.5px');
+  assert.equal(replacement.track.style.getPropertyValue('--vote-marquee-duration'), '24s');
   assert.equal(first.dataset.selected, 'false');
   assert.equal(first.classList.contains('is-selected'), false);
   assert.equal(first.getAttribute('aria-pressed'), 'false');
