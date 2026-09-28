@@ -11,6 +11,7 @@ import {
   marqueeTravelDistance,
   VOTER_MARQUEE_PIXELS_PER_SECOND,
   createSocketRepairController,
+  getVoteCardPresentation,
   patchVoteDay,
 } from '../src/vote-board.js';
 
@@ -42,36 +43,62 @@ test('assigns deterministic proportional colors with a dark zero state', () => {
 
 test('keeps the board one-row, accessible, safe, and read-only', () => {
   assert.match(appSource, /grid-template-columns:\s*repeat\(7,\s*minmax\(0,\s*1fr\)/);
-  assert.match(appSource, /aria-pressed/);
-  assert.match(appSource, /aria-disabled/);
+  assert.match(voteBoardSource, /aria-pressed/);
+  assert.match(voteBoardSource, /aria-disabled/);
   assert.match(appSource, /pointerdown/);
   assert.match(appSource, /prefers-reduced-motion/);
   assert.match(appSource, /state\.days\.map/);
-  assert.match(appSource, /import \{ colorForDay, configureVoterNamesMarquee, createSocketRepairController, createVoterNamesRegion as buildVoterNamesRegion, formatDisplayDate, patchVoteDay \} from '\/vote-board\.js\?v=issue-6-2'/);
+  assert.match(appSource, /import \{ applyVoteCardPresentation, colorForDay, configureVoterNamesMarquee, createSocketRepairController, createVoterNamesRegion as buildVoterNamesRegion, formatDisplayDate, patchVoteDay \} from '\/vote-board\.js\?v=issue-6-3'/);
   assert.match(appSource, /aria-busy/);
   assert.match(appSource, /fetch\('\/api\/votes\//);
   assert.equal(appSource.includes('.innerHTML'), false);
   assert.equal(appSource.includes('insertAdjacentHTML'), false);
 });
 
-test('gives the vote page a wide shell and equal-height compact card layout', () => {
+test('gives the vote page a wide shell and equal-height responsive card layout', () => {
   assert.match(appSource, /mainClass:\s*'vote-page-main'/);
   assert.match(appSource, /\.vote-page-main\s*\{[^}]*max-width:\s*90rem/s);
   assert.match(appSource, /\.vote-day\s*\{[^}]*display:\s*flex/s);
   assert.match(appSource, /\.vote-card\s*\{[^}]*height:\s*100%/s);
   assert.match(appSource, /\.vote-card__weekday--compact/);
   assert.match(appSource, /\.vote-card__date--compact/);
-  assert.match(appSource, /\.vote-card__eligibility-icon/);
-  assert.match(appSource, /\.vote-board__legend/);
   assert.match(appSource, /\.vote-card__names-empty/);
 });
 
-test('keeps narrow card text legible and two-digit counts inside each card', () => {
+test('keeps narrow card text legible and seven touch cards within a 375px viewport', () => {
   assert.match(appSource, /\.vote-card\s*\{[^}]*font-size:\s*1rem/s);
-  assert.match(appSource, /\.vote-card__weekday--compact\s*\{[^}]*font-size:\s*1rem/s);
+  const mobileCardRule = appSource.match(/@media \(max-width: 44rem\)[\s\S]*?\.vote-card\s*\{([^}]*)\}/)?.[1] ?? '';
+  const cardHeightRem = Number.parseFloat(mobileCardRule.match(/min-height:\s*([\d.]+)rem/)?.[1]);
+  const gapRem = Number.parseFloat(appSource.match(/\.vote-board\s*\{[^}]*gap:\s*([\d.]+)rem/s)?.[1]);
+  assert.ok(Number.isFinite(cardHeightRem));
+  assert.ok(Number.isFinite(gapRem));
+  const cardHeight = cardHeightRem * 16;
+  const gap = gapRem * 16;
+  assert.ok(cardHeight >= 44, 'mobile cards remain usable touch targets');
+  assert.ok((cardHeight * 7) + (gap * 6) <= 667, 'seven cards fit a normal 375px portrait viewport');
+  assert.match(appSource, /\.vote-card__weekday--compact\s*\{[^}]*font-size:\s*1\.15rem/s);
   assert.match(appSource, /\.vote-card__date--compact\s*\{[^}]*font-size:\s*1rem/s);
-  assert.match(appSource, /\.vote-card__count\s*\{[^}]*font-size:\s*2rem/s);
-  assert.match(appSource, /\.vote-card__count\s*\{[^}]*letter-spacing:\s*-\.08em/s);
+  assert.match(appSource, /\.vote-card__count--selected/);
+});
+
+test('uses accessible semantic state while removing visible status icons and wording', () => {
+  assert.doesNotMatch(appSource, /vote-card__state-icon/);
+  assert.doesNotMatch(appSource, /vote-card__state-detail/);
+  assert.doesNotMatch(appSource, /vote-card__eligibility-icon/);
+  assert.doesNotMatch(appSource, /vote-card__eligibility-detail/);
+  assert.doesNotMatch(appSource, /vote-board__legend/);
+  const selected = getVoteCardPresentation({ selected: true, eligible: true });
+  assert.equal(selected.ariaPressed, 'true');
+  assert.equal(selected.ariaDisabled, 'false');
+  assert.equal(selected.disabled, false);
+  assert.equal(selected.visibleStatusText, '');
+  assert.match(selected.countClassName, /vote-card__count--selected/);
+  const readOnly = getVoteCardPresentation({ selected: false, eligible: false });
+  assert.equal(readOnly.ariaPressed, 'false');
+  assert.equal(readOnly.ariaDisabled, 'true');
+  assert.equal(readOnly.disabled, true);
+  assert.match(readOnly.cardClassName, /is-read-only/);
+  assert.match(readOnly.accessibleState, /Read-only/);
 });
 
 test('uses one canonical voter-name copy and no decorative separator or duplicate', () => {
@@ -216,12 +243,10 @@ class FakeCard {
     this.dataset = { date, selected: String(selected) };
     this.classList = new FakeClassList(selected ? 'vote-card is-selected' : 'vote-card');
     this.attributes = new Map([[
-      'aria-label', `Mon, 1 Mar, ${count} votes, Eligible, ${selected ? 'Selected' : 'Not selected'}`,
+      'aria-label', `MON, 1 Mar, ${count} votes, Available to vote`,
     ]]);
     this.parts = {
       '.vote-card__count': { textContent: String(count) },
-      '.vote-card__state-icon': { textContent: selected ? '✓' : '○' },
-      '.vote-card__state': { textContent: selected ? '✓ Selected' : 'Not selected' },
       '.vote-card__names': { replaceWith: (replacement) => { this.parts['.vote-card__names'] = replacement; } },
     };
     this.style = new FakeStyle();
@@ -271,10 +296,10 @@ test('patchVoteDay updates only the affected DOM card and recalculates weekly co
   assert.equal(patchedStart - patchedEnd, marqueeTravelDistance(100, 72.5));
   assert.equal(replacement.track.style.getPropertyValue('--vote-marquee-duration'), '24s');
   assert.equal(first.dataset.selected, 'false');
-  assert.equal(first.classList.contains('is-selected'), false);
+  assert.doesNotMatch(first.className, /is-selected/);
   assert.equal(first.getAttribute('aria-pressed'), 'false');
   assert.match(first.getAttribute('aria-label'), /, 5 votes,/);
-  assert.match(first.getAttribute('aria-label'), /, Not selected$/);
+  assert.match(first.getAttribute('aria-label'), /, Available to vote$/);
   assert.notEqual(first.style.getPropertyValue('--day-bg'), second.style.getPropertyValue('--day-bg'));
 });
 

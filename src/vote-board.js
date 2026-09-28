@@ -34,6 +34,36 @@ export function colorForDay(voteCount, weeklyMaximum) {
   };
 }
 
+export function getVoteCardPresentation({ selected = false, eligible = true } = {}) {
+  const isSelected = Boolean(selected);
+  const isEligible = Boolean(eligible);
+  return {
+    cardClassName: `vote-card${isSelected ? ' is-selected' : ''}${isEligible ? '' : ' is-read-only'}`,
+    countClassName: `vote-card__count${isSelected ? ' vote-card__count--selected' : ''}`,
+    ariaPressed: String(isSelected),
+    ariaDisabled: String(!isEligible),
+    disabled: !isEligible,
+    accessibleState: isEligible ? 'Available to vote' : 'Read-only; voting unavailable',
+    visibleStatusText: '',
+  };
+}
+
+export function applyVoteCardPresentation(card, { selected = false, eligible = true, voteCount } = {}) {
+  const presentation = getVoteCardPresentation({ selected, eligible });
+  card.className = presentation.cardClassName;
+  card.dataset.selected = String(Boolean(selected));
+  card.dataset.eligible = String(Boolean(eligible));
+  card.setAttribute('aria-pressed', presentation.ariaPressed);
+  card.setAttribute('aria-disabled', presentation.ariaDisabled);
+  card.disabled = presentation.disabled;
+  const count = card.querySelector('.vote-card__count');
+  if (count) {
+    count.className = presentation.countClassName;
+    if (voteCount !== undefined) count.textContent = String(voteCount);
+  }
+  return presentation;
+}
+
 export function marqueeDurationForDistance(loopDistance) {
   const distance = finiteNonNegative(loopDistance);
   return distance / VOTER_MARQUEE_PIXELS_PER_SECOND;
@@ -118,15 +148,14 @@ export function recalculateVoteColors(weekDays) {
 export function patchVoteDay({ weekDays, patch, createVoterNamesRegion, configureVoterNamesMarquee: configureMarquee }) {
   const card = weekDays.querySelector('.vote-card[data-date="' + patch.date + '"]');
   if (!card) return false;
-  card.dataset.selected = String(patch.selected);
-  card.classList.toggle('is-selected', patch.selected);
-  card.setAttribute('aria-pressed', String(patch.selected));
-  card.querySelector('.vote-card__count').textContent = String(patch.voteCount);
-  card.querySelector('.vote-card__state-icon').textContent = patch.selected ? '✓' : '○';
-  card.querySelector('.vote-card__state').textContent = patch.selected ? '✓ Selected' : 'Not selected';
-  card.setAttribute('aria-label', card.getAttribute('aria-label')
-    .replace(/, [0-9]+ votes,/, ', ' + patch.voteCount + ' votes,')
-    .replace(/, (Selected|Not selected)$/, ', ' + (patch.selected ? 'Selected' : 'Not selected')));
+  const eligible = card.dataset.eligible !== 'false';
+  const presentation = applyVoteCardPresentation(card, {
+    selected: patch.selected,
+    eligible,
+    voteCount: patch.voteCount,
+  });
+  card.setAttribute('aria-label', (card.getAttribute('aria-label') ?? '')
+    .replace(/, [0-9]+ votes,.*$/, ', ' + patch.voteCount + ' votes, ' + presentation.accessibleState));
   const namesRegion = createVoterNamesRegion(patch.voterNames);
   card.querySelector('.vote-card__names').replaceWith(namesRegion);
   configureMarquee?.(namesRegion);
