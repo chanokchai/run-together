@@ -50,7 +50,9 @@ export function getVoteCardPresentation({ selected = false, eligible = true } = 
 
 export function applyVoteCardPresentation(card, { selected = false, eligible = true, voteCount } = {}) {
   const presentation = getVoteCardPresentation({ selected, eligible });
-  card.className = presentation.cardClassName;
+  card.classList.add('vote-card');
+  card.classList.toggle('is-selected', selected);
+  card.classList.toggle('is-read-only', !eligible);
   card.dataset.selected = String(Boolean(selected));
   card.dataset.eligible = String(Boolean(eligible));
   card.setAttribute('aria-pressed', presentation.ariaPressed);
@@ -58,7 +60,7 @@ export function applyVoteCardPresentation(card, { selected = false, eligible = t
   card.disabled = presentation.disabled;
   const count = card.querySelector('.vote-card__count');
   if (count) {
-    count.className = presentation.countClassName;
+    count.classList.toggle('vote-card__count--selected', selected);
     if (voteCount !== undefined) count.textContent = String(voteCount);
   }
   return presentation;
@@ -121,7 +123,6 @@ function configureVoterNamesRegion(region, options = {}) {
   }
   const containerWidth = region.clientWidth;
   const textWidth = track.scrollWidth;
-  const travelDistance = marqueeTravelDistance(containerWidth, textWidth);
   track.style.setProperty('--vote-marquee-start', `${containerWidth}px`);
   track.style.setProperty('--vote-marquee-end', `${-textWidth}px`);
   track.style.setProperty('--vote-marquee-duration', `${marqueeDurationForDimensions(containerWidth, textWidth)}s`);

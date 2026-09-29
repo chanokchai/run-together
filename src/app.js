@@ -54,6 +54,7 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       .vote-card:disabled { cursor: not-allowed; }
       .vote-card__header { display: flex; justify-content: space-between; align-items: flex-start; gap: .25rem; min-width: 0; font-weight: 700; }
       .vote-card__weekday, .vote-card__date { overflow-wrap: anywhere; }
+      .vote-card__weekday--full { font-size: 1.35rem; line-height: 1.1; }
       .vote-card__weekday--compact, .vote-card__date--compact { display: none; }
       .vote-card__date { font-variant-numeric: tabular-nums; }
       .vote-card__count { display: inline-flex; align-items: center; justify-content: center; align-self: center; width: 3.35rem; height: 3.35rem; margin: auto 0; border-radius: 50%; font-size: clamp(1.15rem, 6vw, 2.1rem); line-height: 1; font-variant-numeric: tabular-nums; }
@@ -77,7 +78,7 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
         .vote-card { min-height: 2.75rem; height: 2.75rem; flex-direction: row; align-items: center; gap: .5rem; padding: .2rem .55rem; font-size: 1rem; }
         .vote-card__weekday--full, .vote-card__date--full { display: none; }
         .vote-card__weekday--compact, .vote-card__date--compact { display: block; }
-        .vote-card__weekday--compact { font-size: 1.15rem; line-height: 1.1; white-space: nowrap; text-transform: uppercase; letter-spacing: .03em; }
+        .vote-card__weekday--compact { font-size: 1.25rem; line-height: 1.1; white-space: nowrap; text-transform: uppercase; letter-spacing: .03em; }
         .vote-card__date--compact { font-size: 1rem; line-height: 1; }
         .vote-card__date--compact span { display: block; }
         .vote-card__header { flex: 0 0 4.75rem; align-items: center; }
@@ -273,7 +274,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           <form id="pin-form"><h2>เปลี่ยน PIN / Change PIN</h2><label>PIN ปัจจุบัน / Current PIN <input name="currentPin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required></label><label>PIN ใหม่ / New PIN <input name="newPin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required></label><label>ยืนยัน PIN ใหม่ / Confirm new PIN <input name="newPinConfirmation" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required></label><button>Change PIN</button></form>
           <div class="actions"><button id="logout" type="button" class="secondary">Logout</button></div>
         </section>`,
-        script: `import { applyVoteCardPresentation, colorForDay, configureVoterNamesMarquee, createSocketRepairController, createVoterNamesRegion as buildVoterNamesRegion, formatDisplayDate, patchVoteDay } from '/vote-board.js?v=issue-6-3';
+        script: `import { applyVoteCardPresentation, colorForDay, configureVoterNamesMarquee, createSocketRepairController, createVoterNamesRegion as buildVoterNamesRegion, formatDisplayDate, patchVoteDay } from '/vote-board.js?v=issue-6-4';
           let csrfToken = '';
           let sessionCheck = 0;
           const currentWeekMonday = '${currentWeek}';

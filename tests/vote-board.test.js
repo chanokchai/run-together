@@ -13,6 +13,7 @@ import {
   createSocketRepairController,
   getVoteCardPresentation,
   patchVoteDay,
+  applyVoteCardPresentation,
 } from '../src/vote-board.js';
 
 const appSource = readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
@@ -48,7 +49,7 @@ test('keeps the board one-row, accessible, safe, and read-only', () => {
   assert.match(appSource, /pointerdown/);
   assert.match(appSource, /prefers-reduced-motion/);
   assert.match(appSource, /state\.days\.map/);
-  assert.match(appSource, /import \{ applyVoteCardPresentation, colorForDay, configureVoterNamesMarquee, createSocketRepairController, createVoterNamesRegion as buildVoterNamesRegion, formatDisplayDate, patchVoteDay \} from '\/vote-board\.js\?v=issue-6-3'/);
+  assert.match(appSource, /import \{ applyVoteCardPresentation, colorForDay, configureVoterNamesMarquee, createSocketRepairController, createVoterNamesRegion as buildVoterNamesRegion, formatDisplayDate, patchVoteDay \} from '\/vote-board\.js\?v=issue-6-4'/);
   assert.match(appSource, /aria-busy/);
   assert.match(appSource, /fetch\('\/api\/votes\//);
   assert.equal(appSource.includes('.innerHTML'), false);
@@ -76,9 +77,13 @@ test('keeps narrow card text legible and seven touch cards within a 375px viewpo
   const gap = gapRem * 16;
   assert.ok(cardHeight >= 44, 'mobile cards remain usable touch targets');
   assert.ok((cardHeight * 7) + (gap * 6) <= 667, 'seven cards fit a normal 375px portrait viewport');
-  assert.match(appSource, /\.vote-card__weekday--compact\s*\{[^}]*font-size:\s*1\.15rem/s);
+  assert.match(appSource, /\.vote-card__weekday--compact\s*\{[^}]*font-size:\s*1\.25rem/s);
+  assert.match(appSource, /\.vote-card__weekday--full\s*\{[^}]*font-size:\s*1\.35rem/s);
   assert.match(appSource, /\.vote-card__date--compact\s*\{[^}]*font-size:\s*1rem/s);
   assert.match(appSource, /\.vote-card__count--selected/);
+
+  const horizontalBreakpoint = appSource.match(/@media \(max-width: 44rem\)([\s\S]*?)(?=@media|$)/)?.[1] ?? '';
+  assert.match(horizontalBreakpoint, /\.vote-card__weekday--compact\s*\{[^}]*font-size:\s*1\.25rem/s);
 });
 
 test('uses accessible semantic state while removing visible status icons and wording', () => {
@@ -116,12 +121,14 @@ test('stacks full-width day rows only on narrow screens while preserving the des
 });
 
 test('keeps vote-page buttons English-only while login and registration remain bilingual', () => {
-  const protectedContent = appSource.slice(
-    appSource.indexOf('content: `<section id="protected-content"'),
-    appSource.indexOf('script: `import { colorForDay', appSource.indexOf('content: `<section id="protected-content"')),
-  );
+  const protectedContentStart = appSource.indexOf('content: `<section id="protected-content"');
+  const protectedContentEnd = appSource.indexOf('script: `import { colorForDay', protectedContentStart);
+  const protectedContent = appSource.slice(protectedContentStart, protectedContentEnd);
+
   assert.doesNotMatch(protectedContent, /<button[^>]*>[^<]*[ก-๙]/s);
-  assert.doesNotMatch(appSource.slice(appSource.indexOf('card.setAttribute(\'aria-label\''), appSource.indexOf('const header =', appSource.indexOf('card.setAttribute(\'aria-label\''))), /weekday\.thai/);
+  const cardRenderingStart = appSource.indexOf("card.setAttribute('aria-label'");
+  const cardRenderingEnd = appSource.indexOf('const header =', cardRenderingStart);
+  assert.doesNotMatch(appSource.slice(cardRenderingStart, cardRenderingEnd), /weekday\.thai/);
   assert.match(appSource, /<button>เข้าสู่ระบบ \/ Sign in<\/button>/);
   assert.match(appSource, /<button>สมัครและเข้าสู่ระบบ \/ Register and sign in<\/button>/);
 });
@@ -138,40 +145,206 @@ test('derives single-pass marquee geometry and duration at a calibrated fixed sp
   assert.match(appSource, /weekDays\.replaceChildren\(\.\.\.rows\);[\s\S]*configureVoterNamesMarquee\(weekDays\)/);
 });
 
-class FakeElement {
-  constructor(tagName) {
-    this.tagName = tagName;
-    this.className = '';
-    this.children = [];
-    this.attributes = new Map();
-    this.style = new FakeStyle();
-    this.textContent = '';
-    this.clientWidth = 0;
-    this.scrollWidth = 0;
+const Node = typeof window !== 'undefined' ? window.Node : {
+  ELEMENT_NODE: 1,
+  ATTRIBUTE_NODE: 2,
+  TEXT_NODE: 3,
+  CDATA_SECTION_NODE: 4,
+  ENTITY_REFERENCE_NODE: 5,
+  ENTITY_NODE: 6,
+  PROCESSING_INSTRUCTION_NODE: 7,
+  COMMENT_NODE: 8,
+  DOCUMENT_NODE: 9,
+  DOCUMENT_TYPE_NODE: 10,
+  DOCUMENT_FRAGMENT_NODE: 11,
+  NOTATION_NODE: 12,
+};
+
+class FakeClassList {
+  constructor(value = '') { this.values = new Set(value.split(/\s+/).filter(Boolean)); }
+  toggle(name, force) {
+    const shouldHave = force === undefined ? !this.values.has(name) : force;
+    if (shouldHave) this.values.add(name); else this.values.delete(name);
+    return shouldHave;
   }
-  append(...children) {
-    children.forEach((child) => {
-      this.children.push(child);
-      if (child.textContent) this.textContent += child.textContent;
-    });
-  }
-  setAttribute(name, value) { this.attributes.set(name, String(value)); }
-  getAttribute(name) { return this.attributes.get(name) ?? null; }
-  querySelectorAll(selector) {
-    const matches = [];
-    const visit = (element) => {
-      if (element.className?.split(/\s+/).includes(selector.slice(1))) matches.push(element);
-      element.children?.forEach((child) => { if (child.tagName) visit(child); });
-    };
-    visit(this);
-    return matches;
-  }
-  querySelector(selector) { return this.querySelectorAll(selector)[0] ?? null; }
+  contains(name) { return this.values.has(name); }
+  add(name) { this.values.add(name); }
+  remove(name) { this.values.delete(name); }
 }
 
-class FakeDocument {
+class FakeStyle {
+  constructor() { this.values = new Map(); }
+  setProperty(name, value) { this.values.set(name, value); }
+  getPropertyValue(name) { return this.values.get(name) ?? ''; }
+}
+
+class FakeNode {
+  constructor(nodeType, tagName = '', textContent = '') {
+    this.nodeType = nodeType;
+    this.tagName = tagName.toUpperCase();
+    this._textContent = textContent;
+    this.children = [];
+    this.attributes = new Map();
+    this.classList = new FakeClassList();
+    this.style = new FakeStyle();
+    this.dataset = {};
+    this.parentNode = null;
+  }
+
+  get textContent() {
+    if (this.nodeType === Node.TEXT_NODE) {
+      return this._textContent;
+    }
+    return this.children.map(child => child.textContent).join('');
+  }
+
+  set textContent(value) {
+    if (this.nodeType === Node.TEXT_NODE) {
+      this._textContent = value;
+    }
+    else if (this.nodeType === Node.ELEMENT_NODE) {
+      this.children.forEach(child => child.parentNode = null);
+      this.children = [];
+      const newTextNode = new FakeTextNode(value);
+      this.append(newTextNode);
+    }
+  }
+
+  append(...nodes) {
+    nodes.forEach(node => {
+      this.children.push(node);
+      node.parentNode = this;
+    });
+  }
+
+  setAttribute(name, value) { this.attributes.set(name, String(value)); }
+  getAttribute(name) { return this.attributes.get(name) ?? null; }
+
+  querySelectorAll(selector) {
+    const matches = [];
+    const selectorWithoutDot = selector.startsWith('.') ? selector.slice(1) : selector;
+
+    if (this.nodeType === Node.ELEMENT_NODE) {
+      if (selector.startsWith('.') && this.classList.contains(selectorWithoutDot)) {
+        matches.push(this);
+      } else if (this.tagName === selector.toUpperCase()) {
+        matches.push(this);
+      }
+    }
+
+    this.children.forEach(child => {
+      matches.push(...child.querySelectorAll(selector));
+    });
+    return matches;
+  }
+
+  querySelector(selector) {
+    return this.querySelectorAll(selector)[0] || null;
+  }
+
+  replaceWith(newElement) {
+    if (this.parentNode) {
+      const index = this.parentNode.children.indexOf(this);
+      if (index !== -1) {
+        this.parentNode.children.splice(index, 1, newElement);
+        newElement.parentNode = this.parentNode;
+        this.parentNode = null;
+      }
+    }
+  }
+}
+
+class FakeTextNode extends FakeNode {
+  constructor(textContent = '') {
+    super(Node.TEXT_NODE, '', textContent);
+  }
+}
+
+class FakeElement extends FakeNode {
+  constructor(tagName) {
+    super(Node.ELEMENT_NODE, tagName);
+    this.clientWidth = 0; // Public property
+    this.scrollWidth = 0; // Public property
+  }
+
+  get className() {
+    return [...this.classList.values].join(' ');
+  }
+
+  set className(value) {
+    this.classList = new FakeClassList(value);
+  }
+}
+
+class FakeDocument extends FakeNode {
+  constructor() {
+    super(Node.DOCUMENT_NODE, '#document');
+  }
   createElement(tagName) { return new FakeElement(tagName); }
-  createTextNode(text) { return { textContent: String(text) }; }
+  createTextNode(text) { return new FakeTextNode(text); }
+}
+
+class FakeRegion extends FakeElement {
+  constructor() {
+    super('div');
+    this.setAttribute('data-has-voters', 'true');
+    this.clientWidth = 100;
+  }
+}
+
+class FakeCard extends FakeElement {
+  constructor(date, count, selected = false, initialClassList = 'vote-card') {
+    super('button');
+    this.dataset = { date, selected: String(selected) };
+    this.classList = new FakeClassList(initialClassList + (selected ? ' is-selected' : ''));
+    this.setAttribute('aria-label', `MON, 1 Mar, ${count} votes, Available to vote`);
+
+    this.parts = {
+      countElement: new FakeElement('span'),
+      namesRegion: new FakeRegion(),
+    };
+
+    this.parts.countElement.textContent = String(count);
+    this.parts.countElement.classList.add('vote-card__count');
+    if (selected) {
+      this.parts.countElement.classList.add('vote-card__count--selected');
+    }
+    this.parts.namesRegion.classList.add('vote-card__names');
+
+    this.append(this.parts.countElement);
+    this.append(this.parts.namesRegion);
+  }
+
+  querySelector(selector) {
+    if (selector === '.vote-card__count') return this.parts.countElement;
+    if (selector === '.vote-card__names') return this.parts.namesRegion;
+    return super.querySelector(selector);
+  }
+
+  querySelectorAll(selector) {
+    return super.querySelectorAll(selector);
+  }
+}
+
+class FakeBoard extends FakeNode {
+  constructor(cards) {
+    super(Node.ELEMENT_NODE, 'OL');
+    this.cards = cards;
+    this.children.push(...cards);
+  }
+  querySelector(selector) {
+    const match = /^\.vote-card\[data-date="(.+)"\]$/.exec(selector);
+    if (match) {
+      return this.cards.find((card) => card.dataset.date === match[1]) ?? null;
+    }
+    return super.querySelector(selector);
+  }
+  querySelectorAll(selector) {
+    if (selector === '.vote-card') {
+      return this.cards;
+    }
+    return super.querySelectorAll(selector);
+  }
 }
 
 test('renders one exact canonical DOM copy for one or many real voter names', () => {
@@ -192,88 +365,37 @@ test('configures a single pass from the right edge fully past the left edge', ()
   const region = createVoterNamesRegion(new FakeDocument(), ['bank3']);
   const track = region.querySelector('.vote-card__names-track');
   region.clientWidth = 100;
-  track.scrollWidth = 72.5;
+  track.scrollWidth = 200;
   configureVoterNamesMarquee(region, { reducedMotion: false });
   const start = Number.parseFloat(track.style.getPropertyValue('--vote-marquee-start'));
   const end = Number.parseFloat(track.style.getPropertyValue('--vote-marquee-end'));
   assert.equal(start, 100);
-  assert.equal(end, -72.5);
+  assert.equal(end, -200);
   assert.equal(start - end, marqueeTravelDistance(region.clientWidth, track.scrollWidth));
-  assert.equal(track.style.getPropertyValue('--vote-marquee-duration'), '24s');
+  assert.equal(track.style.getPropertyValue('--vote-marquee-duration'), `${marqueeDurationForDimensions(region.clientWidth, track.scrollWidth)}s`);
 });
 
 test('reduced motion keeps one canonical voter copy static', () => {
   const region = createVoterNamesRegion(new FakeDocument(), ['bank3']);
-  const track = region.querySelector('.vote-card__names-track');
+  const trackElement = region.querySelector('.vote-card__names-track');
+
   configureVoterNamesMarquee(region, { reducedMotion: true });
-  assert.equal(track.style.getPropertyValue('animation'), 'none');
+  assert.equal(trackElement.style.getPropertyValue('animation'), 'none');
   assert.equal(region.textContent, 'bank3');
   assert.equal(region.querySelectorAll('.vote-card__names-copy--canonical').length, 1);
   assert.equal(region.querySelectorAll('.vote-card__names-copy--duplicate').length, 0);
 });
-
-class FakeClassList {
-  constructor(value = '') { this.values = new Set(value.split(/\s+/).filter(Boolean)); }
-  toggle(name, force) {
-    const shouldHave = force === undefined ? !this.values.has(name) : force;
-    if (shouldHave) this.values.add(name); else this.values.delete(name);
-    return shouldHave;
-  }
-  contains(name) { return this.values.has(name); }
-}
-
-class FakeStyle {
-  constructor() { this.values = new Map(); }
-  setProperty(name, value) { this.values.set(name, value); }
-  getPropertyValue(name) { return this.values.get(name) ?? ''; }
-}
-
-class FakeRegion {
-  constructor() {
-    this.attributes = new Map([['data-has-voters', 'true']]);
-    this.clientWidth = 100;
-    this.track = { querySelector: () => null, style: new FakeStyle(), scrollWidth: 72.5 };
-  }
-  getAttribute(name) { return this.attributes.get(name) ?? null; }
-  querySelector(selector) { return selector === '.vote-card__names-track' ? this.track : null; }
-}
-
-class FakeCard {
-  constructor(date, count, selected = false) {
-    this.dataset = { date, selected: String(selected) };
-    this.classList = new FakeClassList(selected ? 'vote-card is-selected' : 'vote-card');
-    this.attributes = new Map([[
-      'aria-label', `MON, 1 Mar, ${count} votes, Available to vote`,
-    ]]);
-    this.parts = {
-      '.vote-card__count': { textContent: String(count) },
-      '.vote-card__names': { replaceWith: (replacement) => { this.parts['.vote-card__names'] = replacement; } },
-    };
-    this.style = new FakeStyle();
-  }
-  setAttribute(name, value) { this.attributes.set(name, String(value)); }
-  getAttribute(name) { return this.attributes.get(name) ?? null; }
-  querySelector(selector) {
-    if (selector === '.vote-card__names-track') return this.parts['.vote-card__names'].querySelector(selector);
-    return this.parts[selector] ?? null;
-  }
-}
-
-class FakeBoard {
-  constructor(cards) { this.cards = cards; }
-  querySelector(selector) {
-    const match = /^\.vote-card\[data-date="(.+)"\]$/.exec(selector);
-    return match ? this.cards.find((card) => card.dataset.date === match[1]) ?? null : null;
-  }
-  querySelectorAll(selector) { return selector === '.vote-card' ? this.cards : []; }
-}
 
 test('patchVoteDay updates only the affected DOM card and recalculates weekly colors', () => {
   const first = new FakeCard('2024-03-01', 1, true);
   const second = new FakeCard('2024-03-02', 4, false);
   const board = new FakeBoard([first, second]);
   const originalCards = board.cards;
-  const replacement = new FakeRegion();
+
+  const replacement = createVoterNamesRegion(new FakeDocument(), ['A', 'B']);
+  replacement.clientWidth = 100;
+  replacement.querySelector('.vote-card__names-track').scrollWidth = 72.5;
+
   let configuredRegion;
   const patched = patchVoteDay({
     weekDays: board,
@@ -286,21 +408,33 @@ test('patchVoteDay updates only the affected DOM card and recalculates weekly co
   });
   assert.equal(patched, true);
   assert.strictEqual(board.cards, originalCards);
-  assert.equal(first.parts['.vote-card__count'].textContent, '5');
-  assert.equal(first.parts['.vote-card__names'], replacement);
+  assert.equal(first.querySelector('.vote-card__count').textContent, '5');
   assert.strictEqual(configuredRegion, replacement);
-  const patchedStart = Number.parseFloat(replacement.track.style.getPropertyValue('--vote-marquee-start'));
-  const patchedEnd = Number.parseFloat(replacement.track.style.getPropertyValue('--vote-marquee-end'));
+  const patchedStart = Number.parseFloat(replacement.querySelector('.vote-card__names-track').style.getPropertyValue('--vote-marquee-start'));
+  const patchedEnd = Number.parseFloat(replacement.querySelector('.vote-card__names-track').style.getPropertyValue('--vote-marquee-end'));
   assert.equal(patchedStart, 100);
   assert.equal(patchedEnd, -72.5);
   assert.equal(patchedStart - patchedEnd, marqueeTravelDistance(100, 72.5));
-  assert.equal(replacement.track.style.getPropertyValue('--vote-marquee-duration'), '24s');
+  assert.equal(replacement.querySelector('.vote-card__names-track').style.getPropertyValue('--vote-marquee-duration'), `${marqueeDurationForDimensions(100, 72.5)}s`);
   assert.equal(first.dataset.selected, 'false');
   assert.doesNotMatch(first.className, /is-selected/);
   assert.equal(first.getAttribute('aria-pressed'), 'false');
   assert.match(first.getAttribute('aria-label'), /, 5 votes,/);
   assert.match(first.getAttribute('aria-label'), /, Available to vote$/);
   assert.notEqual(first.style.getPropertyValue('--day-bg'), second.style.getPropertyValue('--day-bg'));
+});
+
+test('applyVoteCardPresentation preserves touch pause across selected live patches', () => {
+  for (const selected of [true, false]) {
+    const card = new FakeCard('2024-03-01', 1, !selected, 'is-touch-paused');
+
+    applyVoteCardPresentation(card, { selected, eligible: true, voteCount: 2 });
+
+    assert.equal(card.classList.contains('is-touch-paused'), true);
+    assert.equal(card.classList.contains('vote-card'), true);
+    assert.equal(card.classList.contains('is-selected'), selected);
+    assert.equal(card.dataset.selected, String(selected));
+  }
 });
 
 test('socket reconnect controller fetches authoritative state before applying queued patches', async () => {
