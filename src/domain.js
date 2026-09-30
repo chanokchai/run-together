@@ -65,6 +65,14 @@ export function listAdmins(database) {
   return database.prepare("SELECT * FROM users WHERE role = 'admin' ORDER BY id").all();
 }
 
+export function listUsers(database) {
+  return database.prepare(`
+    SELECT id, name AS displayName, role, created_at AS createdAt, updated_at AS updatedAt
+    FROM users
+    ORDER BY id ASC
+  `).all();
+}
+
 export function bootstrapAdmin(database, { env = process.env, now = () => new Date() } = {}) {
   const adminName = String(env.ADMIN_NAME ?? '').trim();
   const adminPin = String(env.ADMIN_PIN ?? '');
@@ -214,11 +222,21 @@ export function createSession(database, {
 }
 
 export function deleteUser(database, userId) {
-  const user = database.prepare('SELECT role FROM users WHERE id = ?').get(userId);
-  if (!user) return false;
-  if (user.role === 'admin') throw new Error('seeded admin cannot be deleted');
-  database.prepare('DELETE FROM users WHERE id = ?').run(userId);
-  return true;
+  return Boolean(deleteUserAndCollectAffectedDates(database, userId));
+}
+
+export function deleteUserAndCollectAffectedDates(database, userId) {
+  const transaction = database.transaction(() => {
+    const user = database.prepare('SELECT id, name, role FROM users WHERE id = ?').get(userId);
+    if (!user) return null;
+    if (user.role === 'admin') throw new Error('seeded admin cannot be deleted');
+    const affectedDates = database.prepare(
+      'SELECT DISTINCT vote_date AS date FROM votes WHERE user_id = ? ORDER BY vote_date ASC',
+    ).all(userId).map(({ date }) => date);
+    database.prepare('DELETE FROM users WHERE id = ?').run(userId);
+    return { user, affectedDates };
+  });
+  return transaction();
 }
 
 function formatParsedDate({ year, month, day }) {

@@ -31,6 +31,11 @@ export function createServer({
     env,
     now,
     onVoteChanged: (date) => realtime?.broadcastVoteChanged(date),
+    onUserSessionsRevoked: (userId) => realtime?.disconnectUser(userId),
+    onUserDeleted: (userId, affectedDates) => {
+      realtime?.disconnectUser(userId);
+      affectedDates.forEach((date) => realtime?.broadcastVoteChanged(date));
+    },
   });
   const server = createHttpServer(app);
   realtime = attachRealtime(server, { auth: app.auth, database });

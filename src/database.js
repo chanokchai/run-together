@@ -48,6 +48,18 @@ const MIGRATIONS = [
        END`,
     ],
   },
+  {
+    version: 3,
+    name: 'protect_user_roles',
+    statements: [
+      `CREATE TRIGGER prevent_user_role_change
+       BEFORE UPDATE OF role ON users
+       WHEN OLD.role <> NEW.role
+       BEGIN
+         SELECT RAISE(ABORT, 'user roles cannot be changed');
+       END`,
+    ],
+  },
 ];
 
 export function openDatabase(databasePath) {
