@@ -9,6 +9,20 @@ import {
   parseIsoDate,
 } from './calendar.js';
 
+export class VoteError extends Error {
+  constructor(status, code, message, { cause } = {}) {
+    super(message, { cause });
+    this.status = status;
+    this.code = code;
+  }
+}
+
+const VOTE_MESSAGES = {
+  invalidDate: 'วันที่ไม่ถูกต้อง / The vote date is invalid.',
+  closedDate: 'วันนี้ไม่เปิดให้เลือก / This date is not available for voting.',
+  invalidBody: 'ข้อมูลการเลือกไม่ถูกต้อง / The vote selection is invalid.',
+};
+
 function timestamp(now = () => new Date()) {
   const value = now instanceof Date || typeof now === 'string' ? now : now();
   return new Date(value).toISOString();
@@ -81,6 +95,66 @@ export function addVote(database, { userId, voteDate, createdAt = new Date().toI
     INSERT INTO votes (user_id, vote_date, created_at) VALUES (?, ?, ?)
   `).run(userId, canonicalDate, createdAt);
   return database.prepare('SELECT * FROM votes WHERE id = ?').get(result.lastInsertRowid);
+}
+
+function canonicalVoteDate(voteDate) {
+  try {
+    return formatParsedDate(parseIsoDate(voteDate));
+  } catch (error) {
+    throw new VoteError(400, 'INVALID_VOTE_DATE', VOTE_MESSAGES.invalidDate, { cause: error });
+  }
+}
+
+export function assertVoteBody(body) {
+  if (body === null || typeof body !== 'object' || Array.isArray(body)
+    || Object.keys(body).length !== 1 || !Object.hasOwn(body, 'selected')
+    || typeof body.selected !== 'boolean') {
+    throw new VoteError(400, 'INVALID_VOTE_REQUEST', VOTE_MESSAGES.invalidBody);
+  }
+}
+
+function getDayState(database, { date, currentUserId }) {
+  const rows = database.prepare(`
+    SELECT votes.user_id AS userId, users.name AS voterName
+    FROM votes
+    JOIN users ON users.id = votes.user_id
+    WHERE votes.vote_date = ?
+    ORDER BY users.name_key ASC, users.name ASC, votes.user_id ASC
+  `).all(date);
+  const voterNames = rows.map(({ voterName }) => voterName);
+  return {
+    date,
+    voteCount: voterNames.length,
+    voterNames,
+    selected: rows.some(({ userId }) => userId === currentUserId),
+  };
+}
+
+export function setVote(database, { userId, voteDate, now = () => new Date(), body }) {
+  assertVoteBody(body);
+  const { selected } = body;
+  const canonicalDate = canonicalVoteDate(voteDate);
+  const transaction = database.transaction(() => {
+    if (!isDateWritable(canonicalDate, now)) {
+      throw new VoteError(400, 'VOTE_DATE_CLOSED', VOTE_MESSAGES.closedDate);
+    }
+    const result = selected
+      ? database.prepare(`
+        INSERT INTO votes (user_id, vote_date, created_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT (user_id, vote_date) DO NOTHING
+      `).run(userId, canonicalDate, timestamp(now))
+      : database.prepare('DELETE FROM votes WHERE user_id = ? AND vote_date = ?').run(userId, canonicalDate);
+    return {
+      changed: result.changes > 0,
+      patch: getDayState(database, { date: canonicalDate, currentUserId: userId }),
+    };
+  });
+  return transaction();
+}
+
+export function getDayPatch(database, { date, currentUserId }) {
+  return getDayState(database, { date: canonicalVoteDate(date), currentUserId });
 }
 
 export function getWeekState(database, { monday, currentUserId, now = () => new Date() }) {

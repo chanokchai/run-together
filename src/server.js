@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url';
 import { createApp } from './app.js';
 import { openDatabase, migrate } from './database.js';
 import { bootstrapAdmin } from './domain.js';
+import { attachRealtime } from './realtime.js';
 
 export function initializeDatabase({ databasePath, env = process.env, now = () => new Date() }) {
   const database = openDatabase(databasePath);
@@ -23,7 +24,17 @@ export function createServer({
   now = () => new Date(),
 } = {}) {
   const database = initializeDatabase({ databasePath, env, now });
-  const server = createHttpServer(createApp({ database, databaseReady: true, env, now }));
+  let realtime;
+  const app = createApp({
+    database,
+    databaseReady: true,
+    env,
+    now,
+    onVoteChanged: (date) => realtime?.broadcastVoteChanged(date),
+  });
+  const server = createHttpServer(app);
+  realtime = attachRealtime(server, { auth: app.auth, database });
+  server.io = realtime.io;
   server.database = database;
   return server;
 }
