@@ -8,7 +8,7 @@ import {
   parseIsoDate,
 } from './calendar.js';
 import { AuthError, createAuthService } from './auth.js';
-import { getWeekState, assertVoteBody, setVote, VoteError } from './domain.js';
+import { deleteUserAndCollectAffectedDates, getWeekState, assertVoteBody, listUsers, setVote, VoteError } from './domain.js';
 
 const voteBoardScript = readFileSync(new URL('./vote-board.js', import.meta.url), 'utf8');
 
@@ -158,7 +158,78 @@ const registerPage = () => page({
   });`,
 });
 
-export function createApp({ databaseReady = false, database, env = process.env, now = () => new Date(), onVoteChanged = () => {} } = {}) {
+const adminPage = () => page({
+  title: 'Run Together | ผู้ดูแลระบบ / Admin',
+  content: `<section id="admin-content">
+    <h1>ผู้ดูแลระบบ / Admin</h1>
+    <p>จัดการผู้ใช้ / Manage users</p>
+    <p id="admin-message" class="message" role="status"></p>
+    <div id="admin-users" aria-live="polite"></div>
+  </section>`,
+  script: `
+    const message = document.querySelector('#admin-message');
+    const usersRegion = document.querySelector('#admin-users');
+    let csrfToken = '';
+    function addText(parent, tag, text) { const element = document.createElement(tag); element.textContent = text; parent.append(element); return element; }
+    function showError(result) { message.textContent = result.message || 'เกิดข้อผิดพลาด / Something went wrong.'; }
+    function renderUsers(users) {
+      usersRegion.replaceChildren();
+      users.forEach((user) => {
+        const article = document.createElement('article');
+        article.className = 'admin-user';
+        addText(article, 'h2', user.displayName + ' / ' + user.role);
+        addText(article, 'p', 'สร้างเมื่อ / Created: ' + user.createdAt + ' · แก้ไขเมื่อ / Updated: ' + user.updatedAt);
+        if (user.role === 'user') {
+          const resetForm = document.createElement('form');
+          resetForm.className = 'actions';
+          const resetInput = document.createElement('input');
+          resetInput.name = 'newPin'; resetInput.type = 'password'; resetInput.inputMode = 'numeric'; resetInput.pattern = '[0-9]{4}'; resetInput.maxLength = 4; resetInput.required = true; resetInput.placeholder = 'PIN 4 หลัก / 4-digit PIN';
+          const resetConfirm = document.createElement('input');
+          resetConfirm.name = 'newPinConfirmation'; resetConfirm.type = 'password'; resetConfirm.inputMode = 'numeric'; resetConfirm.pattern = '[0-9]{4}'; resetConfirm.maxLength = 4; resetConfirm.required = true; resetConfirm.placeholder = 'ยืนยัน PIN / Confirm PIN';
+          const resetButton = document.createElement('button'); resetButton.textContent = 'รีเซ็ต PIN / Reset PIN';
+          resetForm.append(resetInput, resetConfirm, resetButton);
+          resetForm.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const form = new FormData(resetForm);
+            const response = await fetch('/api/admin/users/' + encodeURIComponent(user.id) + '/pin', { method: 'PUT', headers: { 'content-type': 'application/json', 'x-csrf-token': csrfToken }, body: JSON.stringify(Object.fromEntries(form)) });
+            if (response.ok) { resetForm.reset(); message.textContent = 'รีเซ็ต PIN สำเร็จ / PIN reset successfully.'; } else showError(await response.json());
+          });
+          const deleteForm = document.createElement('form');
+          deleteForm.className = 'actions';
+          const confirmation = document.createElement('input');
+          confirmation.name = 'confirmation'; confirmation.required = true; confirmation.placeholder = 'พิมพ์ชื่อเพื่อยืนยัน / Type name to confirm';
+          const deleteButton = document.createElement('button'); deleteButton.type = 'submit'; deleteButton.className = 'secondary'; deleteButton.textContent = 'ลบผู้ใช้ / Delete user';
+          deleteForm.append(confirmation, deleteButton);
+          deleteForm.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const response = await fetch('/api/admin/users/' + encodeURIComponent(user.id), { method: 'DELETE', headers: { 'content-type': 'application/json', 'x-csrf-token': csrfToken }, body: JSON.stringify({ confirmation: confirmation.value }) });
+            if (response.ok) { message.textContent = 'ลบผู้ใช้สำเร็จ / User deleted successfully.'; await loadUsers(); } else showError(await response.json());
+          });
+          article.append(resetForm, deleteForm);
+        }
+        usersRegion.append(article);
+      });
+    }
+    async function loadUsers() {
+      const response = await fetch('/api/admin/users', { cache: 'no-store' });
+      if (response.status === 401) { location.replace('/'); return; }
+      if (response.status === 403) { location.replace('/vote'); return; }
+      if (!response.ok) { showError(await response.json()); return; }
+      renderUsers((await response.json()).users);
+    }
+    async function loadSession() {
+      const response = await fetch('/api/session', { cache: 'no-store' });
+      if (!response.ok) { location.replace('/'); return; }
+      const session = await response.json();
+      if (session.role !== 'admin') { location.replace('/vote'); return; }
+      csrfToken = session.csrfToken;
+      await loadUsers();
+    }
+    loadSession();
+  `,
+});
+
+export function createApp({ databaseReady = false, database, env = process.env, now = () => new Date(), onVoteChanged = () => {}, onUserSessionsRevoked = () => {}, onUserDeleted = () => {} } = {}) {
   const app = express();
   app.disable('x-powered-by');
   app.use(express.json({ limit: '10kb' }));
@@ -215,6 +286,56 @@ export function createApp({ databaseReady = false, database, env = process.env, 
       response.setHeader('Cache-Control', 'no-store');
       const session = auth.requireSession(request, response);
       if (session) response.json(auth.sessionPayload(session));
+    });
+
+    app.get('/admin', (request, response) => {
+      const session = auth.requireAdmin(request, response);
+      if (!session) return;
+      response.setHeader('Cache-Control', 'no-store');
+      response.type('html').send(adminPage());
+    });
+
+    app.get('/api/admin/users', (request, response) => {
+      response.setHeader('Cache-Control', 'no-store');
+      const session = auth.requireAdmin(request, response);
+      if (!session) return;
+      response.json({ users: listUsers(database) });
+    });
+
+    app.put('/api/admin/users/:id/pin', async (request, response) => {
+      response.setHeader('Cache-Control', 'no-store');
+      const session = auth.requireAdmin(request, response);
+      if (!session) return;
+      try {
+        auth.assertCsrf(request, session);
+        const userId = Number(request.params.id);
+        if (!Number.isSafeInteger(userId) || userId < 1) throw new AuthError(400, 'INVALID_USER_ID', 'ผู้ใช้ไม่ถูกต้อง / The user is invalid.');
+        await auth.resetUserPin(userId, request.body);
+        onUserSessionsRevoked(userId);
+        response.status(204).end();
+      } catch (error) {
+        sendError(response, error);
+      }
+    });
+
+    app.delete('/api/admin/users/:id', (request, response) => {
+      response.setHeader('Cache-Control', 'no-store');
+      const session = auth.requireAdmin(request, response);
+      if (!session) return;
+      try {
+        auth.assertCsrf(request, session);
+        const userId = Number(request.params.id);
+        if (!Number.isSafeInteger(userId) || userId < 1) throw new AuthError(400, 'INVALID_USER_ID', 'ผู้ใช้ไม่ถูกต้อง / The user is invalid.');
+        const user = database.prepare('SELECT id, name, role FROM users WHERE id = ?').get(userId);
+        if (!user) throw new AuthError(404, 'USER_NOT_FOUND', 'ไม่พบผู้ใช้ / User not found.');
+        if (user.role === 'admin') throw new AuthError(403, 'ADMIN_PROTECTED', 'ไม่อนุญาตให้ลบผู้ดูแลระบบ / The administrator account cannot be deleted.');
+        if (request.body?.confirmation !== user.name) throw new AuthError(400, 'CONFIRMATION_MISMATCH', 'การยืนยันไม่ตรงกัน / Confirmation does not match.');
+        const deletion = deleteUserAndCollectAffectedDates(database, userId);
+        onUserDeleted(userId, deletion.affectedDates);
+        response.status(204).end();
+      } catch (error) {
+        sendError(response, error);
+      }
     });
 
     app.get('/api/weeks/:monday', (request, response) => {
@@ -380,6 +501,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           const socketRepair = createSocketRepairController({ loadWeek: () => loadWeek(weekMonday), patchDay });
           socket.on('vote:changed', socketRepair.handlePatch);
           socket.on('connect', socketRepair.handleConnect);
+          socket.on('auth:revoked', redirectToLogin);
           socket.on('connect_error', (error) => { if (error.message === 'unauthenticated') redirectToLogin(); });
           window.addEventListener('pageshow', loadSession);
           loadSession();`,

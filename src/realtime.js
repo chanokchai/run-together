@@ -50,5 +50,13 @@ export function attachRealtime(server, { auth, database }) {
     }
   }
 
-  return { io, broadcastVoteChanged };
+  function disconnectUser(userId) {
+    for (const socket of io.sockets.sockets.values()) {
+      if (socket.data.userId !== userId) continue;
+      socket.emit('auth:revoked');
+      socket.disconnect(true);
+    }
+  }
+
+  return { io, broadcastVoteChanged, disconnectUser };
 }

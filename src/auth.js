@@ -28,6 +28,9 @@ const MESSAGES = {
   csrf: 'คำขอไม่ปลอดภัย กรุณาลองใหม่ / Unsafe request; please try again.',
   currentPin: 'PIN ปัจจุบันไม่ถูกต้อง / Current PIN is incorrect.',
   registrationLimit: 'สมัครครบจำนวนชั่วคราวแล้ว / Registration limit reached temporarily.',
+  adminRequired: 'เฉพาะผู้ดูแลระบบ / Administrator access is required.',
+  adminTarget: 'ไม่อนุญาตให้แก้ไขผู้ดูแลระบบ / The administrator account cannot be changed.',
+  userNotFound: 'ไม่พบผู้ใช้ / User not found.',
   server: 'เกิดข้อผิดพลาด กรุณาลองใหม่ / Something went wrong; please try again.',
 };
 
@@ -301,6 +304,16 @@ export function createAuthService({ database, env = process.env, now = () => new
     return session;
   }
 
+  function requireAdmin(request, response) {
+    const session = requireSession(request, response);
+    if (!session) return null;
+    if (session.role !== 'admin') {
+      response.status(403).json({ code: 'ADMIN_REQUIRED', message: MESSAGES.adminRequired });
+      return null;
+    }
+    return session;
+  }
+
   function expectedOrigin(request) {
     const remote = request.socket?.remoteAddress;
     const trusted = remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1';
@@ -361,6 +374,28 @@ export function createAuthService({ database, env = process.env, now = () => new
     }
   }
 
+  async function resetUserPin(userId, { newPin, newPinConfirmation } = {}) {
+    validatePin(newPin);
+    validatePin(newPinConfirmation);
+    if (newPin !== newPinConfirmation) throw new AuthError(400, 'PIN_MISMATCH', MESSAGES.pinMismatch);
+    const user = database.prepare('SELECT role FROM users WHERE id = ?').get(userId);
+    if (!user) throw new AuthError(404, 'USER_NOT_FOUND', MESSAGES.userNotFound);
+    if (user.role === 'admin') throw new AuthError(403, 'ADMIN_PROTECTED', MESSAGES.adminTarget);
+    const material = await derivePin(newPin, pepper);
+    const timestamp = isoNow(now);
+    try {
+      const transaction = database.transaction(() => {
+        database.prepare('UPDATE users SET pin_salt = ?, pin_hash = ?, updated_at = ? WHERE id = ?')
+          .run(material.salt, material.hash, timestamp, userId);
+        database.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
+      });
+      transaction();
+      return true;
+    } catch (error) {
+      throw genericError(error);
+    }
+  }
+
   function logout(session, response) {
     database.prepare('DELETE FROM sessions WHERE id = ?').run(session.id);
     appendSetCookie(response, clearedSessionCookie());
@@ -375,8 +410,10 @@ export function createAuthService({ database, env = process.env, now = () => new
     findSession,
     login,
     logout,
+    requireAdmin,
     register,
     requireSession,
+    resetUserPin,
     sessionPayload,
     sessionCookie,
     safeUser,
