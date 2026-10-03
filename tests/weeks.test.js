@@ -67,7 +67,7 @@ test('authenticated week API returns bounded seven-day state and safe aggregates
     assert.equal(response.status, 200);
     assert.equal(response.headers.get('cache-control'), 'no-store');
     assert.deepEqual(await response.json(), {
-      week: { monday: '2024-02-26', sunday: '2024-03-03', isoWeek: 9, isoWeekYear: 2024 },
+      week: { monday: '2024-02-26', sunday: '2024-03-03', isoWeek: 9, isoWeekYear: 2024, resetEligible: true },
       navigation: { previousMonday: '2024-02-19', nextMonday: '2024-03-04' },
       currentUserSelectedDates: ['2024-02-26', '2024-02-28'],
       days: [
@@ -177,6 +177,7 @@ test('week API keeps ISO week-year and seven-day range across New Year week 53',
       sunday: '2021-01-03',
       isoWeek: 53,
       isoWeekYear: 2020,
+      resetEligible: true,
     });
     assert.deepEqual(state.days.map(({ date }) => date), [
       '2020-12-28', '2020-12-29', '2020-12-30', '2020-12-31',

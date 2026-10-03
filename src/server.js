@@ -36,6 +36,7 @@ export function createServer({
       realtime?.disconnectUser(userId);
       affectedDates.forEach((date) => realtime?.broadcastVoteChanged(date));
     },
+    onWeekReset: (monday, sunday) => realtime?.broadcastWeekReset(monday, sunday),
   });
   const server = createHttpServer(app);
   realtime = attachRealtime(server, { auth: app.auth, database });

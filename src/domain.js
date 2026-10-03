@@ -5,6 +5,8 @@ import {
   getIsoWeek,
   getWeekRange,
   isDateWritable,
+  isMonday,
+  isWeekOpen,
   isWeekNavigable,
   parseIsoDate,
 } from './calendar.js';
@@ -21,6 +23,11 @@ const VOTE_MESSAGES = {
   invalidDate: 'วันที่ไม่ถูกต้อง / The vote date is invalid.',
   closedDate: 'วันนี้ไม่เปิดให้เลือก / This date is not available for voting.',
   invalidBody: 'ข้อมูลการเลือกไม่ถูกต้อง / The vote selection is invalid.',
+};
+
+const RESET_MESSAGES = {
+  invalidWeek: 'สัปดาห์ไม่ถูกต้อง / The reset week must be a Monday.',
+  closedWeek: 'สัปดาห์นี้รีเซ็ตไม่ได้ / Only an open week can be reset.',
 };
 
 function timestamp(now = () => new Date()) {
@@ -195,7 +202,13 @@ export function getWeekState(database, { monday, currentUserId, now = () => new 
   const isoWeek = getIsoWeek(monday);
   const nextMonday = addDays(monday, 7);
   return {
-    week: { monday, sunday, isoWeek: isoWeek.week, isoWeekYear: isoWeek.weekYear },
+    week: {
+      monday,
+      sunday,
+      isoWeek: isoWeek.week,
+      isoWeekYear: isoWeek.weekYear,
+      resetEligible: isWeekOpen(monday, now),
+    },
     navigation: {
       previousMonday: addDays(monday, -7),
       nextMonday: isWeekNavigable(nextMonday, now) ? nextMonday : null,
@@ -203,6 +216,26 @@ export function getWeekState(database, { monday, currentUserId, now = () => new 
     currentUserSelectedDates: [...new Set(currentUserSelectedDates)].sort(),
     days,
   };
+}
+
+export function resetWeek(database, { monday, now = () => new Date() }) {
+  try {
+    parseIsoDate(monday);
+  } catch (error) {
+    throw new VoteError(400, 'INVALID_RESET_WEEK', RESET_MESSAGES.invalidWeek, { cause: error });
+  }
+  if (!isMonday(monday)) {
+    throw new VoteError(400, 'INVALID_RESET_WEEK', RESET_MESSAGES.invalidWeek);
+  }
+  if (!isWeekOpen(monday, now)) {
+    throw new VoteError(400, 'RESET_WEEK_CLOSED', RESET_MESSAGES.closedWeek);
+  }
+  const { sunday } = getWeekRange(monday);
+  const transaction = database.transaction(() => {
+    const result = database.prepare('DELETE FROM votes WHERE vote_date >= ? AND vote_date <= ?').run(monday, sunday);
+    return { monday, sunday, deletedCount: result.changes };
+  });
+  return transaction();
 }
 
 export function createSession(database, {
