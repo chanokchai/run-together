@@ -200,3 +200,108 @@ test('database role trigger prevents admin role mutation and replacement', async
     assert.throws(() => server.database.prepare('UPDATE users SET role = \'user\' WHERE id = ?').run(admin.id), /role|admin/i);
   });
 });
+
+test('admin can reset only the selected open week after explicit confirmation and broadcasts the committed reset', async () => {
+  await withServer(async (baseUrl, server) => {
+    const member = await register(baseUrl, 'Reset Observer');
+    const memberCookie = cookieFrom(member);
+    const memberSession = await sessionFor(baseUrl, memberCookie);
+    const admin = await adminSession(baseUrl);
+    const adminPage = await fetch(`${baseUrl}/vote`, { headers: { cookie: admin.cookie } });
+    assert.equal(adminPage.status, 200);
+    const adminPageBody = await adminPage.text();
+    assert.match(adminPageBody, /id="reset-week"/);
+    assert.match(adminPageBody, /ISO week .*through .*This deletes all seven days and cannot be undone/);
+    assert.match(adminPageBody, /state\.week\.resetEligible/);
+    const memberPage = await fetch(`${baseUrl}/vote`, { headers: { cookie: memberCookie } });
+    assert.equal(memberPage.status, 200);
+    assert.doesNotMatch(await memberPage.text(), /id="reset-week"/);
+
+    const memberUser = server.database.prepare('SELECT id FROM users WHERE name_key = ?').get('reset observer');
+    for (const date of ['2024-02-26', '2024-03-03', '2024-03-04', '2024-02-19']) {
+      addVote(server.database, { userId: memberUser.id, voteDate: date });
+    }
+
+    const observerSocket = connectSocket(baseUrl, { extraHeaders: { origin: baseUrl, cookie: memberCookie } });
+    await waitForSocket(observerSocket);
+    try {
+      const resetEvents = [];
+      observerSocket.on('week:reset', (event) => resetEvents.push(event));
+      const unauthenticated = await fetch(`${baseUrl}/api/admin/weeks/2024-02-26/votes`, {
+        method: 'DELETE',
+        headers: { origin: baseUrl, 'content-type': 'application/json' },
+        body: JSON.stringify({ confirmation: true }),
+      });
+      assert.equal(unauthenticated.status, 401);
+      const normalUser = await fetch(`${baseUrl}/api/admin/weeks/2024-02-26/votes`, {
+        method: 'DELETE',
+        headers: { cookie: memberCookie, origin: baseUrl, 'content-type': 'application/json', 'x-csrf-token': memberSession.csrfToken },
+        body: JSON.stringify({ confirmation: true }),
+      });
+      assert.equal(normalUser.status, 403);
+
+      for (const monday of ['2024-02-19', '2024-03-18']) {
+        const outOfWindow = await fetch(`${baseUrl}/api/admin/weeks/${monday}/votes`, {
+          method: 'DELETE',
+          headers: { cookie: admin.cookie, origin: baseUrl, 'content-type': 'application/json', 'x-csrf-token': admin.csrfToken },
+          body: JSON.stringify({ confirmation: true }),
+        });
+        assert.equal(outOfWindow.status, 400);
+      }
+      const cancelled = await fetch(`${baseUrl}/api/admin/weeks/2024-02-26/votes`, {
+        method: 'DELETE',
+        headers: { cookie: admin.cookie, origin: baseUrl, 'content-type': 'application/json', 'x-csrf-token': admin.csrfToken },
+        body: JSON.stringify({ confirmation: false }),
+      });
+      assert.equal(cancelled.status, 400);
+      assert.equal(server.database.prepare('SELECT COUNT(*) AS count FROM votes WHERE vote_date BETWEEN ? AND ?').get('2024-02-26', '2024-03-03').count, 2);
+      assert.equal(resetEvents.length, 0);
+
+      const reset = await fetch(`${baseUrl}/api/admin/weeks/2024-02-26/votes`, {
+        method: 'DELETE',
+        headers: { cookie: admin.cookie, origin: baseUrl, 'content-type': 'application/json', 'x-csrf-token': admin.csrfToken },
+        body: JSON.stringify({ confirmation: true }),
+      });
+      assert.equal(reset.status, 204);
+      assert.equal(server.database.prepare('SELECT COUNT(*) AS count FROM votes WHERE vote_date BETWEEN ? AND ?').get('2024-02-26', '2024-03-03').count, 0);
+      assert.equal(server.database.prepare('SELECT COUNT(*) AS count FROM votes WHERE vote_date = ?').get('2024-03-04').count, 1);
+      assert.equal(server.database.prepare('SELECT COUNT(*) AS count FROM votes WHERE vote_date = ?').get('2024-02-19').count, 1);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.deepEqual(resetEvents, [{ monday: '2024-02-26', sunday: '2024-03-03' }]);
+    } finally {
+      observerSocket.close();
+    }
+  });
+});
+
+test('week reset rolls back every deletion and emits no realtime event when the transaction fails', async () => {
+  await withServer(async (baseUrl, server) => {
+    const member = await register(baseUrl, 'Rollback Reset Observer');
+    const memberCookie = cookieFrom(member);
+    const admin = await adminSession(baseUrl);
+    const memberUser = server.database.prepare('SELECT id FROM users WHERE name_key = ?').get('rollback reset observer');
+    addVote(server.database, { userId: memberUser.id, voteDate: '2024-02-26' });
+    addVote(server.database, { userId: memberUser.id, voteDate: '2024-02-27' });
+    server.database.exec(`
+      CREATE TRIGGER fail_week_reset AFTER DELETE ON votes
+      BEGIN SELECT RAISE(ABORT, 'forced week reset rollback'); END
+    `);
+    const socket = connectSocket(baseUrl, { extraHeaders: { origin: baseUrl, cookie: memberCookie } });
+    await waitForSocket(socket);
+    try {
+      let eventSeen = false;
+      socket.on('week:reset', () => { eventSeen = true; });
+      const response = await fetch(`${baseUrl}/api/admin/weeks/2024-02-26/votes`, {
+        method: 'DELETE',
+        headers: { cookie: admin.cookie, origin: baseUrl, 'content-type': 'application/json', 'x-csrf-token': admin.csrfToken },
+        body: JSON.stringify({ confirmation: true }),
+      });
+      assert.equal(response.status, 500);
+      assert.equal(server.database.prepare('SELECT COUNT(*) AS count FROM votes WHERE vote_date BETWEEN ? AND ?').get('2024-02-26', '2024-03-03').count, 2);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.equal(eventSeen, false);
+    } finally {
+      socket.close();
+    }
+  });
+});

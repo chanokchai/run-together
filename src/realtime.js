@@ -58,5 +58,9 @@ export function attachRealtime(server, { auth, database }) {
     }
   }
 
-  return { io, broadcastVoteChanged, disconnectUser };
+  function broadcastWeekReset(monday, sunday) {
+    io.emit('week:reset', { monday, sunday });
+  }
+
+  return { io, broadcastVoteChanged, broadcastWeekReset, disconnectUser };
 }

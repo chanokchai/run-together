@@ -8,7 +8,7 @@ import {
   parseIsoDate,
 } from './calendar.js';
 import { AuthError, createAuthService } from './auth.js';
-import { deleteUserAndCollectAffectedDates, getWeekState, assertVoteBody, listUsers, setVote, VoteError } from './domain.js';
+import { deleteUserAndCollectAffectedDates, getWeekState, assertVoteBody, listUsers, resetWeek, setVote, VoteError } from './domain.js';
 
 const voteBoardScript = readFileSync(new URL('./vote-board.js', import.meta.url), 'utf8');
 
@@ -229,7 +229,7 @@ const adminPage = () => page({
   `,
 });
 
-export function createApp({ databaseReady = false, database, env = process.env, now = () => new Date(), onVoteChanged = () => {}, onUserSessionsRevoked = () => {}, onUserDeleted = () => {} } = {}) {
+export function createApp({ databaseReady = false, database, env = process.env, now = () => new Date(), onVoteChanged = () => {}, onUserSessionsRevoked = () => {}, onUserDeleted = () => {}, onWeekReset = () => {} } = {}) {
   const app = express();
   app.disable('x-powered-by');
   app.use(express.json({ limit: '10kb' }));
@@ -338,6 +338,23 @@ export function createApp({ databaseReady = false, database, env = process.env, 
       }
     });
 
+    app.delete('/api/admin/weeks/:monday/votes', (request, response) => {
+      response.setHeader('Cache-Control', 'no-store');
+      const session = auth.requireAdmin(request, response);
+      if (!session) return;
+      try {
+        auth.assertCsrf(request, session);
+        if (request.body?.confirmation !== true) {
+          throw new AuthError(400, 'RESET_CONFIRMATION_REQUIRED', 'ต้องยืนยันการรีเซ็ต / Explicit reset confirmation is required.');
+        }
+        const result = resetWeek(database, { monday: request.params.monday, now });
+        onWeekReset(result.monday, result.sunday);
+        response.status(204).end();
+      } catch (error) {
+        sendError(response, error);
+      }
+    });
+
     app.get('/api/weeks/:monday', (request, response) => {
       response.setHeader('Cache-Control', 'no-store');
       const session = auth.requireSession(request, response);
@@ -376,6 +393,9 @@ export function createApp({ databaseReady = false, database, env = process.env, 
       if (!session) return;
       const displayName = escapeHtml(session.name);
       const currentWeek = getCurrentWeekMonday(now);
+      const resetControl = session.role === 'admin'
+        ? '<div class="actions"><button id="reset-week" type="button" class="secondary" hidden>Reset votes</button></div>'
+        : '';
       response.type('html').send(page({
         title: 'Run Together | Vote',
         mainClass: 'vote-page-main',
@@ -392,12 +412,14 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           </nav>
           <p id="message" class="message" role="status"></p>
           <ol id="week-days" class="vote-board" aria-label="Seven-day voting board / กระดานเลือกวันทั้งเจ็ด"></ol>
+          ${resetControl}
           <form id="pin-form"><h2>เปลี่ยน PIN / Change PIN</h2><label>PIN ปัจจุบัน / Current PIN <input name="currentPin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required></label><label>PIN ใหม่ / New PIN <input name="newPin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required></label><label>ยืนยัน PIN ใหม่ / Confirm new PIN <input name="newPinConfirmation" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required></label><button>Change PIN</button></form>
           <div class="actions"><button id="logout" type="button" class="secondary">Logout</button></div>
         </section>`,
         script: `import { applyVoteCardPresentation, colorForDay, configureVoterNamesMarquee, createSocketRepairController, createVoterNamesRegion as buildVoterNamesRegion, formatDisplayDate, patchVoteDay } from '/vote-board.js?v=issue-6-4';
           let csrfToken = '';
           let sessionCheck = 0;
+          let isAdmin = false;
           const currentWeekMonday = '${currentWeek}';
           let weekMonday = currentWeekMonday;
           const protectedContent = document.querySelector('#protected-content');
@@ -408,6 +430,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           const previousWeek = document.querySelector('#previous-week');
           const currentWeekButton = document.querySelector('#current-week');
           const nextWeek = document.querySelector('#next-week');
+          const resetWeek = document.querySelector('#reset-week');
           const pinForm = document.querySelector('#pin-form');
           const message = document.querySelector('#message');
           function guardProtectedContent() { protectedContent.hidden = true; csrfToken = ''; displayName.textContent = ''; weekDays.replaceChildren(); pinForm.reset(); message.textContent = ''; }
@@ -427,6 +450,14 @@ export function createApp({ databaseReady = false, database, env = process.env, 
             currentWeekButton.disabled = state.week.monday === currentWeekMonday;
             nextWeek.disabled = !state.navigation.nextMonday;
             nextWeek.dataset.monday = state.navigation.nextMonday || '';
+            if (resetWeek) {
+              resetWeek.hidden = !(isAdmin && state.week.resetEligible);
+              resetWeek.disabled = resetWeek.hidden;
+              resetWeek.dataset.monday = state.week.monday;
+              resetWeek.dataset.isoWeek = state.week.isoWeek;
+              resetWeek.dataset.isoWeekYear = state.week.isoWeekYear;
+              resetWeek.dataset.sunday = state.week.sunday;
+            }
             const weeklyMaximum = Math.max(...state.days.map(({ voteCount }) => voteCount), 0);
             const rows = state.days.map((day, index) => {
               const selected = state.currentUserSelectedDates.includes(day.date);
@@ -490,16 +521,41 @@ export function createApp({ databaseReady = false, database, env = process.env, 
               card.removeAttribute('aria-busy');
             }
           }
+          async function resetSelectedWeek() {
+            if (!resetWeek || resetWeek.hidden || resetWeek.disabled) return;
+            const monday = resetWeek.dataset.monday;
+            const isoWeek = resetWeek.dataset.isoWeek;
+            const isoWeekYear = resetWeek.dataset.isoWeekYear;
+            const sunday = resetWeek.dataset.sunday;
+            const confirmed = window.confirm('Irreversible: reset every vote for ISO week ' + isoWeek + ' (' + isoWeekYear + '), ' + monday + ' through ' + sunday + '. This deletes all seven days and cannot be undone.');
+            if (!confirmed) return;
+            resetWeek.disabled = true;
+            message.textContent = '';
+            try {
+              const response = await fetch('/api/admin/weeks/' + encodeURIComponent(monday) + '/votes', { method: 'DELETE', headers: { 'content-type': 'application/json', 'x-csrf-token': csrfToken }, body: JSON.stringify({ confirmation: true }) });
+              if (response.status === 401) { redirectToLogin(); return; }
+              const result = response.status === 204 ? null : await response.json();
+              if (!response.ok) { message.textContent = result.message; return; }
+              message.textContent = 'Votes reset for ISO week ' + isoWeek + ' (' + isoWeekYear + ').';
+              await loadWeek(monday);
+            } catch {
+              message.textContent = 'รีเซ็ตไม่สำเร็จ / Could not reset votes.';
+            } finally {
+              resetWeek.disabled = resetWeek.hidden;
+            }
+          }
           async function loadWeek(monday) { message.textContent = ''; try { const response = await fetch('/api/weeks/' + encodeURIComponent(monday), { cache: 'no-store' }); const state = await response.json(); if (response.status === 401) { redirectToLogin(); return; } if (!response.ok) { message.textContent = state.message; return; } renderWeek(state); } catch { message.textContent = 'โหลดสัปดาห์ไม่สำเร็จ / Could not load this week.'; } }
-          async function loadSession() { const currentCheck = ++sessionCheck; guardProtectedContent(); try { const response = await fetch('/api/session', { cache: 'no-store' }); if (currentCheck !== sessionCheck) return; if (!response.ok) { redirectToLogin(); return; } const session = await response.json(); if (currentCheck !== sessionCheck) return; csrfToken = session.csrfToken; displayName.textContent = session.displayName; protectedContent.hidden = false; await loadWeek(weekMonday); } catch { if (currentCheck === sessionCheck) redirectToLogin(); } }
+          async function loadSession() { const currentCheck = ++sessionCheck; guardProtectedContent(); try { const response = await fetch('/api/session', { cache: 'no-store' }); if (currentCheck !== sessionCheck) return; if (!response.ok) { redirectToLogin(); return; } const session = await response.json(); if (currentCheck !== sessionCheck) return; csrfToken = session.csrfToken; isAdmin = session.role === 'admin'; displayName.textContent = session.displayName; protectedContent.hidden = false; await loadWeek(weekMonday); } catch { if (currentCheck === sessionCheck) redirectToLogin(); } }
           previousWeek.addEventListener('click', () => loadWeek(previousWeek.dataset.monday));
           currentWeekButton.addEventListener('click', () => loadWeek(currentWeekMonday));
           nextWeek.addEventListener('click', () => { if (!nextWeek.disabled) loadWeek(nextWeek.dataset.monday); });
+          resetWeek?.addEventListener('click', resetSelectedWeek);
           pinForm.addEventListener('submit', async (event) => { event.preventDefault(); const form = new FormData(event.currentTarget); const response = await fetch('/api/account/pin', { method: 'PUT', headers: { 'content-type': 'application/json', 'x-csrf-token': csrfToken }, body: JSON.stringify(Object.fromEntries(form)) }); const result = response.status === 204 ? { message: 'เปลี่ยน PIN สำเร็จ / PIN changed successfully.' } : await response.json(); message.textContent = result.message; if (response.status === 401) redirectToLogin(); });
           document.querySelector('#logout').addEventListener('click', async () => { const response = await fetch('/api/auth/logout', { method: 'POST', headers: { 'x-csrf-token': csrfToken } }); if (response.ok) location.href = '/'; });
           const socket = window.io({ transports: ['websocket'] });
           const socketRepair = createSocketRepairController({ loadWeek: () => loadWeek(weekMonday), patchDay });
           socket.on('vote:changed', socketRepair.handlePatch);
+          socket.on('week:reset', ({ monday }) => { if (monday === weekMonday) loadWeek(weekMonday); });
           socket.on('connect', socketRepair.handleConnect);
           socket.on('auth:revoked', redirectToLogin);
           socket.on('connect_error', (error) => { if (error.message === 'unauthenticated') redirectToLogin(); });

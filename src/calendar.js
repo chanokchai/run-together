@@ -92,6 +92,13 @@ export function isWeekNavigable(mondayDate, clock = () => new Date()) {
   return toEpochDay(parseIsoDate(monday)) <= toEpochDay(parseIsoDate(currentMonday)) + 14;
 }
 
+export function isWeekOpen(mondayDate, clock = () => new Date()) {
+  if (!isMonday(mondayDate)) return false;
+  const monday = toEpochDay(parseIsoDate(mondayDate));
+  const currentMonday = toEpochDay(parseIsoDate(getCurrentWeekMonday(clock)));
+  return monday >= currentMonday && monday <= currentMonday + 14;
+}
+
 function getInstant(clock) {
   const instant = clock instanceof Date ? clock : clock();
   if (!(instant instanceof Date) || Number.isNaN(instant.getTime())) throw new TypeError('clock must provide a valid Date');
