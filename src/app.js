@@ -40,8 +40,10 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       input, button { box-sizing: border-box; width: 100%; min-height: 2.75rem; margin-top: .35rem; padding: .55rem .7rem; font: inherit; }
       button { cursor: pointer; background: #1769aa; color: white; border: 0; border-radius: .45rem; font-weight: 700; }
       a { color: #145da0; }
+      a.button { display: block; box-sizing: border-box; width: 100%; min-height: 2.75rem; padding: .55rem .7rem; border-radius: .45rem; background: #1769aa; color: white; font-weight: 700; text-align: center; text-decoration: none; }
       .message { min-height: 1.5rem; margin-top: 1rem; }
       .actions { display: grid; gap: .75rem; margin-top: 1rem; }
+      .admin-action { background: #1769aa; }
       .week-navigation { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .4rem; }
       .week-navigation button { min-width: 0; padding-inline: .25rem; font-size: clamp(.65rem, 2.6vw, 1rem); line-height: 1.2; overflow-wrap: anywhere; }
       .secondary { background: #52606d; }
@@ -156,6 +158,76 @@ const registerPage = () => page({
     if (response.ok) location.href = '/vote';
     else document.querySelector('#message').textContent = result.message;
   });`,
+});
+
+const changePinPage = () => page({
+  title: 'Run Together | เปลี่ยน PIN / Change PIN',
+  content: `<section id="protected-content" hidden>
+    <h1>เปลี่ยน PIN / Change PIN</h1>
+    <p>เปลี่ยน PIN สำหรับบัญชีปัจจุบัน / Change the PIN for your current account.</p>
+    <form id="pin-form">
+      <label>PIN ปัจจุบัน / Current PIN <input name="currentPin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="current-password" required></label>
+      <label>PIN ใหม่ / New PIN <input name="newPin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="new-password" required></label>
+      <label>ยืนยัน PIN ใหม่ / Confirm new PIN <input name="newPinConfirmation" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="new-password" required></label>
+      <button>Change PIN</button>
+    </form>
+    <p id="message" class="message" role="status"></p>
+    <a id="return-to-vote" href="/vote">กลับไปหน้าโหวต / Return to vote</a>
+  </section>`,
+  script: `
+    const protectedContent = document.querySelector('#protected-content');
+    const pinForm = document.querySelector('#pin-form');
+    const message = document.querySelector('#message');
+    let csrfToken = '';
+    let sessionCheck = 0;
+    function guardProtectedContent() {
+      protectedContent.hidden = true;
+      csrfToken = '';
+      pinForm.reset();
+      message.textContent = '';
+    }
+    function redirectToLogin() {
+      guardProtectedContent();
+      location.replace('/');
+    }
+    async function loadSession() {
+      const currentCheck = ++sessionCheck;
+      guardProtectedContent();
+      try {
+        const response = await fetch('/api/session', { cache: 'no-store' });
+        if (currentCheck !== sessionCheck) return;
+        if (!response.ok) { redirectToLogin(); return; }
+        const session = await response.json();
+        if (currentCheck !== sessionCheck) return;
+        csrfToken = session.csrfToken;
+        protectedContent.hidden = false;
+      } catch {
+        if (currentCheck === sessionCheck) redirectToLogin();
+      }
+    }
+    pinForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      message.textContent = '';
+      const form = new FormData(event.currentTarget);
+      try {
+        const response = await fetch('/api/account/pin', {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json', 'x-csrf-token': csrfToken },
+          body: JSON.stringify(Object.fromEntries(form)),
+        });
+        if (response.status === 401) { redirectToLogin(); return; }
+        const result = response.status === 204
+          ? { message: 'เปลี่ยน PIN สำเร็จ / PIN changed successfully.' }
+          : await response.json();
+        message.textContent = result.message;
+        if (response.ok) pinForm.reset();
+      } catch {
+        message.textContent = 'เปลี่ยน PIN ไม่สำเร็จ / Could not change PIN.';
+      }
+    });
+    window.addEventListener('pageshow', loadSession);
+    loadSession();
+  `,
 });
 
 const adminPage = () => page({
@@ -295,6 +367,13 @@ export function createApp({ databaseReady = false, database, env = process.env, 
       response.type('html').send(adminPage());
     });
 
+    app.get('/change-pin', (request, response) => {
+      response.setHeader('Cache-Control', 'no-store');
+      const session = auth.requireSession(request, response);
+      if (!session) return;
+      response.type('html').send(changePinPage());
+    });
+
     app.get('/api/admin/users', (request, response) => {
       response.setHeader('Cache-Control', 'no-store');
       const session = auth.requireAdmin(request, response);
@@ -394,7 +473,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
       const displayName = escapeHtml(session.name);
       const currentWeek = getCurrentWeekMonday(now);
       const resetControl = session.role === 'admin'
-        ? '<div class="actions"><button id="reset-week" type="button" class="secondary" hidden>Reset votes</button></div>'
+        ? '<div class="actions"><button id="reset-week" type="button" class="admin-action" hidden>Reset votes</button><button id="manage-user" type="button" class="admin-action">manage user</button></div>'
         : '';
       response.type('html').send(page({
         title: 'Run Together | Vote',
@@ -413,7 +492,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           <p id="message" class="message" role="status"></p>
           <ol id="week-days" class="vote-board" aria-label="Seven-day voting board / กระดานเลือกวันทั้งเจ็ด"></ol>
           ${resetControl}
-          <form id="pin-form"><h2>เปลี่ยน PIN / Change PIN</h2><label>PIN ปัจจุบัน / Current PIN <input name="currentPin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required></label><label>PIN ใหม่ / New PIN <input name="newPin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required></label><label>ยืนยัน PIN ใหม่ / Confirm new PIN <input name="newPinConfirmation" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required></label><button>Change PIN</button></form>
+          <a id="change-pin" class="button" href="/change-pin">เปลี่ยน PIN / Change PIN</a>
           <div class="actions"><button id="logout" type="button" class="secondary">Logout</button></div>
         </section>`,
         script: `import { applyVoteCardPresentation, colorForDay, configureVoterNamesMarquee, createSocketRepairController, createVoterNamesRegion as buildVoterNamesRegion, formatDisplayDate, patchVoteDay } from '/vote-board.js?v=issue-6-4';
@@ -431,9 +510,9 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           const currentWeekButton = document.querySelector('#current-week');
           const nextWeek = document.querySelector('#next-week');
           const resetWeek = document.querySelector('#reset-week');
-          const pinForm = document.querySelector('#pin-form');
+          const manageUser = document.querySelector('#manage-user');
           const message = document.querySelector('#message');
-          function guardProtectedContent() { protectedContent.hidden = true; csrfToken = ''; displayName.textContent = ''; weekDays.replaceChildren(); pinForm.reset(); message.textContent = ''; }
+          function guardProtectedContent() { protectedContent.hidden = true; csrfToken = ''; displayName.textContent = ''; weekDays.replaceChildren(); message.textContent = ''; }
           function redirectToLogin() { guardProtectedContent(); location.replace('/'); }
           function addText(parent, tag, text) { const element = document.createElement(tag); element.textContent = text; parent.append(element); return element; }
           const weekdays = [
@@ -550,7 +629,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           currentWeekButton.addEventListener('click', () => loadWeek(currentWeekMonday));
           nextWeek.addEventListener('click', () => { if (!nextWeek.disabled) loadWeek(nextWeek.dataset.monday); });
           resetWeek?.addEventListener('click', resetSelectedWeek);
-          pinForm.addEventListener('submit', async (event) => { event.preventDefault(); const form = new FormData(event.currentTarget); const response = await fetch('/api/account/pin', { method: 'PUT', headers: { 'content-type': 'application/json', 'x-csrf-token': csrfToken }, body: JSON.stringify(Object.fromEntries(form)) }); const result = response.status === 204 ? { message: 'เปลี่ยน PIN สำเร็จ / PIN changed successfully.' } : await response.json(); message.textContent = result.message; if (response.status === 401) redirectToLogin(); });
+          manageUser?.addEventListener('click', () => { location.href = '/admin'; });
           document.querySelector('#logout').addEventListener('click', async () => { const response = await fetch('/api/auth/logout', { method: 'POST', headers: { 'x-csrf-token': csrfToken } }); if (response.ok) location.href = '/'; });
           const socket = window.io({ transports: ['websocket'] });
           const socketRepair = createSocketRepairController({ loadWeek: () => loadWeek(weekMonday), patchDay });
