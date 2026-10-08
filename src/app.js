@@ -237,6 +237,7 @@ const adminPage = () => page({
     <p>จัดการผู้ใช้ / Manage users</p>
     <p id="admin-message" class="message" role="status"></p>
     <div id="admin-users" aria-live="polite"></div>
+    <a href="/vote" class="button">กลับไปหน้าโหวต / Back to vote</a>
   </section>`,
   script: `
     const message = document.querySelector('#admin-message');

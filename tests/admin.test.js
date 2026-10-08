@@ -87,6 +87,7 @@ test('admin page and APIs require an admin session and expose only safe user fie
     assert.match(pageBody, /ผู้ดูแลระบบ \/ Admin/);
     assert.match(pageBody, /รีเซ็ต PIN \/ Reset PIN/);
     assert.match(pageBody, /ลบผู้ใช้ \/ Delete user/);
+    assert.match(pageBody, /กลับไปหน้าโหวต \/ Back to vote/);
 
     const users = await fetch(`${baseUrl}/api/admin/users`, { headers: { cookie: admin.cookie } });
     assert.equal(users.status, 200);
