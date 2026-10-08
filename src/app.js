@@ -40,7 +40,8 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       input, button { box-sizing: border-box; width: 100%; min-height: 2.75rem; margin-top: .35rem; padding: .55rem .7rem; font: inherit; }
       button { cursor: pointer; background: #1769aa; color: white; border: 0; border-radius: .45rem; font-weight: 700; }
       a { color: #145da0; }
-      a.button { display: block; box-sizing: border-box; width: 100%; min-height: 2.75rem; padding: .55rem .7rem; border-radius: .45rem; background: #1769aa; color: white; font-weight: 700; text-align: center; text-decoration: none; }
+      a.button { display: block; box-sizing: border-box; width: 100%; min-height: 44px; padding: .55rem .7rem; border-radius: .45rem; background: #1769aa; color: white; font-weight: 700; text-align: center; text-decoration: none; }
+      a.button:focus-visible { outline: 3px solid #f5c542; outline-offset: 2px; }
       .message { min-height: 1.5rem; margin-top: 1rem; }
       .actions { display: grid; gap: .75rem; margin-top: 1rem; }
       .admin-action { background: #1769aa; }
@@ -235,9 +236,9 @@ const adminPage = () => page({
   content: `<section id="admin-content">
     <h1>ผู้ดูแลระบบ / Admin</h1>
     <p>จัดการผู้ใช้ / Manage users</p>
+    <a href="/vote" class="button">กลับไปหน้าโหวต / Back to vote</a>
     <p id="admin-message" class="message" role="status"></p>
     <div id="admin-users" aria-live="polite"></div>
-    <a href="/vote" class="button">กลับไปหน้าโหวต / Back to vote</a>
   </section>`,
   script: `
     const message = document.querySelector('#admin-message');
