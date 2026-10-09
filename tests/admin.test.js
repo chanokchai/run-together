@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { once } from 'node:events';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,6 +8,8 @@ import test from 'node:test';
 import { io as connectSocket } from 'socket.io-client';
 import { createServer } from '../src/server.js';
 import { addVote } from '../src/domain.js';
+
+const appSource = readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
 
 const ENV = {
   ADMIN_NAME: 'Synthetic Coach',
@@ -87,6 +90,7 @@ test('admin page and APIs require an admin session and expose only safe user fie
     assert.match(pageBody, /ผู้ดูแลระบบ \/ Admin/);
     assert.match(pageBody, /รีเซ็ต PIN \/ Reset PIN/);
     assert.match(pageBody, /ลบผู้ใช้ \/ Delete user/);
+    assert.match(pageBody, /<h1>ผู้ดูแลระบบ \/ Admin<\/h1>\s*<p>จัดการผู้ใช้ \/ Manage users<\/p>\s*<a href="\/vote" class="button">กลับไปหน้าโหวต \/ Back to vote<\/a>\s*<p id="admin-message"/s);
 
     const users = await fetch(`${baseUrl}/api/admin/users`, { headers: { cookie: admin.cookie } });
     assert.equal(users.status, 200);
@@ -98,6 +102,34 @@ test('admin page and APIs require an admin session and expose only safe user fie
     assert.equal(JSON.stringify(body).includes('csrf'), false);
     assert.equal(JSON.stringify(body).includes('session'), false);
     assert.equal(JSON.stringify(body).includes('synthetic-pepper'), false);
+  });
+});
+
+test('Issue #22 back-to-vote action is admin-only, keyboard-visible, non-mutating, and 44px', async () => {
+  assert.match(appSource, /a\.button\s*\{[^}]*min-height:\s*44px[^}]*background:\s*#1769aa/s);
+  assert.match(appSource, /a\.button:focus-visible\s*\{[^}]*outline:\s*3px solid #f5c542[^}]*outline-offset:\s*2px/s);
+
+  await withServer(async (baseUrl, server) => {
+    const member = await register(baseUrl, 'Issue 22 Member');
+    const memberCookie = cookieFrom(member);
+    const unauthenticated = await fetch(`${baseUrl}/admin`);
+    assert.equal(unauthenticated.status, 401);
+    const memberPage = await fetch(`${baseUrl}/admin`, { headers: { cookie: memberCookie } });
+    assert.equal(memberPage.status, 403);
+
+    const admin = await adminSession(baseUrl);
+    const beforeVotes = server.database.prepare('SELECT id, user_id, vote_date, created_at FROM votes ORDER BY id').all();
+    const page = await fetch(`${baseUrl}/admin`, { headers: { cookie: admin.cookie } });
+    assert.equal(page.status, 200);
+    const pageBody = await page.text();
+    assert.match(pageBody, /<a href="\/vote" class="button">กลับไปหน้าโหวต \/ Back to vote<\/a>/);
+    const votePage = await fetch(`${baseUrl}/vote`, { headers: { cookie: admin.cookie } });
+    assert.equal(votePage.status, 200);
+    assert.deepEqual(
+      server.database.prepare('SELECT id, user_id, vote_date, created_at FROM votes ORDER BY id').all(),
+      beforeVotes,
+      'visiting the link destination does not change votes',
+    );
   });
 });
 
