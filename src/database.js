@@ -60,6 +60,22 @@ const MIGRATIONS = [
        END`,
     ],
   },
+  {
+    version: 4,
+    name: 'admin_action_audit',
+    statements: [
+      `CREATE TABLE admin_action_audit (
+        id INTEGER PRIMARY KEY,
+        request_id TEXT NOT NULL UNIQUE,
+        admin_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+        target_user_id INTEGER NOT NULL,
+        target_name TEXT NOT NULL,
+        action TEXT NOT NULL CHECK (action IN ('reset_votes', 'delete_user')),
+        deleted_vote_count INTEGER NOT NULL CHECK (deleted_vote_count >= 0),
+        occurred_at TEXT NOT NULL
+      )`,
+    ],
+  },
 ];
 
 export function openDatabase(databasePath) {

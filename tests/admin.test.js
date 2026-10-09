@@ -88,8 +88,8 @@ test('admin page and APIs require an admin session and expose only safe user fie
     assert.equal(page.status, 200);
     const pageBody = await page.text();
     assert.match(pageBody, /ผู้ดูแลระบบ \/ Admin/);
-    assert.match(pageBody, /รีเซ็ต PIN \/ Reset PIN/);
-    assert.match(pageBody, /ลบผู้ใช้ \/ Delete user/);
+    assert.match(pageBody, /Yes, reset votes/);
+    assert.match(pageBody, /Yes, delete user/);
     assert.match(pageBody, /<h1>ผู้ดูแลระบบ \/ Admin<\/h1>\s*<p>จัดการผู้ใช้ \/ Manage users<\/p>\s*<a href="\/vote" class="button">กลับไปหน้าโหวต \/ Back to vote<\/a>\s*<p id="admin-message"/s);
 
     const users = await fetch(`${baseUrl}/api/admin/users`, { headers: { cookie: admin.cookie } });
@@ -195,7 +195,7 @@ test('confirmed normal-user deletion atomically removes votes and sessions, broa
       const wrongConfirmation = await fetch(`${baseUrl}/api/admin/users/${target.id}`, {
         method: 'DELETE',
         headers: { cookie: admin.cookie, origin: baseUrl, 'x-csrf-token': admin.csrfToken, 'content-type': 'application/json' },
-        body: JSON.stringify({ confirmation: 'wrong' }),
+        body: JSON.stringify({ confirmation: false, requestId: '44444444-4444-4444-8444-444444444444' }),
       });
       assert.equal(wrongConfirmation.status, 400);
       assert.ok(server.database.prepare('SELECT id FROM users WHERE id = ?').get(target.id));
@@ -203,9 +203,9 @@ test('confirmed normal-user deletion atomically removes votes and sessions, broa
       const deleted = await fetch(`${baseUrl}/api/admin/users/${target.id}`, {
         method: 'DELETE',
         headers: { cookie: admin.cookie, origin: baseUrl, 'x-csrf-token': admin.csrfToken, 'content-type': 'application/json' },
-        body: JSON.stringify({ confirmation: 'Delete Target' }),
+        body: JSON.stringify({ confirmation: true, requestId: '55555555-5555-4555-8555-555555555555' }),
       });
-      assert.equal(deleted.status, 204);
+      assert.equal(deleted.status, 200);
       await revoked;
       assert.equal(server.database.prepare('SELECT COUNT(*) AS count FROM users WHERE id = ?').get(target.id).count, 0);
       assert.equal(server.database.prepare('SELECT COUNT(*) AS count FROM votes WHERE user_id = ?').get(target.id).count, 0);
