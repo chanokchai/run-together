@@ -8,7 +8,7 @@ import {
   parseIsoDate,
 } from './calendar.js';
 import { AuthError, createAuthService } from './auth.js';
-import { deleteUserAndCollectAffectedDates, getWeekState, assertVoteBody, listUsers, resetWeek, setVote, VoteError } from './domain.js';
+import { AdminActionError, deleteUserWithAudit, getWeekState, assertVoteBody, listUsers, resetUserVotes, resetWeek, setVote, VoteError } from './domain.js';
 
 const voteBoardScript = readFileSync(new URL('./vote-board.js', import.meta.url), 'utf8');
 
@@ -45,6 +45,17 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       .message { min-height: 1.5rem; margin-top: 1rem; }
       .actions { display: grid; gap: .75rem; margin-top: 1rem; }
       .admin-action { background: #1769aa; }
+      .admin-user { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #d9e2ec; }
+      .admin-user-heading { display: flex; align-items: center; gap: .5rem; }
+      .admin-user-heading h2 { flex: 1 1 auto; margin: 0; }
+      .admin-reset-toggle { display: flex; align-items: center; gap: .5rem; }
+      .admin-reset-toggle input { width: 1.25rem; min-width: 1.25rem; min-height: 1.25rem; margin: 0; }
+      .delete-user { display: inline-flex; width: 44px; min-width: 44px; min-height: 44px; align-items: center; justify-content: center; margin: 0; padding: .55rem; }
+      .delete-user svg { width: 1.35rem; height: 1.35rem; }
+      dialog { max-width: min(30rem, calc(100vw - 2rem)); border: 0; border-radius: .75rem; box-shadow: 0 .5rem 2rem #14213d44; color: #14213d; }
+      dialog::backdrop { background: #14213d88; }
+      .dialog-actions { display: grid; gap: .5rem; }
+      .dialog-close { background: transparent; color: #145da0; }
       .week-navigation { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .4rem; }
       .week-navigation button { min-width: 0; padding-inline: .25rem; font-size: clamp(.65rem, 2.6vw, 1rem); line-height: 1.2; overflow-wrap: anywhere; }
       .secondary { background: #52606d; }
@@ -111,6 +122,17 @@ function requestedWeek(value, now) {
     throw new AuthError(400, 'WEEK_TOO_FAR', 'สัปดาห์นี้ยังไม่พร้อมให้ดู / This week is not available yet.');
   }
   return value;
+}
+
+const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+function adminActionBody(body) {
+  if (body === null || typeof body !== 'object' || Array.isArray(body)
+    || Object.keys(body).length !== 2 || body.confirmation !== true
+    || typeof body.requestId !== 'string' || !CANONICAL_UUID.test(body.requestId)) {
+    throw new AdminActionError(400, 'INVALID_ADMIN_ACTION_REQUEST', 'ข้อมูลการกระทำไม่ถูกต้อง / The administrator action request is invalid.');
+  }
+  return body;
 }
 
 const loginPage = () => page({
@@ -246,12 +268,43 @@ const adminPage = () => page({
     let csrfToken = '';
     function addText(parent, tag, text) { const element = document.createElement(tag); element.textContent = text; parent.append(element); return element; }
     function showError(result) { message.textContent = result.message || 'เกิดข้อผิดพลาด / Something went wrong.'; }
+    function makeTrashButton(userName) {
+      const button = document.createElement('button');
+      button.type = 'button'; button.className = 'delete-user'; button.setAttribute('aria-label', 'Delete ' + userName); button.title = 'Delete ' + userName;
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('aria-hidden', 'true');
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', 'M6 7h12m-9 0V5h6v2m-8 0 1 13h4 4l1-13M10 11v5m4-5v5'); path.setAttribute('fill', 'none'); path.setAttribute('stroke', 'currentColor'); path.setAttribute('stroke-width', '2');
+      svg.append(path); button.append(svg); return button;
+    }
+    function makeDialog({ user, kind, onConfirm }) {
+      const dialog = document.createElement('dialog');
+      dialog.setAttribute('aria-labelledby', kind + '-title-' + user.id);
+      const title = addText(dialog, 'h2', kind === 'reset' ? 'Reset votes for ' + user.displayName : 'Delete ' + user.displayName);
+      title.id = kind + '-title-' + user.id;
+      const detail = kind === 'reset'
+        ? 'All votes for this user will be removed. The account and sessions stay active.'
+        : 'The account, votes, and sessions will be permanently deleted.';
+      addText(dialog, 'p', detail);
+      const actions = document.createElement('div'); actions.className = 'dialog-actions';
+      const confirm = document.createElement('button'); confirm.type = 'button'; confirm.textContent = kind === 'reset' ? 'Yes, reset votes' : 'Yes, delete user';
+      const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'secondary'; cancel.textContent = 'No, cancel';
+      const close = document.createElement('button'); close.type = 'button'; close.className = 'dialog-close'; close.setAttribute('aria-label', 'Close ' + kind + ' dialog'); close.textContent = 'Close';
+      actions.append(confirm, cancel, close); dialog.append(actions); document.body.append(dialog);
+      dialog.dataset.requestId = '';
+      dialog.addEventListener('close', () => { dialog.dataset.requestId = ''; });
+      cancel.addEventListener('click', () => dialog.close());
+      close.addEventListener('click', () => dialog.close());
+      dialog.addEventListener('cancel', () => { dialog.close(); });
+      confirm.addEventListener('click', () => onConfirm({ dialog, confirm }));
+      return { dialog, confirm, cancel };
+    }
     function renderUsers(users) {
       usersRegion.replaceChildren();
       users.forEach((user) => {
-        const article = document.createElement('article');
-        article.className = 'admin-user';
-        addText(article, 'h2', user.displayName + ' / ' + user.role);
+        const article = document.createElement('article'); article.className = 'admin-user';
+        const heading = document.createElement('div'); heading.className = 'admin-user-heading';
+        addText(heading, 'h2', user.displayName + ' / ' + user.role);
         addText(article, 'p', 'สร้างเมื่อ / Created: ' + user.createdAt + ' · แก้ไขเมื่อ / Updated: ' + user.updatedAt);
         if (user.role === 'user') {
           const resetForm = document.createElement('form');
@@ -268,21 +321,44 @@ const adminPage = () => page({
             const response = await fetch('/api/admin/users/' + encodeURIComponent(user.id) + '/pin', { method: 'PUT', headers: { 'content-type': 'application/json', 'x-csrf-token': csrfToken }, body: JSON.stringify(Object.fromEntries(form)) });
             if (response.ok) { resetForm.reset(); message.textContent = 'รีเซ็ต PIN สำเร็จ / PIN reset successfully.'; } else showError(await response.json());
           });
-          const deleteForm = document.createElement('form');
-          deleteForm.className = 'actions';
-          const confirmation = document.createElement('input');
-          confirmation.name = 'confirmation'; confirmation.required = true; confirmation.placeholder = 'พิมพ์ชื่อเพื่อยืนยัน / Type name to confirm';
-          const deleteButton = document.createElement('button'); deleteButton.type = 'submit'; deleteButton.className = 'secondary'; deleteButton.textContent = 'ลบผู้ใช้ / Delete user';
-          deleteForm.append(confirmation, deleteButton);
-          deleteForm.addEventListener('submit', async (event) => {
-            event.preventDefault();
-            const response = await fetch('/api/admin/users/' + encodeURIComponent(user.id), { method: 'DELETE', headers: { 'content-type': 'application/json', 'x-csrf-token': csrfToken }, body: JSON.stringify({ confirmation: confirmation.value }) });
-            if (response.ok) { message.textContent = 'ลบผู้ใช้สำเร็จ / User deleted successfully.'; await loadUsers(); } else showError(await response.json());
+          const resetLabel = document.createElement('label'); resetLabel.className = 'admin-reset-toggle';
+          const resetToggle = document.createElement('input'); resetToggle.type = 'checkbox'; resetToggle.setAttribute('aria-label', 'Reset votes for ' + user.displayName);
+          resetLabel.append(resetToggle, document.createTextNode(' Reset votes for ' + user.displayName));
+          const deleteButton = makeTrashButton(user.displayName); heading.append(deleteButton); article.prepend(heading); article.append(resetForm, resetLabel);
+          const reset = makeDialog({ user, kind: 'reset', onConfirm: ({ dialog, confirm }) => submitAction({ user, kind: 'reset', dialog, confirm, resetToggle }) });
+          const deletion = makeDialog({ user, kind: 'delete', onConfirm: ({ dialog, confirm }) => submitAction({ user, kind: 'delete', dialog, confirm, resetToggle }) });
+          reset.dialog.addEventListener('close', () => { resetToggle.checked = false; });
+          resetToggle.addEventListener('change', () => {
+            if (!resetToggle.checked) return;
+            reset.dialog.dataset.requestId = crypto.randomUUID(); reset.dialog.showModal(); reset.cancel.focus();
           });
-          article.append(resetForm, deleteForm);
+          deleteButton.addEventListener('click', () => {
+            deletion.dialog.dataset.requestId = crypto.randomUUID(); deletion.dialog.showModal(); deletion.cancel.focus();
+          });
+        } else {
+          article.prepend(heading);
         }
         usersRegion.append(article);
       });
+    }
+    async function submitAction({ user, kind, dialog, confirm, resetToggle }) {
+      if (confirm.disabled) return;
+      const row = resetToggle.closest('.admin-user');
+      const rowControls = row.querySelectorAll('button, input'); rowControls.forEach((control) => { control.disabled = true; });
+      confirm.disabled = true;
+      try {
+        const response = await fetch('/api/admin/users/' + encodeURIComponent(user.id) + (kind === 'reset' ? '/votes' : ''), {
+          method: 'DELETE', headers: { 'content-type': 'application/json', 'x-csrf-token': csrfToken },
+          body: JSON.stringify({ confirmation: true, requestId: dialog.dataset.requestId }),
+        });
+        const result = await response.json();
+        if (response.status === 404) { showError(result); dialog.close(); await loadUsers(); return; }
+        if (!response.ok) { showError(result); return; }
+        message.textContent = kind === 'reset' ? 'Votes reset successfully.' : 'User deleted successfully.';
+        dialog.close();
+        if (kind === 'delete') await loadUsers();
+      } catch { message.textContent = 'ดำเนินการไม่สำเร็จ / Could not complete the action.'; }
+      finally { if (dialog.open) confirm.disabled = false; rowControls.forEach((control) => { control.disabled = false; }); resetToggle.checked = false; }
     }
     async function loadUsers() {
       const response = await fetch('/api/admin/users', { cache: 'no-store' });
@@ -296,8 +372,7 @@ const adminPage = () => page({
       if (!response.ok) { location.replace('/'); return; }
       const session = await response.json();
       if (session.role !== 'admin') { location.replace('/vote'); return; }
-      csrfToken = session.csrfToken;
-      await loadUsers();
+      csrfToken = session.csrfToken; await loadUsers();
     }
     loadSession();
   `,
@@ -310,10 +385,10 @@ export function createApp({ databaseReady = false, database, env = process.env, 
   const auth = database ? createAuthService({ database, env, now }) : null;
 
   const sendError = (response, error) => {
-    const safe = error instanceof AuthError || error instanceof VoteError
+    const safe = error instanceof AuthError || error instanceof AdminActionError || error instanceof VoteError
       ? error
       : new AuthError(500, 'SERVER_ERROR', 'เกิดข้อผิดพลาด กรุณาลองใหม่ / Something went wrong; please try again.');
-    if (!(error instanceof AuthError) && !(error instanceof VoteError)) console.error('Request failed:', error);
+    if (!(error instanceof AuthError) && !(error instanceof AdminActionError) && !(error instanceof VoteError)) console.error('Request failed:', error);
     response.status(safe.status).json({ code: safe.code, message: safe.message });
   };
 
@@ -399,6 +474,23 @@ export function createApp({ databaseReady = false, database, env = process.env, 
       }
     });
 
+    app.delete('/api/admin/users/:id/votes', (request, response) => {
+      response.setHeader('Cache-Control', 'no-store');
+      const session = auth.requireAdmin(request, response);
+      if (!session) return;
+      try {
+        auth.assertCsrf(request, session);
+        const userId = Number(request.params.id);
+        if (!Number.isSafeInteger(userId) || userId < 1) throw new AdminActionError(400, 'INVALID_USER_ID', 'ผู้ใช้ไม่ถูกต้อง / The user is invalid.');
+        const { requestId } = adminActionBody(request.body);
+        const result = resetUserVotes(database, { adminUserId: session.user_id, targetUserId: userId, requestId, now });
+        if (!result.replayed) result.affectedDates.forEach((date) => onVoteChanged(date));
+        response.json({ deletedVoteCount: result.deletedVoteCount, requestId: result.requestId, replayed: result.replayed });
+      } catch (error) {
+        sendError(response, error);
+      }
+    });
+
     app.delete('/api/admin/users/:id', (request, response) => {
       response.setHeader('Cache-Control', 'no-store');
       const session = auth.requireAdmin(request, response);
@@ -406,14 +498,11 @@ export function createApp({ databaseReady = false, database, env = process.env, 
       try {
         auth.assertCsrf(request, session);
         const userId = Number(request.params.id);
-        if (!Number.isSafeInteger(userId) || userId < 1) throw new AuthError(400, 'INVALID_USER_ID', 'ผู้ใช้ไม่ถูกต้อง / The user is invalid.');
-        const user = database.prepare('SELECT id, name, role FROM users WHERE id = ?').get(userId);
-        if (!user) throw new AuthError(404, 'USER_NOT_FOUND', 'ไม่พบผู้ใช้ / User not found.');
-        if (user.role === 'admin') throw new AuthError(403, 'ADMIN_PROTECTED', 'ไม่อนุญาตให้ลบผู้ดูแลระบบ / The administrator account cannot be deleted.');
-        if (request.body?.confirmation !== user.name) throw new AuthError(400, 'CONFIRMATION_MISMATCH', 'การยืนยันไม่ตรงกัน / Confirmation does not match.');
-        const deletion = deleteUserAndCollectAffectedDates(database, userId);
-        onUserDeleted(userId, deletion.affectedDates);
-        response.status(204).end();
+        if (!Number.isSafeInteger(userId) || userId < 1) throw new AdminActionError(400, 'INVALID_USER_ID', 'ผู้ใช้ไม่ถูกต้อง / The user is invalid.');
+        const { requestId } = adminActionBody(request.body);
+        const deletion = deleteUserWithAudit(database, { adminUserId: session.user_id, targetUserId: userId, requestId, now });
+        if (!deletion.replayed) onUserDeleted(userId, deletion.affectedDates);
+        response.json({ deletedVoteCount: deletion.deletedVoteCount, requestId: deletion.requestId, replayed: deletion.replayed });
       } catch (error) {
         sendError(response, error);
       }

@@ -19,6 +19,14 @@ export class VoteError extends Error {
   }
 }
 
+export class AdminActionError extends Error {
+  constructor(status, code, message, { cause } = {}) {
+    super(message, { cause });
+    this.status = status;
+    this.code = code;
+  }
+}
+
 const VOTE_MESSAGES = {
   invalidDate: 'วันที่ไม่ถูกต้อง / The vote date is invalid.',
   closedDate: 'วันนี้ไม่เปิดให้เลือก / This date is not available for voting.',
@@ -274,4 +282,88 @@ export function deleteUserAndCollectAffectedDates(database, userId) {
 
 function formatParsedDate({ year, month, day }) {
   return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+const ADMIN_ACTION_MESSAGES = {
+  targetNotFound: 'ไม่พบผู้ใช้ / User not found.',
+  adminProtected: 'ไม่อนุญาตให้แก้ไขผู้ดูแลระบบ / The administrator account cannot be changed.',
+  conflict: 'รหัสคำขอถูกใช้กับการกระทำอื่น / The request ID was already used for another action.',
+};
+
+function existingAdminAudit(database, requestId, { adminUserId, targetUserId, action }) {
+  const audit = database.prepare('SELECT * FROM admin_action_audit WHERE request_id = ?').get(requestId);
+  if (!audit) return null;
+  if (audit.admin_user_id !== adminUserId || audit.target_user_id !== targetUserId || audit.action !== action) {
+    throw new AdminActionError(409, 'REQUEST_ID_CONFLICT', ADMIN_ACTION_MESSAGES.conflict);
+  }
+  return {
+    deletedVoteCount: audit.deleted_vote_count,
+    requestId: audit.request_id,
+    replayed: true,
+    affectedDates: [],
+  };
+}
+
+function requireNormalTarget(database, targetUserId) {
+  const target = database.prepare('SELECT id, name, role FROM users WHERE id = ?').get(targetUserId);
+  if (!target) throw new AdminActionError(404, 'USER_NOT_FOUND', ADMIN_ACTION_MESSAGES.targetNotFound);
+  if (target.role === 'admin') throw new AdminActionError(403, 'ADMIN_PROTECTED', ADMIN_ACTION_MESSAGES.adminProtected);
+  return target;
+}
+
+function affectedVotes(database, targetUserId) {
+  return database.prepare(
+    'SELECT DISTINCT vote_date AS date FROM votes WHERE user_id = ? ORDER BY vote_date ASC',
+  ).all(targetUserId).map(({ date }) => date);
+}
+
+function insertAdminAudit(database, { requestId, adminUserId, targetUserId, targetName, action, deletedVoteCount, occurredAt }) {
+  database.prepare(`
+    INSERT INTO admin_action_audit
+      (request_id, admin_user_id, target_user_id, target_name, action, deleted_vote_count, occurred_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(requestId, adminUserId, targetUserId, targetName, action, deletedVoteCount, occurredAt);
+}
+
+export function resetUserVotes(database, { adminUserId, targetUserId, requestId, now = () => new Date() }) {
+  const transaction = database.transaction(() => {
+    const replay = existingAdminAudit(database, requestId, { adminUserId, targetUserId, action: 'reset_votes' });
+    if (replay) return replay;
+    const target = requireNormalTarget(database, targetUserId);
+    const affectedDates = affectedVotes(database, targetUserId);
+    const deletedVoteCount = database.prepare('DELETE FROM votes WHERE user_id = ?').run(targetUserId).changes;
+    insertAdminAudit(database, {
+      requestId,
+      adminUserId,
+      targetUserId,
+      targetName: target.name,
+      action: 'reset_votes',
+      deletedVoteCount,
+      occurredAt: timestamp(now),
+    });
+    return { deletedVoteCount, requestId, replayed: false, affectedDates };
+  });
+  return transaction();
+}
+
+export function deleteUserWithAudit(database, { adminUserId, targetUserId, requestId, now = () => new Date() }) {
+  const transaction = database.transaction(() => {
+    const replay = existingAdminAudit(database, requestId, { adminUserId, targetUserId, action: 'delete_user' });
+    if (replay) return replay;
+    const target = requireNormalTarget(database, targetUserId);
+    const affectedDates = affectedVotes(database, targetUserId);
+    const deletedVoteCount = database.prepare('SELECT COUNT(*) AS count FROM votes WHERE user_id = ?').get(targetUserId).count;
+    insertAdminAudit(database, {
+      requestId,
+      adminUserId,
+      targetUserId,
+      targetName: target.name,
+      action: 'delete_user',
+      deletedVoteCount,
+      occurredAt: timestamp(now),
+    });
+    database.prepare('DELETE FROM users WHERE id = ?').run(targetUserId);
+    return { deletedVoteCount, requestId, replayed: false, affectedDates };
+  });
+  return transaction();
 }
