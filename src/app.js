@@ -11,6 +11,7 @@ import { AuthError, createAuthService } from './auth.js';
 import { AdminActionError, deleteUserWithAudit, getWeekState, assertVoteBody, listUsers, resetUserVotes, resetWeek, setVote, VoteError } from './domain.js';
 
 const voteBoardScript = readFileSync(new URL('./vote-board.js', import.meta.url), 'utf8');
+const dateTimeScript = readFileSync(new URL('./date-time.js', import.meta.url), 'utf8');
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (character) => ({
@@ -48,6 +49,10 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       .admin-user { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #d9e2ec; }
       .admin-user-heading { display: flex; align-items: center; gap: .5rem; }
       .admin-user-heading h2 { flex: 1 1 auto; margin: 0; }
+      .admin-user-metadata { display: flex; flex-wrap: wrap; gap: .35rem .75rem; min-width: 0; margin: 1rem 0 0; }
+      .admin-user-metadata-item { display: flex; flex: 1 1 12rem; gap: .3rem; min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+      .admin-user-metadata-item dt { flex: 0 1 auto; font-weight: 600; }
+      .admin-user-metadata-item dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
       .admin-reset-toggle { display: flex; align-items: center; gap: .5rem; }
       .admin-reset-toggle input { width: 1.25rem; min-width: 1.25rem; min-height: 1.25rem; margin: 0; }
       .delete-user { display: inline-flex; width: 44px; min-width: 44px; min-height: 44px; align-items: center; justify-content: center; margin: 0; padding: .55rem; }
@@ -260,9 +265,11 @@ const adminPage = () => page({
     <p>จัดการผู้ใช้ / Manage users</p>
     <a href="/vote" class="button">กลับไปหน้าโหวต / Back to vote</a>
     <p id="admin-message" class="message" role="status"></p>
+    <p>Time zone: Asia/Bangkok</p>
     <div id="admin-users" aria-live="polite"></div>
   </section>`,
   script: `
+    import { formatDateTime } from '/date-time.js?v=issue-27';
     const message = document.querySelector('#admin-message');
     const usersRegion = document.querySelector('#admin-users');
     let csrfToken = '';
@@ -305,7 +312,12 @@ const adminPage = () => page({
         const article = document.createElement('article'); article.className = 'admin-user';
         const heading = document.createElement('div'); heading.className = 'admin-user-heading';
         addText(heading, 'h2', user.displayName + ' / ' + user.role);
-        addText(article, 'p', 'สร้างเมื่อ / Created: ' + user.createdAt + ' · แก้ไขเมื่อ / Updated: ' + user.updatedAt);
+        const metadata = document.createElement('dl'); metadata.className = 'admin-user-metadata';
+        const created = document.createElement('div'); created.className = 'admin-user-metadata-item';
+        addText(created, 'dt', 'Created'); addText(created, 'dd', formatDateTime(user.createdAt));
+        const updated = document.createElement('div'); updated.className = 'admin-user-metadata-item';
+        addText(updated, 'dt', 'Updated'); addText(updated, 'dd', formatDateTime(user.updatedAt));
+        metadata.append(created, updated); article.append(metadata);
         if (user.role === 'user') {
           const resetForm = document.createElement('form');
           resetForm.className = 'actions';
@@ -407,6 +419,8 @@ export function createApp({ databaseReady = false, database, env = process.env, 
   app.get('/register', (_request, response) => response.type('html').send(registerPage()));
 
   app.get('/vote-board.js', (_request, response) => response.type('application/javascript').send(voteBoardScript));
+
+  app.get('/date-time.js', (_request, response) => response.type('application/javascript').send(dateTimeScript));
 
   if (auth) {
     app.post('/api/auth/register', async (request, response) => {
