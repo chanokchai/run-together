@@ -307,10 +307,24 @@ const adminPage = () => page({
         addText(heading, 'h2', user.displayName + ' / ' + user.role);
         addText(article, 'p', 'สร้างเมื่อ / Created: ' + user.createdAt + ' · แก้ไขเมื่อ / Updated: ' + user.updatedAt);
         if (user.role === 'user') {
+          const resetForm = document.createElement('form');
+          resetForm.className = 'actions';
+          const resetInput = document.createElement('input');
+          resetInput.name = 'newPin'; resetInput.type = 'password'; resetInput.inputMode = 'numeric'; resetInput.pattern = '[0-9]{4}'; resetInput.maxLength = 4; resetInput.required = true; resetInput.placeholder = 'PIN 4 หลัก / 4-digit PIN';
+          const resetConfirm = document.createElement('input');
+          resetConfirm.name = 'newPinConfirmation'; resetConfirm.type = 'password'; resetConfirm.inputMode = 'numeric'; resetConfirm.pattern = '[0-9]{4}'; resetConfirm.maxLength = 4; resetConfirm.required = true; resetConfirm.placeholder = 'ยืนยัน PIN / Confirm PIN';
+          const resetButton = document.createElement('button'); resetButton.textContent = 'รีเซ็ต PIN / Reset PIN';
+          resetForm.append(resetInput, resetConfirm, resetButton);
+          resetForm.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const form = new FormData(resetForm);
+            const response = await fetch('/api/admin/users/' + encodeURIComponent(user.id) + '/pin', { method: 'PUT', headers: { 'content-type': 'application/json', 'x-csrf-token': csrfToken }, body: JSON.stringify(Object.fromEntries(form)) });
+            if (response.ok) { resetForm.reset(); message.textContent = 'รีเซ็ต PIN สำเร็จ / PIN reset successfully.'; } else showError(await response.json());
+          });
           const resetLabel = document.createElement('label'); resetLabel.className = 'admin-reset-toggle';
           const resetToggle = document.createElement('input'); resetToggle.type = 'checkbox'; resetToggle.setAttribute('aria-label', 'Reset votes for ' + user.displayName);
           resetLabel.append(resetToggle, document.createTextNode(' Reset votes for ' + user.displayName));
-          const deleteButton = makeTrashButton(user.displayName); heading.append(deleteButton); article.prepend(heading); article.append(resetLabel);
+          const deleteButton = makeTrashButton(user.displayName); heading.append(deleteButton); article.prepend(heading); article.append(resetForm, resetLabel);
           const reset = makeDialog({ user, kind: 'reset', onConfirm: ({ dialog, confirm }) => submitAction({ user, kind: 'reset', dialog, confirm, resetToggle }) });
           const deletion = makeDialog({ user, kind: 'delete', onConfirm: ({ dialog, confirm }) => submitAction({ user, kind: 'delete', dialog, confirm, resetToggle }) });
           reset.dialog.addEventListener('close', () => { resetToggle.checked = false; });

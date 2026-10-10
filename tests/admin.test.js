@@ -105,6 +105,21 @@ test('admin page and APIs require an admin session and expose only safe user fie
   });
 });
 
+test('admin page exposes the existing per-user PIN reset form', async () => {
+  await withServer(async (baseUrl) => {
+    const admin = await adminSession(baseUrl);
+    const page = await fetch(`${baseUrl}/admin`, { headers: { cookie: admin.cookie } });
+    assert.equal(page.status, 200);
+    const body = await page.text();
+    assert.match(body, /resetForm/);
+    assert.match(body, /resetInput\.name = 'newPin'/);
+    assert.match(body, /resetConfirm\.name = 'newPinConfirmation'/);
+    assert.match(body, /\/api\/admin\/users\/'.*encodeURIComponent\(user\.id\).*'\/pin'/s);
+    assert.match(body, /method: 'PUT'/);
+    assert.match(body, /รีเซ็ต PIN สำเร็จ \/ PIN reset successfully\./);
+  });
+});
+
 test('Issue #22 back-to-vote action is admin-only, keyboard-visible, non-mutating, and 44px', async () => {
   assert.match(appSource, /a\.button\s*\{[^}]*min-height:\s*44px[^}]*background:\s*#1769aa/s);
   assert.match(appSource, /a\.button:focus-visible\s*\{[^}]*outline:\s*3px solid #f5c542[^}]*outline-offset:\s*2px/s);
