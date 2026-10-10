@@ -90,6 +90,11 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
         .vote-card__names { flex: 1 1 auto; min-height: 1.2rem; }
         .week-navigation { margin-top: .25rem; gap: .25rem; }
         .week-navigation button { min-height: 2.35rem; margin-top: 0; }
+        a.button {
+          width: fit-content;
+          margin-inline: auto;
+          padding-inline: 1.5rem;
+        }
       }
       @media (max-width: 380px) { .vote-page-main { padding-inline: .5rem; } .vote-page-main > section { padding-inline: .5rem; } }
     </style>
