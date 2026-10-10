@@ -78,18 +78,17 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
         .vote-page-main > section > p { margin: .25rem 0; }
         .vote-board { grid-template-columns: minmax(0, 1fr); width: 100%; gap: .15rem; margin-block: .35rem; }
         .vote-day { width: 100%; }
-        .vote-card { min-height: 2.75rem; height: 2.75rem; flex-direction: row; align-items: center; gap: .5rem; padding: .2rem .55rem; font-size: 1rem; }
+        .vote-card { min-height: 2.75rem; height: 2.75rem; flex-direction: row; align-items: center; gap: .75rem; padding: .2rem .55rem; font-size: 1rem; }
         .vote-card__weekday--full, .vote-card__date--full { display: none; }
         .vote-card__weekday--compact, .vote-card__date--compact { display: block; }
         .vote-card__weekday--compact { font-size: 1.25rem; line-height: 1.1; white-space: nowrap; text-transform: uppercase; letter-spacing: .03em; }
         .vote-card__date--compact { font-size: 1rem; line-height: 1; }
         .vote-card__date--compact span { display: block; }
         .vote-card__header { flex: 0 0 4.75rem; align-items: center; }
-        .vote-card__date--compact { font-size: .8rem; }
+        .vote-card__date--compact { font-size: .9rem; }
         .vote-card__count { flex: 0 0 2.35rem; width: 2.35rem; height: 2.35rem; min-width: 2.35rem; margin: 0; font-size: 1.4rem; }
         .vote-card__names { flex: 1 1 auto; min-height: 1.2rem; }
-        .vote-card__names-track { animation: none; display: block; white-space: normal; overflow-wrap: anywhere; }
-        .vote-card__names-copy--canonical { display: block; }
+
         .week-navigation { margin-top: .25rem; gap: .25rem; }
         .week-navigation button { min-height: 2.35rem; margin-top: 0; }
         a.button {
