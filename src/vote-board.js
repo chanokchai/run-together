@@ -72,10 +72,7 @@ export function marqueeDurationForDistance(loopDistance) {
 }
 
 export function marqueeTravelDistance(containerWidth, textWidth) {
-  if (finiteNonNegative(textWidth) > finiteNonNegative(containerWidth)) {
-    return finiteNonNegative(containerWidth) + finiteNonNegative(textWidth);
-  }
-  return 0;
+  return finiteNonNegative(containerWidth) + finiteNonNegative(textWidth);
 }
 
 export function marqueeDurationForDimensions(containerWidth, textWidth) {
