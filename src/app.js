@@ -88,12 +88,13 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
         .vote-card__date--compact { font-size: .8rem; }
         .vote-card__count { flex: 0 0 2.35rem; width: 2.35rem; height: 2.35rem; min-width: 2.35rem; margin: 0; font-size: 1.4rem; }
         .vote-card__names { flex: 1 1 auto; min-height: 1.2rem; }
+        .vote-card__names-track { animation: none; display: block; white-space: normal; overflow-wrap: anywhere; }
+        .vote-card__names-copy--canonical { display: block; }
         .week-navigation { margin-top: .25rem; gap: .25rem; }
         .week-navigation button { min-height: 2.35rem; margin-top: 0; }
         a.button {
-          width: fit-content;
-          margin-inline: auto;
-          padding-inline: 1.5rem;
+          width: 100%;
+          padding-inline: .7rem;
         }
       }
       @media (max-width: 380px) { .vote-page-main { padding-inline: .5rem; } .vote-page-main > section { padding-inline: .5rem; } }
