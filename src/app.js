@@ -8,7 +8,7 @@ import {
   parseIsoDate,
 } from './calendar.js';
 import { AuthError, createAuthService } from './auth.js';
-import { AdminActionError, deleteUserWithAudit, getWeekState, assertVoteBody, listUsers, resetUserVotes, resetWeek, setVote, VoteError } from './domain.js';
+import { AdminActionError, deleteUserWithAudit, getEligiblePeriodVoteTotals, getWeekState, assertVoteBody, listUsers, resetUserVotes, resetWeek, setVote, VoteError } from './domain.js';
 
 const voteBoardScript = readFileSync(new URL('./vote-board.js', import.meta.url), 'utf8');
 const dateTimeScript = readFileSync(new URL('./date-time.js', import.meta.url), 'utf8');
@@ -65,6 +65,18 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       .week-navigation button { min-width: 0; padding-inline: .25rem; font-size: clamp(.65rem, 2.6vw, 1rem); line-height: 1.2; overflow-wrap: anywhere; }
       .secondary { background: #52606d; }
       .vote-board { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); align-items: stretch; gap: .35rem; list-style: none; margin: 1rem 0; padding: 0; }
+      .vote-timeline { max-height: 180px; margin: .35rem 0 .55rem; padding: .45rem .5rem; border: 1px solid #d9e2ec; box-shadow: none; }
+      .vote-timeline > h2 { margin: .1rem 0 .2rem; font-size: .95rem; }
+      .vote-timeline__range { margin: 0 0 .25rem; color: #334155; font-size: .68rem; line-height: 1.2; }
+      .vote-timeline__days { display: grid; align-items: end; gap: 1px; width: 100%; margin: .15rem 0 0; padding: 0; list-style: none; }
+      .vote-timeline__day { display: grid; grid-template-rows: 12px 52px 20px; min-width: 0; text-align: center; }
+      .vote-timeline__count { overflow: visible; color: #14213d; font-size: clamp(.42rem, 2.35vw, .58rem); line-height: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+      .vote-timeline__track { position: relative; display: flex; min-width: 0; align-items: flex-end; justify-content: center; border-bottom: 1px solid #52606d; }
+      .vote-timeline__bar { display: block; width: min(100%, .8rem); min-height: 1px; border-radius: .15rem .15rem 0 0; background: #0b3d2e; }
+      .vote-timeline__bar.is-top-ranked { border: 1px dashed #4c1d95; border-bottom: 0; background: #6b21a8; }
+      .vote-timeline__top-cue { position: absolute; top: 0; left: 50%; z-index: 1; color: #fff; font-size: .62rem; line-height: 1; transform: translateX(-50%); }
+      .vote-timeline__date { display: flex; flex-direction: column; align-items: center; overflow: hidden; color: #14213d; font-size: .62rem; line-height: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+      .vote-timeline__month { font-size: .42rem; line-height: 8px; }
       .vote-day { display: flex; min-width: 0; }
       .vote-card { display: flex; flex: 1 1 auto; flex-direction: column; align-items: stretch; gap: .4rem; width: 100%; min-width: 0; min-height: 8rem; height: 100%; margin: 0; padding: .55rem .3rem; border: .2rem solid transparent; border-radius: .6rem; background: var(--day-bg); color: var(--day-fg); font-size: clamp(.68rem, 1.45vw, .95rem); text-align: center; overflow: hidden; }
       .vote-card:hover, .vote-card:focus-visible, .vote-card.is-selected { border-color: #f5c542; }
@@ -91,6 +103,7 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
         .vote-page-main > section { padding: .55rem .75rem; }
         .vote-page-main h1 { margin: .2rem 0; font-size: 1.35rem; }
         .vote-page-main h2 { margin: .35rem 0; font-size: 1rem; }
+        .vote-page-main .vote-timeline > h2 { margin: .1rem 0 .2rem; font-size: .95rem; }
         .vote-page-main > section > p { margin: .25rem 0; }
         .vote-board { grid-template-columns: minmax(0, 1fr); width: 100%; gap: .15rem; margin-block: .35rem; }
         .vote-day { width: 100%; }
@@ -551,6 +564,13 @@ export function createApp({ databaseReady = false, database, env = process.env, 
       }
     });
 
+    app.get('/api/vote-timeline', (request, response) => {
+      response.setHeader('Cache-Control', 'no-store');
+      const session = auth.requireSession(request, response);
+      if (!session) return;
+      response.json(getEligiblePeriodVoteTotals(database, { now }));
+    });
+
     app.put('/api/votes/:date', (request, response) => {
       response.setHeader('Cache-Control', 'no-store');
       const session = auth.requireSession(request, response);
@@ -586,6 +606,11 @@ export function createApp({ databaseReady = false, database, env = process.env, 
         scriptSrc: '/socket.io/socket.io.js',
         content: `<section id="protected-content" hidden>
           <h1>Run Together</h1>
+          <section id="vote-timeline" class="vote-timeline" aria-labelledby="vote-timeline-heading">
+            <h2 id="vote-timeline-heading">Vote timeline</h2>
+            <p id="vote-timeline-range" class="vote-timeline__range" role="status">Loading vote totals…</p>
+            <ol id="vote-timeline-days" class="vote-timeline__days" aria-label="Daily vote totals in chronological order"></ol>
+          </section>
           <p>ยินดีต้อนรับ / Welcome, <strong id="display-name">${displayName}</strong></p>
           <h2 id="week-heading">สัปดาห์ / Week</h2>
           <p id="week-range"></p>
@@ -600,7 +625,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           <a id="change-pin" class="button" href="/change-pin">เปลี่ยน PIN / Change PIN</a>
           <div class="actions"><button id="logout" type="button" class="secondary">Logout</button></div>
         </section>`,
-        script: `import { applyVoteCardPresentation, colorForDay, configureVoterNamesMarquee, createSocketRepairController, createVoterNamesRegion as buildVoterNamesRegion, formatDisplayDate, patchVoteDay } from '/vote-board.js?v=issue-6-4';
+        script: `import { applyVoteCardPresentation, colorForDay, configureVoterNamesMarquee, createSocketRepairController, createVoterNamesRegion as buildVoterNamesRegion, createVoteTimelineController, formatDisplayDate, patchVoteDay } from '/vote-board.js?v=issue-30';
           let csrfToken = '';
           let sessionCheck = 0;
           let isAdmin = false;
@@ -611,6 +636,8 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           const weekHeading = document.querySelector('#week-heading');
           const weekRange = document.querySelector('#week-range');
           const weekDays = document.querySelector('#week-days');
+          const timelineDays = document.querySelector('#vote-timeline-days');
+          const timelineRange = document.querySelector('#vote-timeline-range');
           const previousWeek = document.querySelector('#previous-week');
           const currentWeekButton = document.querySelector('#current-week');
           const nextWeek = document.querySelector('#next-week');
@@ -620,6 +647,52 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           function guardProtectedContent() { protectedContent.hidden = true; csrfToken = ''; displayName.textContent = ''; weekDays.replaceChildren(); message.textContent = ''; }
           function redirectToLogin() { guardProtectedContent(); location.replace('/'); }
           function addText(parent, tag, text) { const element = document.createElement(tag); element.textContent = text; parent.append(element); return element; }
+          const timelineController = createVoteTimelineController({
+            render(rows) {
+              timelineDays.style.gridTemplateColumns = 'repeat(' + rows.length + ', minmax(0, 1fr))';
+              const items = rows.map((row, index) => {
+                const item = document.createElement('li');
+                item.className = 'vote-timeline__day';
+                item.setAttribute('aria-label', row.accessibleLabel);
+                const count = addText(item, 'span', String(row.voteCount));
+                count.className = 'vote-timeline__count';
+                const track = document.createElement('span');
+                track.className = 'vote-timeline__track';
+                track.setAttribute('aria-hidden', 'true');
+                const bar = document.createElement('span');
+                bar.className = 'vote-timeline__bar' + (row.isTopRanked ? ' is-top-ranked' : '');
+                bar.style.height = row.barHeightPercent + '%';
+                track.append(bar);
+                if (row.showTopCue) {
+                  const cue = addText(track, 'span', '★');
+                  cue.className = 'vote-timeline__top-cue';
+                }
+                const date = document.createElement('time');
+                date.dateTime = row.date;
+                date.className = 'vote-timeline__date';
+                addText(date, 'span', row.dayLabel);
+                if (index === 0 || row.dayLabel === '1') addText(date, 'span', row.monthLabel).className = 'vote-timeline__month';
+                item.append(track, date);
+                return item;
+              });
+              timelineDays.replaceChildren(...items);
+            },
+          });
+          async function loadTimeline() {
+            let totals;
+            try {
+              const refreshed = await timelineController.refresh(async () => {
+                const response = await fetch('/api/vote-timeline', { cache: 'no-store' });
+                if (response.status === 401) { redirectToLogin(); throw new Error('unauthenticated'); }
+                totals = await response.json();
+                if (!response.ok) throw new Error(totals.message || 'Could not load vote totals.');
+                return totals;
+              });
+              if (refreshed && totals) timelineRange.textContent = formatDisplayDate(totals.startDate) + ' – ' + formatDisplayDate(totals.endDate) + ' · ★ = highest votes';
+            } catch {
+              timelineRange.textContent = 'Could not load vote totals.';
+            }
+          }
           const weekdays = [
             { thai: 'จ.', english: 'MON' }, { thai: 'อ.', english: 'TUE' }, { thai: 'พ.', english: 'WED' },
             { thai: 'พฤ.', english: 'THU' }, { thai: 'ศ.', english: 'FRI' }, { thai: 'ส.', english: 'SAT' }, { thai: 'อา.', english: 'SUN' },
@@ -698,6 +771,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
               if (response.status === 401) { redirectToLogin(); return; }
               if (!response.ok) { message.textContent = result.message; return; }
               patchDay(result);
+              timelineController.patch(result);
             } catch {
               message.textContent = 'บันทึกการเลือกไม่สำเร็จ / Could not save your selection.';
             } finally {
@@ -722,6 +796,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
               if (!response.ok) { message.textContent = result.message; return; }
               message.textContent = 'Votes reset for ISO week ' + isoWeek + ' (' + isoWeekYear + ').';
               await loadWeek(monday);
+              await loadTimeline();
             } catch {
               message.textContent = 'รีเซ็ตไม่สำเร็จ / Could not reset votes.';
             } finally {
@@ -729,7 +804,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
             }
           }
           async function loadWeek(monday) { message.textContent = ''; try { const response = await fetch('/api/weeks/' + encodeURIComponent(monday), { cache: 'no-store' }); const state = await response.json(); if (response.status === 401) { redirectToLogin(); return; } if (!response.ok) { message.textContent = state.message; return; } renderWeek(state); } catch { message.textContent = 'โหลดสัปดาห์ไม่สำเร็จ / Could not load this week.'; } }
-          async function loadSession() { const currentCheck = ++sessionCheck; guardProtectedContent(); try { const response = await fetch('/api/session', { cache: 'no-store' }); if (currentCheck !== sessionCheck) return; if (!response.ok) { redirectToLogin(); return; } const session = await response.json(); if (currentCheck !== sessionCheck) return; csrfToken = session.csrfToken; isAdmin = session.role === 'admin'; displayName.textContent = session.displayName; protectedContent.hidden = false; await loadWeek(weekMonday); } catch { if (currentCheck === sessionCheck) redirectToLogin(); } }
+          async function loadSession() { const currentCheck = ++sessionCheck; guardProtectedContent(); try { const response = await fetch('/api/session', { cache: 'no-store' }); if (currentCheck !== sessionCheck) return; if (!response.ok) { redirectToLogin(); return; } const session = await response.json(); if (currentCheck !== sessionCheck) return; csrfToken = session.csrfToken; isAdmin = session.role === 'admin'; displayName.textContent = session.displayName; protectedContent.hidden = false; await Promise.all([loadWeek(weekMonday), loadTimeline()]); } catch { if (currentCheck === sessionCheck) redirectToLogin(); } }
           previousWeek.addEventListener('click', () => loadWeek(previousWeek.dataset.monday));
           currentWeekButton.addEventListener('click', () => loadWeek(currentWeekMonday));
           nextWeek.addEventListener('click', () => { if (!nextWeek.disabled) loadWeek(nextWeek.dataset.monday); });
@@ -738,9 +813,9 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           document.querySelector('#logout').addEventListener('click', async () => { const response = await fetch('/api/auth/logout', { method: 'POST', headers: { 'x-csrf-token': csrfToken } }); if (response.ok) location.href = '/'; });
           const socket = window.io({ transports: ['websocket'] });
           const socketRepair = createSocketRepairController({ loadWeek: () => loadWeek(weekMonday), patchDay });
-          socket.on('vote:changed', socketRepair.handlePatch);
-          socket.on('week:reset', ({ monday }) => { if (monday === weekMonday) loadWeek(weekMonday); });
-          socket.on('connect', socketRepair.handleConnect);
+          socket.on('vote:changed', (patch) => { socketRepair.handlePatch(patch); timelineController.patch(patch); });
+          socket.on('week:reset', ({ monday }) => { if (monday === weekMonday) loadWeek(weekMonday); loadTimeline(); });
+          socket.on('connect', () => { void socketRepair.handleConnect(); void loadTimeline(); });
           socket.on('auth:revoked', redirectToLogin);
           socket.on('connect_error', (error) => { if (error.message === 'unauthenticated') redirectToLogin(); });
           window.addEventListener('pageshow', loadSession);

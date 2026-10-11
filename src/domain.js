@@ -2,6 +2,8 @@ import { randomBytes, scryptSync } from 'node:crypto';
 import { normalizeName } from './names.js';
 import {
   addDays,
+  getBangkokDate,
+  getCurrentWeekMonday,
   getIsoWeek,
   getWeekRange,
   isDateWritable,
@@ -178,6 +180,24 @@ export function setVote(database, { userId, voteDate, now = () => new Date(), bo
 
 export function getDayPatch(database, { date, currentUserId }) {
   return getDayState(database, { date: canonicalVoteDate(date), currentUserId });
+}
+
+export function getEligiblePeriodVoteTotals(database, { now = () => new Date() } = {}) {
+  const startDate = getBangkokDate(now);
+  const endDate = addDays(getCurrentWeekMonday(now), 20);
+  const counts = database.prepare(`
+    SELECT vote_date AS date, COUNT(*) AS voteCount
+    FROM votes
+    WHERE vote_date >= ? AND vote_date <= ?
+    GROUP BY vote_date
+  `).all(startDate, endDate);
+  const countByDate = new Map(counts.map(({ date, voteCount }) => [date, voteCount]));
+  const days = [];
+  for (let date = startDate; ; date = addDays(date, 1)) {
+    days.push({ date, voteCount: countByDate.get(date) ?? 0 });
+    if (date === endDate) break;
+  }
+  return { startDate, endDate, days };
 }
 
 export function getWeekState(database, { monday, currentUserId, now = () => new Date() }) {
