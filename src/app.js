@@ -69,8 +69,8 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       .vote-timeline > h2 { margin: .1rem 0 .2rem; font-size: .95rem; }
       .vote-timeline__range { margin: 0 0 .25rem; color: #334155; font-size: .68rem; line-height: 1.2; }
       .vote-timeline__days { display: grid; align-items: end; gap: 1px; width: 100%; margin: .15rem 0 0; padding: 0; list-style: none; }
-      .vote-timeline__day { display: grid; grid-template-rows: 12px 52px 20px; min-width: 0; text-align: center; }
-      .vote-timeline__count { overflow: visible; color: #14213d; font-size: clamp(.42rem, 2.35vw, .58rem); line-height: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+      .vote-timeline__day { display: grid; grid-template-rows: minmax(20px, max-content) 52px 20px; min-width: 0; text-align: center; }
+      .vote-timeline__count { color: #14213d; font-size: clamp(.42rem, 2.35vw, .58rem); line-height: 10px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
       .vote-timeline__track { position: relative; display: flex; min-width: 0; align-items: flex-end; justify-content: center; border-bottom: 1px solid #52606d; }
       .vote-timeline__bar { display: block; width: min(100%, .8rem); min-height: 1px; border-radius: .15rem .15rem 0 0; background: #0b3d2e; }
       .vote-timeline__bar.is-top-ranked { border: 1px dashed #4c1d95; border-bottom: 0; background: #6b21a8; }
