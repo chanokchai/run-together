@@ -1,11 +1,52 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile } from 'node:fs/promises';
 import { request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { removeProfileWithRetry } from './helpers/chromium-profile-cleanup.js';
+
+test('Chromium profile cleanup retries transient directory races', async () => {
+  let attempts = 0;
+  const transientError = Object.assign(new Error('directory changed during cleanup'), { code: 'ENOTEMPTY' });
+  await removeProfileWithRetry('/unused/profile', {
+    remove: async () => {
+      attempts += 1;
+      if (attempts < 3) throw transientError;
+    },
+    wait: async () => {},
+    maxAttempts: 4,
+  });
+  assert.equal(attempts, 3, 'retries a transient ENOTEMPTY failure and then succeeds');
+});
+
+test('Chromium profile cleanup surfaces exhausted and non-transient failures', async () => {
+  let attempts = 0;
+  const exhaustedError = Object.assign(new Error('directory remains busy'), { code: 'ENOTEMPTY' });
+  await assert.rejects(removeProfileWithRetry('/unused/profile', {
+    remove: async () => {
+      attempts += 1;
+      throw exhaustedError;
+    },
+    wait: async () => {},
+    maxAttempts: 3,
+  }), (error) => error === exhaustedError);
+  assert.equal(attempts, 3, 'stops after the configured retry bound and preserves the real cleanup error');
+
+  attempts = 0;
+  const permanentError = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+  await assert.rejects(removeProfileWithRetry('/unused/profile', {
+    remove: async () => {
+      attempts += 1;
+      throw permanentError;
+    },
+    wait: async () => {},
+    maxAttempts: 3,
+  }), (error) => error === permanentError);
+  assert.equal(attempts, 1, 'does not retry a non-transient cleanup failure');
+});
 
 const chromePath = process.env.CHROME_BIN ?? [
   '/usr/bin/chromium',
@@ -206,7 +247,7 @@ test('vote timeline renders 21 exact multi-digit totals without overlap at 320px
       browser.kill('SIGTERM');
       await exited;
     }
-    await rm(userDataDirectory, { recursive: true, force: true });
+    await removeProfileWithRetry(userDataDirectory);
   });
 
   const port = await readDevToolsPort(userDataDirectory, browser);
