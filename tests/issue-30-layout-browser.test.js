@@ -134,6 +134,19 @@ async function inspectLayout(client, width) {
         })),
       };
     });
+    const dates = days.map((day) => {
+      const label = day.querySelector('.vote-timeline__date').firstElementChild;
+      const range = document.createRange();
+      range.selectNodeContents(label);
+      return {
+        text: label.textContent,
+        fontSize: Number.parseFloat(getComputedStyle(label.parentElement).fontSize),
+        item: (() => { const box = day.getBoundingClientRect(); return { left: box.left, right: box.right }; })(),
+        glyphs: [...range.getClientRects()].map((rect) => ({
+          left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom,
+        })),
+      };
+    });
     const overlaps = [];
     for (let index = 0; index < counts.length - 1; index += 1) {
       for (let nextIndex = index + 1; nextIndex < counts.length; nextIndex += 1) {
@@ -146,6 +159,18 @@ async function inspectLayout(client, width) {
         }
       }
     }
+    const dateOverlaps = [];
+    for (let index = 0; index < dates.length - 1; index += 1) {
+      for (let nextIndex = index + 1; nextIndex < dates.length; nextIndex += 1) {
+        for (const first of dates[index].glyphs) {
+          for (const second of dates[nextIndex].glyphs) {
+            const horizontalOverlap = Math.min(first.right, second.right) - Math.max(first.left, second.left);
+            const verticalOverlap = Math.min(first.bottom, second.bottom) - Math.max(first.top, second.top);
+            if (horizontalOverlap > 0.1 && verticalOverlap > 0.1) dateOverlaps.push([index, nextIndex]);
+          }
+        }
+      }
+    }
     return {
       viewportWidth: innerWidth,
       pageWidth: document.documentElement.scrollWidth,
@@ -153,6 +178,8 @@ async function inspectLayout(client, width) {
       dayCount: days.length,
       counts,
       overlaps,
+      dates,
+      dateOverlaps,
     };
   })()`);
 }
@@ -195,6 +222,8 @@ test('vote timeline renders 21 exact multi-digit totals without overlap at 320px
   assert.deepEqual(narrow.counts.map(({ text }) => text), expectedTotals, 'shows every full exact two- and three-digit count');
   assert.ok(narrow.counts.every(({ glyphs }) => glyphs.length === 1), 'keeps every count on one unbroken visible line');
   assert.ok(narrow.counts.every(({ fontSize }) => fontSize >= 9.5), 'keeps count labels readable at 320px');
+  assert.ok(narrow.dates.every(({ glyphs, fontSize }) => glyphs.length === 1 && fontSize >= 8.5), 'keeps every date label complete and readable at 320px');
+  assert.deepEqual(narrow.dateOverlaps, [], 'keeps date labels visually separate at 320px');
   assert.ok(narrow.counts.every(({ box, glyphs }) => glyphs.length > 0
     && glyphs.every(({ left, right }) => left >= box.left - 0.1 && right <= box.right + 0.1)),
   'keeps every count glyph inside its own date column');
@@ -210,5 +239,7 @@ test('vote timeline renders 21 exact multi-digit totals without overlap at 320px
   assert.ok(regularCountsUnbroken, 'keeps every count on one unbroken visible line at 390px');
   assert.ok(regular.counts.every(({ fontSize }) => fontSize >= 9.5), 'keeps count labels readable at 390px');
   assert.deepEqual(regular.overlaps, [], 'keeps adjacent count labels visually separate at 390px');
+  assert.ok(regular.dates.every(({ glyphs, fontSize }) => glyphs.length === 1 && fontSize >= 8.5), 'keeps every date label complete and readable at 390px');
+  assert.deepEqual(regular.dateOverlaps, [], 'keeps date labels visually separate at 390px');
   t.diagnostic(`320px: 21 exact mixed two-/three-digit totals, minimum column ${minimumNarrowColumnWidth}px, widest count line ${maximumNarrowGlyphWidth}px, section ${narrow.timelineHeight}px, no overlap or page overflow; 390px section ${regular.timelineHeight}px, no overlap or page overflow.`);
 });

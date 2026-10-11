@@ -69,7 +69,7 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       .vote-timeline > h2 { margin: .1rem 0 .2rem; font-size: .95rem; }
       .vote-timeline__range { margin: 0 0 .25rem; color: #334155; font-size: .68rem; line-height: 1.2; }
       .vote-timeline__days { display: grid; align-items: end; gap: 1px; width: 100%; margin: .15rem 0 0; padding: 0; list-style: none; }
-      .vote-timeline__day { display: grid; grid-template-rows: minmax(30px, max-content) 52px 20px; min-width: 0; text-align: center; }
+      .vote-timeline__day { display: grid; grid-template-rows: minmax(30px, max-content) 52px 32px; min-width: 0; text-align: center; }
       .vote-timeline__count { color: #14213d; font-size: clamp(.62rem, 2.8vw, .72rem); line-height: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
       .vote-timeline__day:nth-child(even) .vote-timeline__count { transform: translateY(15px); }
       .vote-timeline__track { position: relative; display: flex; min-width: 0; align-items: flex-end; justify-content: center; border-bottom: 1px solid #52606d; }
@@ -77,6 +77,7 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       .vote-timeline__bar.is-top-ranked { border: 1px dashed #4c1d95; border-bottom: 0; background: #6b21a8; }
       .vote-timeline__top-cue { position: absolute; top: 0; left: 50%; z-index: 1; color: #fff; font-size: .62rem; line-height: 1; transform: translateX(-50%); }
       .vote-timeline__date { display: flex; flex-direction: column; align-items: center; overflow: hidden; color: #14213d; font-size: .62rem; line-height: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+      .vote-timeline__day:nth-child(even) .vote-timeline__date { transform: translateY(12px); }
       .vote-timeline__month { font-size: .42rem; line-height: 8px; }
       .vote-day { display: flex; min-width: 0; }
       .vote-card { display: flex; flex: 1 1 auto; flex-direction: column; align-items: stretch; gap: .4rem; width: 100%; min-width: 0; min-height: 8rem; height: 100%; margin: 0; padding: .55rem .3rem; border: .2rem solid transparent; border-radius: .6rem; background: var(--day-bg); color: var(--day-fg); font-size: clamp(.68rem, 1.45vw, .95rem); text-align: center; overflow: hidden; }
