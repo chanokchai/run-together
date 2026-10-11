@@ -100,9 +100,11 @@ async function evaluate(client, expression) {
 }
 
 function timelineMarkup() {
+  const totals = [0, 7, 42, 100, 18, 256, 99];
   return Array.from({ length: 21 }, (_, index) => {
     const day = String(index + 11).padStart(2, '0');
-    return `<li class="vote-timeline__day" aria-label="${day} Oct, 100 votes"><span class="vote-timeline__count">100</span><span class="vote-timeline__track" aria-hidden="true"><span class="vote-timeline__bar" style="height:100%"></span></span><time class="vote-timeline__date" datetime="2026-10-${day}"><span>${Number(day)}</span></time></li>`;
+    const total = totals[index % totals.length];
+    return `<li class="vote-timeline__day" aria-label="${day} Oct, ${total} votes"><span class="vote-timeline__count">${total}</span><span class="vote-timeline__track" aria-hidden="true"><span class="vote-timeline__bar" style="height:100%"></span></span><time class="vote-timeline__date" datetime="2026-10-${day}"><span>${Number(day)}</span></time></li>`;
   }).join('');
 }
 
@@ -124,6 +126,7 @@ async function inspectLayout(client, width) {
       range.selectNodeContents(label);
       return {
         text: label.textContent,
+        fontSize: Number.parseFloat(getComputedStyle(label).fontSize),
         box: { left: box.left, right: box.right, top: box.top, bottom: box.bottom },
         item: { left: item.left, right: item.right },
         glyphs: [...range.getClientRects()].map((rect) => ({
@@ -133,10 +136,12 @@ async function inspectLayout(client, width) {
     });
     const overlaps = [];
     for (let index = 0; index < counts.length - 1; index += 1) {
-      for (const first of counts[index].glyphs) {
-        for (const second of counts[index + 1].glyphs) {
-          if (Math.min(first.right, second.right) - Math.max(first.left, second.left) > 0.1) {
-            overlaps.push(index);
+      for (let nextIndex = index + 1; nextIndex < counts.length; nextIndex += 1) {
+        for (const first of counts[index].glyphs) {
+          for (const second of counts[nextIndex].glyphs) {
+            const horizontalOverlap = Math.min(first.right, second.right) - Math.max(first.left, second.left);
+            const verticalOverlap = Math.min(first.bottom, second.bottom) - Math.max(first.top, second.top);
+            if (horizontalOverlap > 0.1 && verticalOverlap > 0.1) overlaps.push([index, nextIndex]);
           }
         }
       }
@@ -186,7 +191,10 @@ test('vote timeline renders 21 exact multi-digit totals without overlap at 320px
 
   const narrow = await inspectLayout(client, 320);
   assert.equal(narrow.dayCount, 21, 'renders the full supported 21-date range');
-  assert.ok(narrow.counts.every(({ text }) => text === '100'), 'shows each full exact count');
+  const expectedTotals = Array.from({ length: 21 }, (_, index) => ['0', '7', '42', '100', '18', '256', '99'][index % 7]);
+  assert.deepEqual(narrow.counts.map(({ text }) => text), expectedTotals, 'shows every full exact two- and three-digit count');
+  assert.ok(narrow.counts.every(({ glyphs }) => glyphs.length === 1), 'keeps every count on one unbroken visible line');
+  assert.ok(narrow.counts.every(({ fontSize }) => fontSize >= 9.5), 'keeps count labels readable at 320px');
   assert.ok(narrow.counts.every(({ box, glyphs }) => glyphs.length > 0
     && glyphs.every(({ left, right }) => left >= box.left - 0.1 && right <= box.right + 0.1)),
   'keeps every count glyph inside its own date column');
@@ -198,5 +206,9 @@ test('vote timeline renders 21 exact multi-digit totals without overlap at 320px
   const regular = await inspectLayout(client, 390);
   assert.ok(regular.timelineHeight <= 180, 'keeps the timeline section at or below 180px at 390px');
   assert.ok(regular.pageWidth <= 390, 'does not create horizontal page scrolling at 390px');
-  t.diagnostic(`320px: 21 exact totals, minimum column ${minimumNarrowColumnWidth}px, widest count line ${maximumNarrowGlyphWidth}px, section ${narrow.timelineHeight}px, no overlap or page overflow; 390px section ${regular.timelineHeight}px, no page overflow.`);
+  const regularCountsUnbroken = regular.counts.every(({ glyphs }) => glyphs.length === 1);
+  assert.ok(regularCountsUnbroken, 'keeps every count on one unbroken visible line at 390px');
+  assert.ok(regular.counts.every(({ fontSize }) => fontSize >= 9.5), 'keeps count labels readable at 390px');
+  assert.deepEqual(regular.overlaps, [], 'keeps adjacent count labels visually separate at 390px');
+  t.diagnostic(`320px: 21 exact mixed two-/three-digit totals, minimum column ${minimumNarrowColumnWidth}px, widest count line ${maximumNarrowGlyphWidth}px, section ${narrow.timelineHeight}px, no overlap or page overflow; 390px section ${regular.timelineHeight}px, no overlap or page overflow.`);
 });
