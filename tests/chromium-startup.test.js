@@ -31,6 +31,22 @@ function waitForChildExit(browser, timeoutMs = 1000) {
   });
 }
 
+test('Chromium readiness accepts a port published after the former five-second bound', async () => {
+  await withTemporaryProfile(async (directory) => {
+    const activePortFile = join(directory, 'DevToolsActivePort');
+    const browser = spawnChromium(process.execPath, [
+      '-e',
+      `setTimeout(() => require('node:fs').writeFileSync(${JSON.stringify(activePortFile)}, '9222\\n'), 5250); setInterval(() => {}, 1000);`,
+    ]);
+
+    try {
+      assert.equal(await readDevToolsPort(directory, browser, { pollIntervalMs: 10 }), 9222);
+    } finally {
+      await stopChromium(browser);
+    }
+  });
+});
+
 test('Chromium startup diagnostics include captured stderr and the selected executable', async () => {
   await withTemporaryProfile(async (directory) => {
     const browser = spawnChromium(process.execPath, [

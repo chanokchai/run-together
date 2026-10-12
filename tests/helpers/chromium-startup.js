@@ -71,7 +71,7 @@ export async function stopChromium(browser, { timeoutMs = 1000 } = {}) {
 }
 
 export async function readDevToolsPort(userDataDirectory, browser, {
-  timeoutMs = 5000,
+  timeoutMs = 15000,
   pollIntervalMs = 50,
   read = readFile,
   wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
