@@ -15,9 +15,18 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Verify Google Chrome for rendered layout tests
+        env:
+          CHROME_BIN: /usr/bin/google-chrome
+        run: |
+          test -n "$CHROME_BIN"
+          test -x "$CHROME_BIN"
+          "$CHROME_BIN" --version
       - name: Install dependencies
         run: npm ci
       - name: Run tests
         run: npm test
+        env:
+          CHROME_BIN: /usr/bin/google-chrome
       - name: Run checks
         run: npm run check

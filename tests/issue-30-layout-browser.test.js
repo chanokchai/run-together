@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdtemp, readFile } from 'node:fs/promises';
 import { request } from 'node:http';
@@ -7,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { removeProfileWithRetry } from './helpers/chromium-profile-cleanup.js';
+import { readDevToolsPort, spawnChromium } from './helpers/chromium-startup.js';
 
 test('Chromium profile cleanup retries transient directory races', async () => {
   let attempts = 0;
@@ -49,29 +49,14 @@ test('Chromium profile cleanup surfaces exhausted and non-transient failures', a
 });
 
 const chromePath = process.env.CHROME_BIN ?? [
-  '/usr/bin/chromium',
   '/usr/bin/google-chrome',
+  '/usr/bin/chromium',
   '/opt/google/chrome/chrome',
   '/opt/data/tmp/chrome/opt/google/chrome/chrome',
 ].find((path) => existsSync(path));
 
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
-
-async function readDevToolsPort(userDataDirectory, browser) {
-  const activePortFile = join(userDataDirectory, 'DevToolsActivePort');
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (browser.exitCode !== null) throw new Error(`Chrome exited with code ${browser.exitCode}`);
-    try {
-      const [port] = (await readFile(activePortFile, 'utf8')).split('\n');
-      return Number(port);
-    } catch (error) {
-      if (error.code !== 'ENOENT') throw error;
-      await delay(50);
-    }
-  }
-  throw new Error('Chrome did not publish its DevTools port');
 }
 
 function createTarget(port) {
@@ -234,16 +219,19 @@ test('vote timeline renders 21 exact multi-digit totals without overlap at 320px
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style></head><body><main class="vote-page-main"><section id="protected-content"><h1>Run Together</h1><section id="vote-timeline" class="vote-timeline" aria-labelledby="vote-timeline-heading"><h2 id="vote-timeline-heading">Vote timeline</h2><p class="vote-timeline__range">11 Oct – 31 Oct · ★ = highest votes</p><ol class="vote-timeline__days" style="grid-template-columns:repeat(21,minmax(0,1fr))">${timelineMarkup()}</ol></section></section></main></body></html>`;
   const scratchRoot = process.env.TMPDIR || tmpdir();
   const userDataDirectory = await mkdtemp(join(scratchRoot, 'run-together-layout-'));
-  const browser = spawn(chromePath, [
+  const browser = spawnChromium(chromePath, [
     '--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage',
     '--no-first-run', '--no-default-browser-check', '--disable-background-networking',
     '--remote-debugging-port=0', `--user-data-dir=${userDataDirectory}`, 'about:blank',
-  ], { stdio: 'ignore' });
+  ]);
   let client;
   t.after(async () => {
     client?.close();
-    if (browser.exitCode === null) {
-      const exited = new Promise((resolve) => browser.once('exit', resolve));
+    if (browser.exitCode === null && !browser.spawnError) {
+      const exited = new Promise((resolve) => {
+        browser.once('exit', resolve);
+        browser.once('error', resolve);
+      });
       browser.kill('SIGTERM');
       await exited;
     }
