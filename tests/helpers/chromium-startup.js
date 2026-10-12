@@ -4,6 +4,30 @@ import { join } from 'node:path';
 
 const stderrLimit = 2000;
 
+function hasExited(browser) {
+  return browser.exitCode !== null || browser.signalCode !== null;
+}
+
+function waitForExit(browser, timeoutMs) {
+  if (browser.spawnError || hasExited(browser)) return Promise.resolve(true);
+
+  return new Promise((resolve) => {
+    let timer;
+    const finish = (exited) => {
+      clearTimeout(timer);
+      browser.off('exit', onExit);
+      browser.off('error', onError);
+      resolve(exited);
+    };
+    const onExit = () => finish(true);
+    const onError = () => finish(false);
+    browser.once('exit', onExit);
+    browser.once('error', onError);
+    timer = setTimeout(() => finish(false), timeoutMs);
+    if (browser.spawnError || hasExited(browser)) finish(true);
+  });
+}
+
 function startupDetails(browser) {
   const details = [];
   if (browser.spawnfile) details.push(`executable: ${browser.spawnfile}`);
@@ -25,6 +49,20 @@ export function spawnChromium(executable, args) {
   return browser;
 }
 
+export async function stopChromium(browser, { timeoutMs = 1000 } = {}) {
+  if (!browser || browser.spawnError || hasExited(browser)) return;
+
+  const gracefulExit = waitForExit(browser, timeoutMs);
+  if (!browser.spawnError && !hasExited(browser)) browser.kill('SIGTERM');
+  if (await gracefulExit || browser.spawnError || hasExited(browser)) return;
+
+  const forcedExit = waitForExit(browser, timeoutMs);
+  if (!browser.spawnError && !hasExited(browser)) browser.kill('SIGKILL');
+  if (await forcedExit || browser.spawnError || hasExited(browser)) return;
+
+  throw new Error(`Chromium did not exit after SIGTERM and SIGKILL within ${timeoutMs * 2}ms${startupDetails(browser)}`);
+}
+
 export async function readDevToolsPort(userDataDirectory, browser, {
   timeoutMs = 5000,
   pollIntervalMs = 50,
@@ -38,8 +76,8 @@ export async function readDevToolsPort(userDataDirectory, browser, {
     if (browser.spawnError) {
       throw new Error(`Could not start Chromium (${browser.spawnError.code ?? browser.spawnError.message})${startupDetails(browser)}`);
     }
-    if (browser.exitCode !== null) {
-      throw new Error(`Chromium exited before publishing its DevTools port (code ${browser.exitCode}, signal ${browser.signalCode ?? 'none'})${startupDetails(browser)}`);
+    if (hasExited(browser)) {
+      throw new Error(`Chromium exited before publishing its DevTools port (code ${browser.exitCode ?? 'none'}, signal ${browser.signalCode ?? 'none'})${startupDetails(browser)}`);
     }
 
     try {
@@ -56,6 +94,9 @@ export async function readDevToolsPort(userDataDirectory, browser, {
 
   if (browser.spawnError) {
     throw new Error(`Could not start Chromium (${browser.spawnError.code ?? browser.spawnError.message})${startupDetails(browser)}`);
+  }
+  if (hasExited(browser)) {
+    throw new Error(`Chromium exited before publishing its DevTools port (code ${browser.exitCode ?? 'none'}, signal ${browser.signalCode ?? 'none'})${startupDetails(browser)}`);
   }
   throw new Error(`Chromium did not publish its DevTools port within ${timeoutMs}ms (exit code ${browser.exitCode ?? 'still running'})${startupDetails(browser)}`);
 }

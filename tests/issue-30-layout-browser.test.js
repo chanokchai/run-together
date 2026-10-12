@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { removeProfileWithRetry } from './helpers/chromium-profile-cleanup.js';
-import { readDevToolsPort, spawnChromium } from './helpers/chromium-startup.js';
+import { readDevToolsPort, spawnChromium, stopChromium } from './helpers/chromium-startup.js';
 
 test('Chromium profile cleanup retries transient directory races', async () => {
   let attempts = 0;
@@ -227,15 +227,11 @@ test('vote timeline renders 21 exact multi-digit totals without overlap at 320px
   let client;
   t.after(async () => {
     client?.close();
-    if (browser.exitCode === null && !browser.spawnError) {
-      const exited = new Promise((resolve) => {
-        browser.once('exit', resolve);
-        browser.once('error', resolve);
-      });
-      browser.kill('SIGTERM');
-      await exited;
+    try {
+      await stopChromium(browser);
+    } finally {
+      await removeProfileWithRetry(userDataDirectory);
     }
-    await removeProfileWithRetry(userDataDirectory);
   });
 
   const port = await readDevToolsPort(userDataDirectory, browser);
