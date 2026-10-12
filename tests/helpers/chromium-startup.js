@@ -71,7 +71,7 @@ export async function stopChromium(browser, { timeoutMs = 1000 } = {}) {
 }
 
 export async function readDevToolsPort(userDataDirectory, browser, {
-  timeoutMs = 15000,
+  timeoutMs = 5000,
   pollIntervalMs = 50,
   read = readFile,
   wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
@@ -105,5 +105,6 @@ export async function readDevToolsPort(userDataDirectory, browser, {
   if (hasExited(browser)) {
     throw new Error(`Chromium exited before publishing its DevTools port (code ${browser.exitCode ?? 'none'}, signal ${browser.signalCode ?? 'none'})${startupDetails(browser)}`);
   }
-  throw new Error(`Chromium did not publish its DevTools port within ${timeoutMs}ms (exit code ${browser.exitCode ?? 'still running'})${startupDetails(browser)}`);
+  const state = hasExited(browser) ? 'exited' : 'running';
+  throw new Error(`Chromium did not publish its DevTools port within ${timeoutMs}ms (elapsed ${Date.now() - startedAt}ms; state: ${state}; exitCode: ${browser.exitCode ?? 'null'}; signalCode: ${browser.signalCode ?? 'null'})${startupDetails(browser)}`);
 }

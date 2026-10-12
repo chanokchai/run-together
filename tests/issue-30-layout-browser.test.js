@@ -4,6 +4,7 @@ import { mkdtemp, readFile } from 'node:fs/promises';
 import { request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { performance } from 'node:perf_hooks';
 import test from 'node:test';
 import { removeProfileWithRetry } from './helpers/chromium-profile-cleanup.js';
 import { readDevToolsPort, spawnChromium, stopChromium } from './helpers/chromium-startup.js';
@@ -219,6 +220,7 @@ test('vote timeline renders 21 exact multi-digit totals without overlap at 320px
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style></head><body><main class="vote-page-main"><section id="protected-content"><h1>Run Together</h1><section id="vote-timeline" class="vote-timeline" aria-labelledby="vote-timeline-heading"><h2 id="vote-timeline-heading">Vote timeline</h2><p class="vote-timeline__range">11 Oct – 31 Oct · ★ = highest votes</p><ol class="vote-timeline__days" style="grid-template-columns:repeat(21,minmax(0,1fr))">${timelineMarkup()}</ol></section></section></main></body></html>`;
   const scratchRoot = process.env.TMPDIR || tmpdir();
   const userDataDirectory = await mkdtemp(join(scratchRoot, 'run-together-layout-'));
+  const startupStartedAt = performance.now();
   const browser = spawnChromium(chromePath, [
     '--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage',
     '--no-first-run', '--no-default-browser-check', '--disable-background-networking',
@@ -235,6 +237,8 @@ test('vote timeline renders 21 exact multi-digit totals without overlap at 320px
   });
 
   const port = await readDevToolsPort(userDataDirectory, browser);
+  const readinessMs = performance.now() - startupStartedAt;
+  t.diagnostic(`Chromium launch-to-DevTools readiness ${readinessMs.toFixed(1)}ms; executable: ${browser.spawnfile}; state: ${browser.exitCode === null && browser.signalCode === null ? 'running' : 'exited'}; exitCode: ${browser.exitCode}; signalCode: ${browser.signalCode}; deadline: 5000ms.`);
   const target = await createTarget(port);
   client = createCdpClient(target.webSocketDebuggerUrl);
   await client.send('Page.enable');
