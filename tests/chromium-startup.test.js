@@ -134,6 +134,78 @@ test('Chromium teardown handles active and already-signalled children within a b
   }
 });
 
+test('spawned Chromium escalates a failed SIGTERM kill to SIGKILL', async () => {
+  const browser = spawnChromium(process.execPath, ['-e', 'setInterval(() => {}, 1000);']);
+  const realKill = browser.kill.bind(browser);
+  const signals = [];
+
+  try {
+    await new Promise((resolve, reject) => {
+      browser.once('spawn', resolve);
+      browser.once('error', reject);
+    });
+    browser.kill = (signal) => {
+      signals.push(signal);
+      if (signal === 'SIGTERM') {
+        queueMicrotask(() => browser.emit('error', Object.assign(new Error('SIGTERM denied by fixture'), {
+          code: 'EPERM',
+          syscall: 'kill',
+        })));
+        return false;
+      }
+      return realKill(signal);
+    };
+
+    await stopChromium(browser, { timeoutMs: 100 });
+
+    assert.deepEqual(signals, ['SIGTERM', 'SIGKILL'], 'a failed graceful kill does not masquerade as a spawn failure');
+    assert.ok(browser.exitCode !== null || browser.signalCode !== null, 'confirms the escalated child exited');
+  } finally {
+    browser.kill = realKill;
+    if (browser.exitCode === null && browser.signalCode === null) {
+      const exited = waitForChildExit(browser);
+      realKill('SIGKILL');
+      await exited;
+    }
+  }
+});
+
+test('spawned Chromium reports bounded cleanup failure when SIGTERM and SIGKILL both fail', async () => {
+  const browser = spawnChromium(process.execPath, ['-e', 'setInterval(() => {}, 1000);']);
+  const realKill = browser.kill.bind(browser);
+  const signals = [];
+
+  try {
+    await new Promise((resolve, reject) => {
+      browser.once('spawn', resolve);
+      browser.once('error', reject);
+    });
+    browser.kill = (signal) => {
+      signals.push(signal);
+      queueMicrotask(() => browser.emit('error', Object.assign(new Error(`${signal} denied by fixture`), {
+        code: 'EPERM',
+        syscall: 'kill',
+      })));
+      return false;
+    };
+
+    const startedAt = Date.now();
+    await assert.rejects(
+      stopChromium(browser, { timeoutMs: 75 }),
+      /Chromium did not exit after SIGTERM and SIGKILL within 150ms.*EPERM/,
+    );
+    assert.deepEqual(signals, ['SIGTERM', 'SIGKILL'], 'attempts both bounded termination signals');
+    assert.ok(Date.now() - startedAt < 500, 'surfaces repeated kill failure within a bounded interval');
+  } finally {
+    browser.kill = realKill;
+    if (browser.exitCode === null && browser.signalCode === null) {
+      const exited = waitForChildExit(browser);
+      realKill('SIGKILL');
+      await exited;
+    }
+  }
+});
+
 test('signal-terminated Chromium fails readiness immediately with its signal', async () => {
   await withTemporaryProfile(async (directory) => {
     const browser = spawnChromium(process.execPath, ['-e', 'setInterval(() => {}, 1000);']);

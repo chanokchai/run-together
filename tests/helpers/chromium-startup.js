@@ -31,6 +31,7 @@ function waitForExit(browser, timeoutMs) {
 function startupDetails(browser) {
   const details = [];
   if (browser.spawnfile) details.push(`executable: ${browser.spawnfile}`);
+  if (browser.processError) details.push(`process error: ${browser.processError.code ?? browser.processError.message}`);
   if (browser.stderrTail?.trim()) details.push(`stderr: ${browser.stderrTail.trim()}`);
   return details.length ? `; ${details.join('; ')}` : '';
 }
@@ -38,13 +39,19 @@ function startupDetails(browser) {
 export function spawnChromium(executable, args) {
   const browser = spawn(executable, args, { stdio: ['ignore', 'ignore', 'pipe'] });
   browser.spawnError = null;
+  browser.processError = null;
+  browser.spawned = false;
   browser.stderrTail = '';
   browser.stderr?.setEncoding('utf8');
   browser.stderr?.on('data', (chunk) => {
     browser.stderrTail = `${browser.stderrTail}${chunk}`.slice(-stderrLimit);
   });
-  browser.once('error', (error) => {
-    browser.spawnError = error;
+  browser.once('spawn', () => {
+    browser.spawned = true;
+  });
+  browser.on('error', (error) => {
+    if (browser.spawned) browser.processError = error;
+    else browser.spawnError = error;
   });
   return browser;
 }
