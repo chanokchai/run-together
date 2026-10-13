@@ -638,6 +638,26 @@ test('concurrent schedule/delete and last-vote races serialize without leaving i
     const revertDeleteState = getRunEventForDate(server.database, { eventDate: '2024-03-03' });
     assert.ok(revertDeleteState === null || revertDeleteState.status === 'proposed');
 
+    for (const member of [runner, secondVoter]) {
+      const vote = await eventRequest(baseUrl, '/api/votes/2024-03-05', {
+        method: 'PUT', cookie: member.cookie, csrfToken: member.session.csrfToken, body: { selected: true },
+      });
+      assert.equal(vote.status, 200);
+    }
+    const competingProposals = await Promise.all([
+      eventRequest(baseUrl, '/api/events/2024-03-05', {
+        method: 'POST', cookie: runner.cookie, csrfToken: runner.session.csrfToken, body: { requestId: requestId(83) },
+      }),
+      eventRequest(baseUrl, '/api/events/2024-03-05', {
+        method: 'POST', cookie: secondVoter.cookie, csrfToken: secondVoter.session.csrfToken, body: { requestId: requestId(84) },
+      }),
+    ]);
+    assert.deepEqual(competingProposals.map(({ status }) => status).sort(), [201, 409]);
+    const createdProposalResponse = competingProposals.find(({ status }) => status === 201);
+    const createdProposal = (await createdProposalResponse.json()).event;
+    assert.equal(getRunEventForDate(server.database, { eventDate: '2024-03-05' }).eventId, createdProposal.eventId);
+    assert.equal(server.database.prepare('SELECT COUNT(*) AS count FROM run_events WHERE event_date = ?').get('2024-03-05').count, 1);
+
     const proposalWithdrawRace = await Promise.all([
       eventRequest(baseUrl, '/api/events/2024-03-04', {
         method: 'POST', cookie: runner.cookie, csrfToken: runner.session.csrfToken, body: { requestId: requestId(79) },
