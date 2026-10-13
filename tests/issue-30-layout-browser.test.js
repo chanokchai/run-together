@@ -7,7 +7,12 @@ import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import test from 'node:test';
 import { removeProfileWithRetry } from './helpers/chromium-profile-cleanup.js';
-import { readDevToolsPort, spawnChromium, stopChromium } from './helpers/chromium-startup.js';
+import {
+  chromiumReadinessTimeoutMs,
+  readDevToolsPort,
+  spawnChromium,
+  stopChromium,
+} from './helpers/chromium-startup.js';
 
 test('Chromium profile cleanup retries transient directory races', async () => {
   let attempts = 0;
@@ -236,9 +241,9 @@ test('vote timeline renders 21 exact multi-digit totals without overlap at 320px
     }
   });
 
-  const port = await readDevToolsPort(userDataDirectory, browser);
+  const port = await readDevToolsPort(userDataDirectory, browser, { timeoutMs: chromiumReadinessTimeoutMs });
   const readinessMs = performance.now() - startupStartedAt;
-  t.diagnostic(`Chromium launch-to-DevTools readiness ${readinessMs.toFixed(1)}ms; executable: ${browser.spawnfile}; state: ${browser.exitCode === null && browser.signalCode === null ? 'running' : 'exited'}; exitCode: ${browser.exitCode}; signalCode: ${browser.signalCode}; deadline: 5000ms.`);
+  t.diagnostic(`Chromium launch-to-DevTools readiness ${readinessMs.toFixed(1)}ms; executable: ${browser.spawnfile}; state: ${browser.exitCode === null && browser.signalCode === null ? 'running' : 'exited'}; exitCode: ${browser.exitCode}; signalCode: ${browser.signalCode}; deadline: ${chromiumReadinessTimeoutMs}ms.`);
   const target = await createTarget(port);
   client = createCdpClient(target.webSocketDebuggerUrl);
   await client.send('Page.enable');

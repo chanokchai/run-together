@@ -15,18 +15,33 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - name: Verify Google Chrome for rendered layout tests
+      - name: Install pinned Chrome for Testing
         env:
-          CHROME_BIN: /usr/bin/google-chrome
+          CHROME_VERSION: 154.0.8037.97
+          CHROME_ARCHIVE_SHA256: 487c3b0e89f786d9257a6265a29bacf18b893e90f29c0ef6f7be9706ecc8c7a2
+          CHROME_BIN: ${{ runner.temp }}/chrome-for-testing-154.0.8037.97/chrome-linux64/chrome
         run: |
-          test -n "$CHROME_BIN"
+          set -euo pipefail
+          archive="$RUNNER_TEMP/chrome-for-testing-$CHROME_VERSION.zip"
+          install_dir="$RUNNER_TEMP/chrome-for-testing-$CHROME_VERSION"
+          url="https://storage.googleapis.com/chrome-for-testing-public/$CHROME_VERSION/linux64/chrome-linux64.zip"
+          curl --fail --location --retry 3 --retry-all-errors --connect-timeout 20 --max-time 120 --output "$archive" "$url"
+          printf '%s  %s\n' "$CHROME_ARCHIVE_SHA256" "$archive" | sha256sum --check
+          unzip -tq "$archive"
+          mkdir -p "$install_dir"
+          unzip -q "$archive" -d "$install_dir"
           test -x "$CHROME_BIN"
-          "$CHROME_BIN" --version
+          actual_version="$("$CHROME_BIN" --version)"
+          case "$actual_version" in
+            "Google Chrome for Testing $CHROME_VERSION"*) printf 'Verified %s\n' "$actual_version" ;;
+            *) printf 'Expected Chrome for Testing %s; received %s\n' "$CHROME_VERSION" "$actual_version" >&2; exit 1 ;;
+          esac
       - name: Install dependencies
         run: npm ci
       - name: Run tests
-        run: npm test
+        # Run the real-browser test without competing Node test-file workers.
+        run: npm test -- --test-concurrency=1
         env:
-          CHROME_BIN: /usr/bin/google-chrome
+          CHROME_BIN: ${{ runner.temp }}/chrome-for-testing-154.0.8037.97/chrome-linux64/chrome
       - name: Run checks
         run: npm run check

@@ -59,6 +59,35 @@ test('Chromium startup diagnostics include captured stderr and the selected exec
   });
 });
 
+test('Chromium readiness accepts a port published beyond five seconds within its bounded deadline', async () => {
+  await withTemporaryProfile(async (directory) => {
+    const browser = Object.assign(new EventEmitter(), {
+      exitCode: null,
+      signalCode: null,
+      spawnError: null,
+      spawnfile: 'fixture-browser',
+      stderrTail: '',
+    });
+    let simulatedNow = 0;
+    const originalNow = Date.now;
+    Date.now = () => simulatedNow;
+
+    try {
+      const port = await readDevToolsPort(directory, browser, {
+        read: async () => {
+          if (simulatedNow < 5250) throw Object.assign(new Error('port is not ready yet'), { code: 'ENOENT' });
+          return '43123\n';
+        },
+        wait: async (milliseconds) => { simulatedNow += milliseconds; },
+      });
+      assert.equal(port, 43123);
+      assert.equal(simulatedNow, 5250, 'continues polling until the delayed port appears');
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+});
+
 test('Chromium spawn errors fail immediately with their operating-system code', async () => {
   await withTemporaryProfile(async (directory) => {
     const missingExecutable = join(directory, 'missing-chromium');

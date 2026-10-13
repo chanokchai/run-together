@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const stderrLimit = 2000;
+export const chromiumReadinessTimeoutMs = 15_000;
 
 function hasExited(browser) {
   return browser.exitCode !== null || browser.signalCode !== null;
@@ -71,7 +72,7 @@ export async function stopChromium(browser, { timeoutMs = 1000 } = {}) {
 }
 
 export async function readDevToolsPort(userDataDirectory, browser, {
-  timeoutMs = 5000,
+  timeoutMs = chromiumReadinessTimeoutMs,
   pollIntervalMs = 50,
   read = readFile,
   wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
