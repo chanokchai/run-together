@@ -904,6 +904,10 @@ export function createApp({ databaseReady = false, database, env = process.env, 
                   }
                 });
                 banner.append(actions);
+                banner.addEventListener('click', (clickEvent) => {
+                  if (clickEvent.target.closest('button, a, input, select, textarea')) return;
+                  void submitRunEventAction(event.date, event.status === 'proposed' ? 'schedule' : 'revert', event);
+                });
               }
               const cue = addText(banner, 'span', '');
               cue.className = 'run-event-banner__swipe-cue';
@@ -953,8 +957,9 @@ export function createApp({ databaseReady = false, database, env = process.env, 
               if (response.status === 401) { redirectToLogin(); return false; }
               const result = await response.json();
               if (!response.ok) {
-                message.textContent = result.message || 'Could not update the run event.';
+                const errorMessage = result.message || 'Could not update the run event.';
                 await loadWeek(weekMonday);
+                message.textContent = errorMessage;
                 return false;
               }
               if (action === 'schedule' && result.changed) scheduledHighlightDates.add(date);
@@ -975,8 +980,9 @@ export function createApp({ databaseReady = false, database, env = process.env, 
               }
               return true;
             } catch {
-              message.textContent = 'Could not update the run event. Please try again.';
+              const errorMessage = 'Could not update the run event. Please try again.';
               await loadWeek(weekMonday);
+              message.textContent = errorMessage;
               return false;
             } finally {
               pendingEventDates.delete(date);

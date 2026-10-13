@@ -8,6 +8,7 @@ import { performance } from 'node:perf_hooks';
 import { once } from 'node:events';
 import test from 'node:test';
 import { createServer } from '../src/server.js';
+import { setRunEventStatus } from '../src/domain.js';
 import { removeProfileWithRetry } from './helpers/chromium-profile-cleanup.js';
 import { chromiumReadinessTimeoutMs, readDevToolsPort, spawnChromium, stopChromium } from './helpers/chromium-startup.js';
 
@@ -129,6 +130,17 @@ async function pressEnter(client) {
   await client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
 }
 
+async function clickSelector(client, selector) {
+  const point = await evaluate(client, `(() => {
+    const target = document.querySelector(${JSON.stringify(selector)});
+    target.scrollIntoView({ block: 'center' });
+    const box = target.getBoundingClientRect();
+    return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+  })()`);
+  await client.send('Input.dispatchMouseEvent', { type: 'mousePressed', button: 'left', clickCount: 1, ...point });
+  await client.send('Input.dispatchMouseEvent', { type: 'mouseReleased', button: 'left', clickCount: 1, ...point });
+}
+
 async function beginSwipe(client, selector, deltaX, deltaY = 0) {
   const point = await evaluate(client, `(() => {
     const target = document.querySelector(${JSON.stringify(selector)});
@@ -245,6 +257,10 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
   assert.equal(narrow.adminActions, 0, 'does not expose banner controls to ordinary members');
   assert.ok(narrow.pageWidth <= 320, 'keeps the stacked banner layout inside a 320px viewport');
 
+  await clickSelector(client, '.run-event-banner[data-date="2024-03-01"] .run-event-banner__summary');
+  await delay(150);
+  assert.equal(server.database.prepare('SELECT status FROM run_events WHERE event_date = ?').get('2024-03-01').status, 'proposed', 'an ordinary member tapping the banner body cannot change event status');
+
   await beginSwipe(client, '.vote-card[data-date="2024-02-29"]', 24);
   assert.equal(await evaluate(client, `document.querySelector('.vote-card[data-date="2024-02-29"] .vote-card__swipe-cue')?.textContent`), 'Swipe right to propose', 'shows the proposal action while the drag is still below its commit distance');
   await cancelSwipe(client);
@@ -316,6 +332,10 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
   await client.send('Page.navigate', { url: `${baseUrl}/vote` });
   assert.equal(await waitFor(client, `document.querySelector('#protected-content') && !document.querySelector('#protected-content').hidden && document.querySelectorAll('#week-days .vote-card').length === 7`), true, 'loads the board as the authenticated administrator');
   assert.equal(await evaluate(client, `document.querySelectorAll('.run-event-actions').length`), 2, 'renders explicit banner controls for an administrator');
+  await clickSelector(client, '.run-event-banner[data-date="2024-03-01"] .run-event-banner__summary');
+  assert.equal(await waitFor(client, `document.querySelector('.run-event-banner[data-date="2024-03-01"] .run-event-banner__status')?.textContent === 'Scheduled'`), true, 'admin tap on the banner body schedules a proposed run');
+  await clickSelector(client, '.run-event-banner[data-date="2024-03-01"] .run-event-banner__summary');
+  assert.equal(await waitFor(client, `document.querySelector('.run-event-banner[data-date="2024-03-01"] .run-event-banner__status')?.textContent === 'Proposed'`), true, 'admin tap on the banner body reverts a scheduled run');
   await evaluate(client, `document.querySelector('.run-event-banner[data-date="2024-03-01"] button[data-run-event-status="proposed"]')?.focus()`);
   await pressEnter(client);
   assert.equal(await waitFor(client, `document.querySelector('.run-event-banner[data-date="2024-03-01"] .run-event-banner__status')?.textContent === 'Scheduled'`), true, 'admin keyboard action schedules a proposal');
@@ -328,10 +348,44 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
   await pressEnter(client);
   assert.equal(await waitFor(client, `document.querySelector('.run-event-banner[data-date="2024-03-01"] .run-event-banner__status')?.textContent === 'Scheduled'`), true, 'admin can schedule the same event again after reverting');
   await beginSwipe(client, '.run-event-banner[data-date="2024-03-01"]', -24);
+  await endSwipe(client);
+  await delay(150);
+  assert.equal(await evaluate(client, `document.querySelector('.run-event-banner[data-date="2024-03-01"] .run-event-banner__status')?.textContent`), 'Scheduled', 'a released below-threshold banner drag does not synthesize a tap status change');
+  await delay(350);
+  const staleEvent = server.database.prepare('SELECT id, revision FROM run_events WHERE event_date = ?').get('2024-03-01');
+  const adminId = server.database.prepare("SELECT id FROM users WHERE role = 'admin'").get().id;
+  setRunEventStatus(server.database, {
+    adminUserId: adminId,
+    eventDate: '2024-03-01',
+    eventId: staleEvent.id,
+    revision: staleEvent.revision,
+    status: 'proposed',
+    requestId: '00000000-0000-4000-8000-000000000091',
+    now,
+  });
+  await evaluate(client, `window.issue32MutationResponses = []; window.issue32OriginalFetch = window.fetch; window.fetch = async (...args) => { const response = await window.issue32OriginalFetch(...args); if (String(args[0]).includes('/api/admin/events/')) window.issue32MutationResponses.push({ status: response.status, body: await response.clone().json() }); return response; };`);
+  await clickSelector(client, '.run-event-banner[data-date="2024-03-01"] button[data-run-event-status="scheduled"]');
+  const staleActionReloaded = await waitFor(client, `window.issue32MutationResponses.length === 1 && document.querySelector('.run-event-banner[data-date="2024-03-01"] .run-event-banner__status')?.textContent === 'Proposed'`);
+  if (!staleActionReloaded) t.diagnostic(JSON.stringify(await evaluate(client, `({ responses: window.issue32MutationResponses, status: document.querySelector('.run-event-banner[data-date="2024-03-01"] .run-event-banner__status')?.textContent, message: document.querySelector('#message').textContent, banner: document.querySelector('.run-event-banner[data-date="2024-03-01"]')?.outerHTML })`)));
+  assert.equal(staleActionReloaded, true, 'a stale status action reloads the authoritative event state');
+  assert.equal(await evaluate(client, `window.issue32MutationResponses[0].status`), 409, 'the stale action receives a real HTTP conflict');
+  assert.match(await evaluate(client, `document.querySelector('#message').textContent`), /This event has changed/, 'the stale-event error remains visible and announced after the authoritative reload');
+
+  await evaluate(client, `window.fetch = async (input, init) => { if (String(input).includes('/api/admin/events/') && init?.method === 'PUT') throw new TypeError('controlled transport failure'); return window.issue32OriginalFetch(input, init); };`);
+  await clickSelector(client, '.run-event-banner[data-date="2024-03-01"] button[data-run-event-status="proposed"]');
+  assert.equal(await waitFor(client, `document.querySelector('.run-event-banner[data-date="2024-03-01"] .run-event-banner__status')?.textContent === 'Proposed' && document.querySelector('#message').textContent.includes('Could not update')`), true, 'a network failure leaves a visible accessible error after authoritative refresh without showing success');
+  await evaluate(client, `window.fetch = window.issue32OriginalFetch;`);
+  await clickSelector(client, '.run-event-banner[data-date="2024-03-01"] button[data-run-event-status="proposed"]');
+  assert.equal(await waitFor(client, `document.querySelector('.run-event-banner[data-date="2024-03-01"] .run-event-banner__status')?.textContent === 'Scheduled'`), true, 'successful retry schedules the run after the transport error');
+  await beginSwipe(client, '.run-event-banner[data-date="2024-03-01"]', -24);
+  const deleteCueReady = await waitFor(client, `document.querySelector('.run-event-banner[data-date="2024-03-01"] .run-event-banner__swipe-cue')?.textContent === 'Swipe left to delete'`);
+  if (!deleteCueReady) t.diagnostic(JSON.stringify(await evaluate(client, `({ status: document.querySelector('.run-event-banner[data-date="2024-03-01"] .run-event-banner__status')?.textContent, cue: document.querySelector('.run-event-banner[data-date="2024-03-01"] .run-event-banner__swipe-cue')?.outerHTML, touchAction: getComputedStyle(document.querySelector('.run-event-banner[data-date="2024-03-01"]')).touchAction, transform: document.querySelector('.run-event-banner[data-date="2024-03-01"]')?.style.transform })`)));
   assert.deepEqual(await evaluate(client, `(() => { const cue = document.querySelector('.run-event-banner[data-date="2024-03-01"] .run-event-banner__swipe-cue'); return { text: cue?.textContent, destructive: cue?.dataset.destructive }; })()`), { text: 'Swipe left to delete', destructive: 'true' }, 'announces the destructive admin action before it can commit');
   await cancelSwipe(client);
   assert.equal(await evaluate(client, `document.querySelector('.run-event-banner[data-date="2024-03-01"] .run-event-banner__status')?.textContent`), 'Scheduled', 'cancelling the deletion preview preserves the event');
+  await evaluate(client, `window.issue32AdminMutations = []; window.fetch = (...args) => { if (String(args[0]).includes('/api/admin/events/')) window.issue32AdminMutations.push(args[1]?.method ?? 'GET'); return window.issue32OriginalFetch(...args); };`);
   await swipe(client, '.run-event-banner[data-date="2024-03-01"]', -84);
   assert.equal(await waitFor(client, `document.querySelector('.run-event-banner[data-date="2024-03-01"]') === null`), true, 'admin left swipe permanently deletes a scheduled event');
+  assert.deepEqual(await evaluate(client, 'window.issue32AdminMutations'), ['DELETE'], 'a completed banner swipe does not also synthesize an admin tap action');
   assert.equal(server.database.prepare('SELECT COUNT(*) AS count FROM votes WHERE vote_date = ?').get('2024-03-01').count, 4, 'event deletion preserves all availability votes');
 });
