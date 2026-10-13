@@ -183,3 +183,74 @@ export function createSocketRepairController({ loadWeek, patchDay }) {
     },
   };
 }
+
+export function getVoteTimelinePresentation(days) {
+  const normalized = (Array.isArray(days) ? days : []).map(({ date, voteCount }) => ({
+    date,
+    voteCount: Number.isSafeInteger(voteCount) && voteCount >= 0 ? voteCount : 0,
+  }));
+  const maximum = Math.max(0, ...normalized.map(({ voteCount }) => voteCount));
+  return normalized.map(({ date, voteCount }) => {
+    const displayDate = formatDisplayDate(date);
+    const [dayLabel, monthLabel] = displayDate.split(' ');
+    const isTopRanked = maximum > 0 && voteCount === maximum;
+    return {
+      date,
+      dayLabel,
+      monthLabel,
+      voteCount,
+      barHeightPercent: maximum > 0 ? (voteCount / maximum) * 100 : 0,
+      isTopRanked,
+      showTopCue: isTopRanked,
+      accessibleLabel: `${displayDate}, ${voteCount} ${voteCount === 1 ? 'vote' : 'votes'}${isTopRanked ? ', highest-vote date' : ''}`,
+    };
+  });
+}
+
+export function createVoteTimelineController({ render }) {
+  let daysByDate = new Map();
+  let refreshSequence = 0;
+  let patchSequence = 0;
+  let activeRefreshSequence = 0;
+  const pendingPatches = new Map();
+
+  function renderCurrent() {
+    render(getVoteTimelinePresentation([...daysByDate.values()]));
+  }
+
+  return {
+    async refresh(loadTotals) {
+      const sequence = ++refreshSequence;
+      const patchSequenceAtStart = patchSequence;
+      pendingPatches.forEach((patch, date) => {
+        if (patch.sequence <= patchSequenceAtStart) pendingPatches.delete(date);
+      });
+      activeRefreshSequence = sequence;
+      let totals;
+      try {
+        totals = await loadTotals();
+      } finally {
+        if (activeRefreshSequence === sequence) activeRefreshSequence = 0;
+      }
+      if (sequence !== refreshSequence) return false;
+      daysByDate = new Map((Array.isArray(totals?.days) ? totals.days : []).map(({ date, voteCount }) => [date, { date, voteCount }]));
+      pendingPatches.forEach(({ voteCount, sequence: patchVersion }, date) => {
+        if (patchVersion > patchSequenceAtStart && daysByDate.has(date)) daysByDate.set(date, { date, voteCount });
+      });
+      pendingPatches.clear();
+      renderCurrent();
+      return true;
+    },
+    patch({ date, voteCount }) {
+      const count = Number.isSafeInteger(voteCount) && voteCount >= 0 ? voteCount : 0;
+      const sequence = ++patchSequence;
+      if (activeRefreshSequence) pendingPatches.set(date, { voteCount: count, sequence });
+      const current = daysByDate.get(date);
+      if (!current) return false;
+      if (current.voteCount === count) return true;
+      daysByDate.set(date, { date, voteCount: count });
+      renderCurrent();
+      return true;
+    },
+  };
+}
