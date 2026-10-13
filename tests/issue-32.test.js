@@ -513,6 +513,44 @@ test('connected clients receive committed shared event state and recover date-sp
       assert.equal(aliceDeleted.event, null);
       assert.equal(bobDeleted.event, null);
       assert.equal(server.database.prepare('SELECT COUNT(*) AS count FROM votes WHERE vote_date = ?').get('2024-03-01').count, 2);
+
+      for (const member of [alice, bob]) {
+        const addVote = await eventRequest(baseUrl, '/api/votes/2024-03-02', {
+          method: 'PUT', cookie: member.cookie, csrfToken: member.session.csrfToken, body: { selected: true },
+        });
+        assert.equal(addVote.status, 200);
+      }
+      const createSharedEvent = async (member, date, id) => {
+        const eventMessages = sockets.map((socket) => new Promise((resolve) => socket.once('event:changed', resolve)));
+        const response = await eventRequest(baseUrl, `/api/events/${date}`, {
+          method: 'POST', cookie: member.cookie, csrfToken: member.session.csrfToken, body: { requestId: requestId(id) },
+        });
+        assert.equal(response.status, 201);
+        const event = (await response.json()).event;
+        const [aliceEvent, bobEvent] = await Promise.all(eventMessages);
+        assert.equal(aliceEvent.event.eventId, event.eventId);
+        assert.equal(bobEvent.event.eventId, event.eventId);
+        return event;
+      };
+      const sameWeekEvents = [
+        await createSharedEvent(alice, '2024-03-01', 66),
+        await createSharedEvent(bob, '2024-03-02', 67),
+      ];
+      for (const member of [alice, bob]) {
+        const week = await eventRequest(baseUrl, '/api/weeks/2024-02-26', { cookie: member.cookie }).then((response) => response.json());
+        assert.deepEqual(week.events.map(({ date }) => date), ['2024-03-01', '2024-03-02']);
+      }
+      for (const [index, event] of sameWeekEvents.entries()) {
+        const scheduleMessages = sockets.map((socket) => new Promise((resolve) => socket.once('event:changed', resolve)));
+        const schedule = await eventRequest(baseUrl, `/api/admin/events/${event.date}`, {
+          method: 'PUT', cookie: admin.cookie, csrfToken: admin.session.csrfToken,
+          body: { status: 'scheduled', eventId: event.eventId, revision: event.revision, requestId: requestId(68 + index) },
+        });
+        assert.equal(schedule.status, 200);
+        const [aliceScheduled, bobScheduled] = await Promise.all(scheduleMessages);
+        assert.equal(aliceScheduled.event.status, 'scheduled');
+        assert.equal(bobScheduled.event.status, 'scheduled');
+      }
     } finally {
       sockets.forEach((socket) => socket.close());
     }
