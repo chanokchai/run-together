@@ -70,6 +70,7 @@ test('authenticated week API returns bounded seven-day state and safe aggregates
       week: { monday: '2024-02-26', sunday: '2024-03-03', isoWeek: 9, isoWeekYear: 2024, resetEligible: true },
       navigation: { previousMonday: '2024-02-19', nextMonday: '2024-03-04' },
       currentUserSelectedDates: ['2024-02-26', '2024-02-28'],
+      events: [],
       days: [
         { date: '2024-02-26', eligible: false, voteCount: 3, voterNames: ['alice', 'Runner One', 'Zoe'] },
         { date: '2024-02-27', eligible: false, voteCount: 0, voterNames: [] },

@@ -8,10 +8,27 @@ import {
   parseIsoDate,
 } from './calendar.js';
 import { AuthError, createAuthService } from './auth.js';
-import { AdminActionError, deleteUserWithAudit, getEligiblePeriodVoteTotals, getWeekState, assertVoteBody, listUsers, resetUserVotes, resetWeek, setVote, VoteError } from './domain.js';
+import {
+  AdminActionError,
+  deleteRunEvent,
+  deleteUserWithAudit,
+  getEligiblePeriodVoteTotals,
+  getWeekState,
+  assertVoteBody,
+  listUsers,
+  proposeRunEvent,
+  resetUserVotes,
+  resetWeek,
+  setRunEventStatus,
+  setVote,
+  VoteError,
+  RunEventError,
+  withdrawRunEvent,
+} from './domain.js';
 
 const voteBoardScript = readFileSync(new URL('./vote-board.js', import.meta.url), 'utf8');
 const dateTimeScript = readFileSync(new URL('./date-time.js', import.meta.url), 'utf8');
+const runEventsScript = readFileSync(new URL('./run-events.js', import.meta.url), 'utf8');
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (character) => ({
@@ -81,8 +98,37 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       .vote-timeline__month { font-size: .42rem; line-height: 8px; }
       .vote-day { display: flex; min-width: 0; }
       .vote-card { display: flex; flex: 1 1 auto; flex-direction: column; align-items: stretch; gap: .4rem; width: 100%; min-width: 0; min-height: 8rem; height: 100%; margin: 0; padding: .55rem .3rem; border: .2rem solid transparent; border-radius: .6rem; background: var(--day-bg); color: var(--day-fg); font-size: clamp(.68rem, 1.45vw, .95rem); text-align: center; overflow: hidden; }
+      .vote-day { position: relative; }
       .vote-card:hover, .vote-card:focus-visible, .vote-card.is-selected { border-color: #f5c542; }
       .vote-card:focus-visible { outline: .2rem solid #14213d; outline-offset: .15rem; }
+      .vote-card { position: relative; touch-action: pan-y; transition: transform .12s ease-out; }
+      .vote-card[data-swipe-action="withdraw"] { border-color: #b91c1c; }
+      .vote-card__swipe-cue { position: absolute; inset: auto .25rem .2rem; padding: .15rem .25rem; border-radius: .25rem; background: #14213d; color: #fff; font-size: .75rem; font-weight: 700; }
+      .vote-card__swipe-cue[data-destructive="true"] { background: #991b1b; }
+      .vote-card__swipe-cue:empty { display: none; }
+      .run-event-list { display: grid; gap: .45rem; margin: .35rem 0 .55rem; padding: 0; list-style: none; }
+      .run-event-list:empty { display: none; }
+      .run-event-banner { position: relative; min-width: 0; padding: .55rem .7rem; border: 2px solid; border-radius: .65rem; overflow-wrap: anywhere; touch-action: pan-y; transition: transform .12s ease-out; }
+      .run-event-banner--proposed { border-color: #c2410c; background: #fff7ed; color: #7c2d12; }
+      .run-event-banner--scheduled { border-color: #15803d; background: #f0fdf4; color: #14532d; }
+      .run-event-banner[data-swipe-action="delete"] { border-color: #b91c1c; background: #fef2f2; }
+      .run-event-banner__summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: .2rem .6rem; min-width: 0; font-weight: 700; }
+      .run-event-banner__date, .run-event-banner__status, .run-event-banner__count { min-width: 0; overflow-wrap: anywhere; }
+      .run-event-banner__status { padding: .05rem .35rem; border-radius: .25rem; background: #ffedd5; color: #7c2d12; }
+      .run-event-banner--scheduled .run-event-banner__status { background: #dcfce7; color: #14532d; }
+      .run-event-banner__voters { display: flex; flex-wrap: wrap; gap: .05rem .3rem; min-width: 0; margin-top: .2rem; overflow-wrap: anywhere; }
+      .run-event-banner__voter { min-width: 0; overflow-wrap: anywhere; }
+      .run-event-actions { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .35rem; }
+      .run-event-actions button { width: auto; min-width: 7rem; min-height: 2.75rem; margin: 0; }
+      .run-event-actions .run-event-delete { background: #991b1b; }
+      .run-event-banner__swipe-cue { display: block; min-height: 1.3rem; margin-top: .2rem; font-weight: 700; }
+      .run-event-banner__swipe-cue[data-destructive="true"] { color: #991b1b; }
+      .run-event-banner__swipe-cue:empty { display: none; }
+      .run-event-day-action { position: absolute; z-index: 2; top: 50%; right: .15rem; width: 1px; height: 1px; min-height: 1px; margin: 0; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+      .run-event-day-action:focus-visible { width: auto; height: auto; min-height: 2.75rem; padding: .3rem .45rem; clip-path: none; }
+      .run-event-banner--pulse { animation: run-event-scheduled-pulse .8s ease-out 1; }
+      @keyframes run-event-scheduled-pulse { 50% { box-shadow: 0 0 0 .25rem #22c55e55; } }
+      @media (prefers-reduced-motion: reduce) { .vote-card, .run-event-banner { transition: none; } .run-event-banner--pulse { animation: none; } }
       .vote-card.is-read-only, .vote-card.is-read-only:hover { --day-bg: #68717a !important; --day-fg: #d9dde1 !important; filter: grayscale(1); opacity: .62; cursor: not-allowed; border-color: transparent; }
       .vote-card:disabled { cursor: not-allowed; }
       .vote-card__header { display: flex; justify-content: space-between; align-items: flex-start; gap: .25rem; min-width: 0; font-weight: 700; }
@@ -121,6 +167,8 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
         .vote-card__names { flex: 1 1 auto; min-height: 1.2rem; }
         .week-navigation { margin-top: .25rem; gap: .25rem; }
         .week-navigation button { min-height: 2.35rem; margin-top: 0; }
+        .run-event-banner { padding: .45rem .55rem; }
+        .run-event-actions button { flex: 1 1 8rem; }
       }
       @media (max-width: 380px) { .vote-page-main { padding-inline: .5rem; } .vote-page-main > section { padding-inline: .5rem; } }
     </style>
@@ -151,6 +199,25 @@ function adminActionBody(body) {
     || Object.keys(body).length !== 2 || body.confirmation !== true
     || typeof body.requestId !== 'string' || !CANONICAL_UUID.test(body.requestId)) {
     throw new AdminActionError(400, 'INVALID_ADMIN_ACTION_REQUEST', 'ข้อมูลการกระทำไม่ถูกต้อง / The administrator action request is invalid.');
+  }
+  return body;
+}
+
+function runEventActionBody(body, { proposal = false, status = false } = {}) {
+  const keys = proposal ? ['requestId'] : status
+    ? ['eventId', 'requestId', 'revision', 'status']
+    : ['eventId', 'requestId', 'revision'];
+  if (body === null || typeof body !== 'object' || Array.isArray(body)
+    || Object.keys(body).length !== keys.length || !keys.every((key) => Object.hasOwn(body, key))
+    || typeof body.requestId !== 'string' || !CANONICAL_UUID.test(body.requestId)) {
+    throw new RunEventError(400, 'INVALID_RUN_EVENT_REQUEST', 'คำขอกิจกรรมไม่ถูกต้อง / The event request is invalid.');
+  }
+  if (!proposal && (!Number.isSafeInteger(body.eventId) || body.eventId < 1
+    || !Number.isSafeInteger(body.revision) || body.revision < 1)) {
+    throw new RunEventError(400, 'INVALID_RUN_EVENT_REQUEST', 'คำขอกิจกรรมไม่ถูกต้อง / The event request is invalid.');
+  }
+  if (status && body.status !== 'proposed' && body.status !== 'scheduled') {
+    throw new RunEventError(400, 'INVALID_RUN_EVENT_REQUEST', 'คำขอกิจกรรมไม่ถูกต้อง / The event request is invalid.');
   }
   return body;
 }
@@ -405,17 +472,17 @@ const adminPage = () => page({
   `,
 });
 
-export function createApp({ databaseReady = false, database, env = process.env, now = () => new Date(), onVoteChanged = () => {}, onUserSessionsRevoked = () => {}, onUserDeleted = () => {}, onWeekReset = () => {} } = {}) {
+export function createApp({ databaseReady = false, database, env = process.env, now = () => new Date(), onVoteChanged = () => {}, onRunEventChanged = () => {}, onUserSessionsRevoked = () => {}, onUserDeleted = () => {}, onWeekReset = () => {} } = {}) {
   const app = express();
   app.disable('x-powered-by');
   app.use(express.json({ limit: '10kb' }));
   const auth = database ? createAuthService({ database, env, now }) : null;
 
   const sendError = (response, error) => {
-    const safe = error instanceof AuthError || error instanceof AdminActionError || error instanceof VoteError
+    const safe = error instanceof AuthError || error instanceof AdminActionError || error instanceof VoteError || error instanceof RunEventError
       ? error
       : new AuthError(500, 'SERVER_ERROR', 'เกิดข้อผิดพลาด กรุณาลองใหม่ / Something went wrong; please try again.');
-    if (!(error instanceof AuthError) && !(error instanceof AdminActionError) && !(error instanceof VoteError)) console.error('Request failed:', error);
+    if (!(error instanceof AuthError) && !(error instanceof AdminActionError) && !(error instanceof VoteError) && !(error instanceof RunEventError)) console.error('Request failed:', error);
     response.status(safe.status).json({ code: safe.code, message: safe.message });
   };
 
@@ -436,6 +503,8 @@ export function createApp({ databaseReady = false, database, env = process.env, 
   app.get('/vote-board.js', (_request, response) => response.type('application/javascript').send(voteBoardScript));
 
   app.get('/date-time.js', (_request, response) => response.type('application/javascript').send(dateTimeScript));
+
+  app.get('/run-events.js', (_request, response) => response.type('application/javascript').send(runEventsScript));
 
   if (auth) {
     app.post('/api/auth/register', async (request, response) => {
@@ -547,8 +616,76 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           throw new AuthError(400, 'RESET_CONFIRMATION_REQUIRED', 'ต้องยืนยันการรีเซ็ต / Explicit reset confirmation is required.');
         }
         const result = resetWeek(database, { monday: request.params.monday, now });
+        result.affectedDates.forEach((date) => onVoteChanged(date));
         onWeekReset(result.monday, result.sunday);
         response.status(204).end();
+      } catch (error) {
+        sendError(response, error);
+      }
+    });
+
+    app.post('/api/events/:date', (request, response) => {
+      response.setHeader('Cache-Control', 'no-store');
+      const session = auth.requireSession(request, response);
+      if (!session) return;
+      try {
+        auth.assertCsrf(request, session);
+        const { requestId } = runEventActionBody(request.body, { proposal: true });
+        const result = proposeRunEvent(database, { userId: session.user_id, eventDate: request.params.date, requestId, now });
+        if (result.changed) onRunEventChanged(request.params.date);
+        response.status(result.changed ? 201 : 200).json(result);
+      } catch (error) {
+        sendError(response, error);
+      }
+    });
+
+    app.delete('/api/events/:date', (request, response) => {
+      response.setHeader('Cache-Control', 'no-store');
+      const session = auth.requireSession(request, response);
+      if (!session) return;
+      try {
+        auth.assertCsrf(request, session);
+        const { eventId, revision, requestId } = runEventActionBody(request.body);
+        const result = withdrawRunEvent(database, {
+          userId: session.user_id, eventDate: request.params.date, eventId, revision, requestId, now,
+        });
+        if (result.changed) onRunEventChanged(request.params.date);
+        response.json(result);
+      } catch (error) {
+        sendError(response, error);
+      }
+    });
+
+    app.put('/api/admin/events/:date', (request, response) => {
+      response.setHeader('Cache-Control', 'no-store');
+      const session = auth.requireAdmin(request, response);
+      if (!session) return;
+      try {
+        auth.assertCsrf(request, session);
+        const { eventId, revision, requestId, status } = runEventActionBody(request.body, { status: true });
+        const result = setRunEventStatus(database, {
+          adminUserId: session.user_id, eventDate: request.params.date,
+          eventId, revision, requestId, status, now,
+        });
+        if (result.changed) onRunEventChanged(request.params.date);
+        response.json(result);
+      } catch (error) {
+        sendError(response, error);
+      }
+    });
+
+    app.delete('/api/admin/events/:date', (request, response) => {
+      response.setHeader('Cache-Control', 'no-store');
+      const session = auth.requireAdmin(request, response);
+      if (!session) return;
+      try {
+        auth.assertCsrf(request, session);
+        const { eventId, revision, requestId } = runEventActionBody(request.body);
+        const result = deleteRunEvent(database, {
+          adminUserId: session.user_id, eventDate: request.params.date, eventId, revision, requestId, now,
+        });
+        if (result.changed) onRunEventChanged(request.params.date);
+        response.json(result);
       } catch (error) {
         sendError(response, error);
       }
@@ -622,14 +759,22 @@ export function createApp({ databaseReady = false, database, env = process.env, 
             <button id="next-week" type="button">Next week</button>
           </nav>
           <p id="message" class="message" role="status"></p>
+          <ol id="run-events" class="run-event-list" aria-label="Run events"></ol>
           <ol id="week-days" class="vote-board" aria-label="Seven-day voting board / กระดานเลือกวันทั้งเจ็ด"></ol>
           ${resetControl}
           <a id="change-pin" class="button" href="/change-pin">เปลี่ยน PIN / Change PIN</a>
           <div class="actions"><button id="logout" type="button" class="secondary">Logout</button></div>
         </section>`,
         script: `import { applyVoteCardPresentation, colorForDay, configureVoterNamesMarquee, createSocketRepairController, createVoterNamesRegion as buildVoterNamesRegion, createVoteTimelineController, formatDisplayDate, patchVoteDay } from '/vote-board.js?v=issue-30';
+          import { attachHorizontalSwipe, formatRunEventDate, getDateCardSwipeAction, getDateCardSwipePreview, getRunEventBannerSwipeAction, getRunEventBannerSwipePreview, millisecondsUntilBangkokMidnight } from '/run-events.js?v=issue-32';
           let csrfToken = '';
           let sessionCheck = 0;
+          let weekLoadSequence = 0;
+          let weekState = null;
+          let eventsByDate = new Map();
+          let rolloverTimer = null;
+          const scheduledHighlightDates = new Set();
+          const pendingEventDates = new Set();
           let isAdmin = false;
           const currentWeekMonday = '${currentWeek}';
           let weekMonday = currentWeekMonday;
@@ -646,7 +791,8 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           const resetWeek = document.querySelector('#reset-week');
           const manageUser = document.querySelector('#manage-user');
           const message = document.querySelector('#message');
-          function guardProtectedContent() { protectedContent.hidden = true; csrfToken = ''; displayName.textContent = ''; weekDays.replaceChildren(); message.textContent = ''; }
+          const runEvents = document.querySelector('#run-events');
+          function guardProtectedContent() { weekLoadSequence += 1; window.clearTimeout(rolloverTimer); protectedContent.hidden = true; csrfToken = ''; displayName.textContent = ''; weekDays.replaceChildren(); runEvents.replaceChildren(); weekState = null; eventsByDate = new Map(); message.textContent = ''; }
           function redirectToLogin() { guardProtectedContent(); location.replace('/'); }
           function addText(parent, tag, text) { const element = document.createElement(tag); element.textContent = text; parent.append(element); return element; }
           const timelineController = createVoteTimelineController({
@@ -700,7 +846,151 @@ export function createApp({ databaseReady = false, database, env = process.env, 
             { thai: 'พฤ.', english: 'THU' }, { thai: 'ศ.', english: 'FRI' }, { thai: 'ส.', english: 'SAT' }, { thai: 'อา.', english: 'SUN' },
           ];
           function appendVoterNames(parent, names) { parent.append(buildVoterNamesRegion(document, names)); }
+          function eventActionLabel(action) {
+            return action === 'propose' ? 'Propose run' : action === 'withdraw' ? 'Withdraw proposal' : '';
+          }
+          function makeDayEventAction(row, day) {
+            row.querySelector('.run-event-day-action')?.remove();
+            const event = eventsByDate.get(day.date);
+            const selected = weekState?.currentUserSelectedDates.includes(day.date) ?? false;
+            if (!day.eligible || !selected || event?.status === 'scheduled') return;
+            const action = event ? 'withdraw' : 'propose';
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'run-event-day-action';
+            button.dataset.date = day.date;
+            button.dataset.runEventAction = action;
+            button.setAttribute('aria-label', eventActionLabel(action) + ' on ' + formatRunEventDate(day.date));
+            button.textContent = eventActionLabel(action);
+            button.disabled = pendingEventDates.has(day.date);
+            button.addEventListener('click', () => void submitRunEventAction(day.date, action, event));
+            row.append(button);
+          }
+          function renderRunEvents(events) {
+            runEvents.replaceChildren(...events.map((event) => {
+              const banner = document.createElement('li');
+              banner.className = 'run-event-banner run-event-banner--' + event.status;
+              if (scheduledHighlightDates.has(event.date) && event.status === 'scheduled') banner.classList.add('run-event-banner--pulse');
+              banner.dataset.date = event.date;
+              const summary = document.createElement('div');
+              summary.className = 'run-event-banner__summary';
+              const date = document.createElement('time');
+              date.className = 'run-event-banner__date';
+              date.dateTime = event.date;
+              date.textContent = formatRunEventDate(event.date);
+              const status = addText(summary, 'span', event.status === 'scheduled' ? 'Scheduled' : 'Proposed');
+              status.className = 'run-event-banner__status';
+              addText(summary, 'span', event.voteCount + (event.voteCount === 1 ? ' vote' : ' votes')).className = 'run-event-banner__count';
+              summary.prepend(date);
+              const voters = addText(banner, 'div', event.voterNames.length ? event.voterNames.join(', ') : 'No voters');
+              voters.className = 'run-event-banner__voters';
+              voters.setAttribute('aria-label', 'Current voters');
+              banner.prepend(summary);
+              if (isAdmin) {
+                const actions = document.createElement('div');
+                actions.className = 'run-event-actions';
+                const toggle = addText(actions, 'button', event.status === 'proposed' ? 'Schedule run' : 'Revert to proposed');
+                toggle.type = 'button';
+                toggle.dataset.runEventStatus = event.status;
+                toggle.disabled = pendingEventDates.has(event.date);
+                toggle.addEventListener('click', () => void submitRunEventAction(event.date, event.status === 'proposed' ? 'schedule' : 'revert', event));
+                const remove = addText(actions, 'button', 'Delete event');
+                remove.type = 'button';
+                remove.className = 'run-event-delete';
+                remove.disabled = pendingEventDates.has(event.date);
+                remove.addEventListener('click', () => {
+                  if (window.confirm('Delete this event permanently? There is no undo.')) {
+                    void submitRunEventAction(event.date, 'delete', event);
+                  }
+                });
+                banner.append(actions);
+              }
+              const cue = addText(banner, 'span', '');
+              cue.className = 'run-event-banner__swipe-cue';
+              cue.setAttribute('aria-live', 'polite');
+              attachHorizontalSwipe(banner, {
+                resolveAction: (deltaX, deltaY) => getRunEventBannerSwipeAction({ deltaX, deltaY, isAdmin }),
+                resolvePreview: (deltaX, deltaY) => getRunEventBannerSwipePreview({ deltaX, deltaY, isAdmin }),
+                onPreview(action, deltaX, ready) {
+                  cue.textContent = action ? (ready ? 'Release to delete' : 'Swipe ' + (deltaX < 0 ? 'left' : 'right') + ' to delete') : '';
+                  if (action) cue.dataset.destructive = 'true';
+                  else cue.removeAttribute('data-destructive');
+                },
+                onCommit(action) { if (action === 'delete') void submitRunEventAction(event.date, 'delete', event); },
+              });
+              return banner;
+            }));
+          }
+          async function submitRunEventAction(date, action, event) {
+            if (pendingEventDates.has(date)) return false;
+            pendingEventDates.add(date);
+            runEvents.querySelectorAll('.run-event-actions button').forEach((button) => {
+              if (button.closest('.run-event-banner')?.dataset.date === date) button.disabled = true;
+            });
+            const requestId = crypto.randomUUID();
+            let path = '/api/events/' + encodeURIComponent(date);
+            let method = 'POST';
+            let body = { requestId };
+            if (action === 'withdraw') {
+              method = 'DELETE';
+              body = { eventId: event.eventId, revision: event.revision, requestId };
+            } else if (action === 'schedule' || action === 'revert') {
+              path = '/api/admin/events/' + encodeURIComponent(date);
+              method = 'PUT';
+              body = { eventId: event.eventId, revision: event.revision, requestId, status: action === 'schedule' ? 'scheduled' : 'proposed' };
+            } else if (action === 'delete') {
+              path = '/api/admin/events/' + encodeURIComponent(date);
+              method = 'DELETE';
+              body = { eventId: event.eventId, revision: event.revision, requestId };
+            }
+            message.textContent = '';
+            try {
+              const response = await fetch(path, {
+                method,
+                headers: { 'content-type': 'application/json', 'x-csrf-token': csrfToken },
+                body: JSON.stringify(body),
+              });
+              if (response.status === 401) { redirectToLogin(); return false; }
+              const result = await response.json();
+              if (!response.ok) {
+                message.textContent = result.message || 'Could not update the run event.';
+                await loadWeek(weekMonday);
+                return false;
+              }
+              if (action === 'schedule' && result.changed) scheduledHighlightDates.add(date);
+              const refreshed = await loadWeek(weekMonday);
+              if (!refreshed) {
+                message.textContent = 'Could not refresh the event board. Please reload.';
+                return false;
+              }
+              message.textContent = action === 'propose' ? 'Run proposed.'
+                : action === 'withdraw' ? 'Proposal withdrawn.'
+                  : action === 'schedule' ? 'Run scheduled.'
+                    : action === 'revert' ? 'Run reverted to proposed.' : 'Event deleted.';
+              if (action === 'schedule' && result.changed) {
+                window.setTimeout(() => {
+                  scheduledHighlightDates.delete(date);
+                  runEvents.querySelector('.run-event-banner[data-date="' + date + '"]')?.classList.remove('run-event-banner--pulse');
+                }, 900);
+              }
+              return true;
+            } catch {
+              message.textContent = 'Could not update the run event. Please try again.';
+              await loadWeek(weekMonday);
+              return false;
+            } finally {
+              pendingEventDates.delete(date);
+              const dayAction = weekDays.querySelector('.run-event-day-action[data-date="' + date + '"]');
+              if (dayAction) dayAction.disabled = false;
+              runEvents.querySelectorAll('.run-event-actions button').forEach((button) => {
+                if (button.closest('.run-event-banner')?.dataset.date === date) button.disabled = false;
+              });
+            }
+          }
           function renderWeek(state) {
+            weekState = state;
+            eventsByDate = new Map(state.events.map((event) => [event.date, event]));
+            renderRunEvents(state.events);
             weekMonday = state.week.monday;
             weekHeading.textContent = 'สัปดาห์ที่ ' + state.week.isoWeek + ' / ISO week ' + state.week.isoWeek + ' (' + state.week.isoWeekYear + ')';
             weekRange.textContent = state.week.monday + ' – ' + state.week.sunday;
@@ -751,13 +1041,49 @@ export function createApp({ databaseReady = false, database, env = process.env, 
                 card.addEventListener('pointerdown', (event) => { if (event.pointerType === 'touch') card.classList.add('is-touch-paused'); });
                 card.addEventListener('click', () => toggleVote(day.date, card.dataset.selected !== 'true'));
               }
+              const swipeCue = addText(card, 'span', '');
+              swipeCue.className = 'vote-card__swipe-cue';
+              swipeCue.setAttribute('aria-live', 'polite');
+              attachHorizontalSwipe(card, {
+                resolveAction: (deltaX, deltaY) => getDateCardSwipeAction({
+                  deltaX, deltaY,
+                  eligible: card.dataset.eligible === 'true',
+                  selected: card.dataset.selected === 'true',
+                  status: eventsByDate.get(day.date)?.status ?? null,
+                }),
+                resolvePreview: (deltaX, deltaY) => getDateCardSwipePreview({
+                  deltaX, deltaY,
+                  eligible: card.dataset.eligible === 'true',
+                  selected: card.dataset.selected === 'true',
+                  status: eventsByDate.get(day.date)?.status ?? null,
+                }),
+                onPreview(action, deltaX, ready) {
+                  const label = action?.replaceAll('withdraw', 'withdraw proposal');
+                  swipeCue.textContent = action ? (ready ? 'Release to ' : 'Swipe ' + (deltaX > 0 ? 'right' : 'left') + ' to ') + label : '';
+                  if (action === 'withdraw') swipeCue.dataset.destructive = 'true';
+                  else swipeCue.removeAttribute('data-destructive');
+                },
+                onCommit(action) { void submitRunEventAction(day.date, action, eventsByDate.get(day.date)); },
+              });
               row.append(card);
+              makeDayEventAction(row, day);
               return row;
             });
             weekDays.replaceChildren(...rows);
             configureVoterNamesMarquee(weekDays);
           }
           function patchDay(patch) {
+            const day = weekState?.days.find((currentDay) => currentDay.date === patch.date);
+            if (day) {
+              day.voteCount = patch.voteCount;
+              day.voterNames = patch.voterNames;
+              const selectedDates = new Set(weekState.currentUserSelectedDates);
+              if (patch.selected) selectedDates.add(patch.date);
+              else selectedDates.delete(patch.date);
+              weekState.currentUserSelectedDates = [...selectedDates].sort();
+              const row = weekDays.querySelector('.vote-day[data-date="' + patch.date + '"]');
+              if (row) makeDayEventAction(row, day);
+            }
             return patchVoteDay({ weekDays, patch, createVoterNamesRegion, configureVoterNamesMarquee });
           }
           function createVoterNamesRegion(names) { return buildVoterNamesRegion(document, names); }
@@ -805,8 +1131,30 @@ export function createApp({ databaseReady = false, database, env = process.env, 
               resetWeek.disabled = resetWeek.hidden;
             }
           }
-          async function loadWeek(monday) { message.textContent = ''; try { const response = await fetch('/api/weeks/' + encodeURIComponent(monday), { cache: 'no-store' }); const state = await response.json(); if (response.status === 401) { redirectToLogin(); return; } if (!response.ok) { message.textContent = state.message; return; } renderWeek(state); } catch { message.textContent = 'โหลดสัปดาห์ไม่สำเร็จ / Could not load this week.'; } }
-          async function loadSession() { const currentCheck = ++sessionCheck; guardProtectedContent(); try { const response = await fetch('/api/session', { cache: 'no-store' }); if (currentCheck !== sessionCheck) return; if (!response.ok) { redirectToLogin(); return; } const session = await response.json(); if (currentCheck !== sessionCheck) return; csrfToken = session.csrfToken; isAdmin = session.role === 'admin'; displayName.textContent = session.displayName; protectedContent.hidden = false; await Promise.all([loadWeek(weekMonday), loadTimeline()]); } catch { if (currentCheck === sessionCheck) redirectToLogin(); } }
+          async function loadWeek(monday) {
+            const sequence = ++weekLoadSequence;
+            message.textContent = '';
+            try {
+              const response = await fetch('/api/weeks/' + encodeURIComponent(monday), { cache: 'no-store' });
+              const state = await response.json();
+              if (sequence !== weekLoadSequence) return false;
+              if (response.status === 401) { redirectToLogin(); return false; }
+              if (!response.ok) { message.textContent = state.message; return false; }
+              renderWeek(state);
+              return true;
+            } catch {
+              if (sequence === weekLoadSequence) message.textContent = 'โหลดสัปดาห์ไม่สำเร็จ / Could not load this week.';
+              return false;
+            }
+          }
+          function scheduleBangkokDayRefresh() {
+            window.clearTimeout(rolloverTimer);
+            rolloverTimer = window.setTimeout(async () => {
+              await Promise.all([loadWeek(weekMonday), loadTimeline()]);
+              scheduleBangkokDayRefresh();
+            }, millisecondsUntilBangkokMidnight());
+          }
+          async function loadSession() { const currentCheck = ++sessionCheck; guardProtectedContent(); try { const response = await fetch('/api/session', { cache: 'no-store' }); if (currentCheck !== sessionCheck) return; if (!response.ok) { redirectToLogin(); return; } const session = await response.json(); if (currentCheck !== sessionCheck) return; csrfToken = session.csrfToken; isAdmin = session.role === 'admin'; displayName.textContent = session.displayName; protectedContent.hidden = false; await Promise.all([loadWeek(weekMonday), loadTimeline()]); scheduleBangkokDayRefresh(); } catch { if (currentCheck === sessionCheck) redirectToLogin(); } }
           previousWeek.addEventListener('click', () => loadWeek(previousWeek.dataset.monday));
           currentWeekButton.addEventListener('click', () => loadWeek(currentWeekMonday));
           nextWeek.addEventListener('click', () => { if (!nextWeek.disabled) loadWeek(nextWeek.dataset.monday); });
@@ -816,6 +1164,9 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           const socket = window.io({ transports: ['websocket'] });
           const socketRepair = createSocketRepairController({ loadWeek: () => loadWeek(weekMonday), patchDay });
           socket.on('vote:changed', (patch) => { socketRepair.handlePatch(patch); timelineController.patch(patch); });
+          socket.on('event:changed', ({ date }) => {
+            if (weekState?.days.some((day) => day.date === date)) void loadWeek(weekMonday);
+          });
           socket.on('week:reset', ({ monday }) => { if (monday === weekMonday) loadWeek(weekMonday); loadTimeline(); });
           socket.on('connect', () => { void socketRepair.handleConnect(); void loadTimeline(); });
           socket.on('auth:revoked', redirectToLogin);

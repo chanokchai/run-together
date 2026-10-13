@@ -1,5 +1,5 @@
 import { Server } from 'socket.io';
-import { getDayPatch } from './domain.js';
+import { getDayPatch, getRunEventForDate } from './domain.js';
 
 function isLocalProxy(request) {
   const remote = request.socket?.remoteAddress;
@@ -47,7 +47,13 @@ export function attachRealtime(server, { auth, database }) {
     for (const socket of io.sockets.sockets.values()) {
       const patch = getDayPatch(database, { date, currentUserId: socket.data.userId });
       socket.emit('vote:changed', patch);
+      socket.emit('event:changed', { date, event: getRunEventForDate(database, { eventDate: date }) });
     }
+  }
+
+  function broadcastRunEventChanged(date) {
+    const event = getRunEventForDate(database, { eventDate: date });
+    io.emit('event:changed', { date, event });
   }
 
   function disconnectUser(userId) {
@@ -62,5 +68,5 @@ export function attachRealtime(server, { auth, database }) {
     io.emit('week:reset', { monday, sunday });
   }
 
-  return { io, broadcastVoteChanged, broadcastWeekReset, disconnectUser };
+  return { io, broadcastVoteChanged, broadcastRunEventChanged, broadcastWeekReset, disconnectUser };
 }

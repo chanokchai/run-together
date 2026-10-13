@@ -170,6 +170,7 @@ export function setVote(database, { userId, voteDate, now = () => new Date(), bo
         ON CONFLICT (user_id, vote_date) DO NOTHING
       `).run(userId, canonicalDate, timestamp(now))
       : database.prepare('DELETE FROM votes WHERE user_id = ? AND vote_date = ?').run(userId, canonicalDate);
+    if (!selected && result.changes > 0) deleteEmptyProposedEvent(database, canonicalDate);
     return {
       changed: result.changes > 0,
       patch: getDayState(database, { date: canonicalDate, currentUserId: userId }),
@@ -227,6 +228,13 @@ export function getWeekState(database, { monday, currentUserId, now = () => new 
       voterNames,
     };
   });
+  const today = getBangkokDate(now);
+  const events = database.prepare(`
+    SELECT event_date AS date
+    FROM run_events
+    WHERE event_date >= ? AND event_date >= ? AND event_date <= ?
+    ORDER BY event_date ASC
+  `).all(monday, today, sunday).map(({ date }) => getRunEventForDate(database, { eventDate: date }));
   const isoWeek = getIsoWeek(monday);
   const nextMonday = addDays(monday, 7);
   return {
@@ -243,6 +251,7 @@ export function getWeekState(database, { monday, currentUserId, now = () => new 
     },
     currentUserSelectedDates: [...new Set(currentUserSelectedDates)].sort(),
     days,
+    events,
   };
 }
 
@@ -260,8 +269,13 @@ export function resetWeek(database, { monday, now = () => new Date() }) {
   }
   const { sunday } = getWeekRange(monday);
   const transaction = database.transaction(() => {
+    const affectedDates = database.prepare(`
+      SELECT DISTINCT vote_date AS date FROM votes
+      WHERE vote_date >= ? AND vote_date <= ? ORDER BY vote_date ASC
+    `).all(monday, sunday).map(({ date }) => date);
     const result = database.prepare('DELETE FROM votes WHERE vote_date >= ? AND vote_date <= ?').run(monday, sunday);
-    return { monday, sunday, deletedCount: result.changes };
+    affectedDates.forEach((date) => deleteEmptyProposedEvent(database, date));
+    return { monday, sunday, deletedCount: result.changes, affectedDates };
   });
   return transaction();
 }
@@ -295,6 +309,7 @@ export function deleteUserAndCollectAffectedDates(database, userId) {
       'SELECT DISTINCT vote_date AS date FROM votes WHERE user_id = ? ORDER BY vote_date ASC',
     ).all(userId).map(({ date }) => date);
     database.prepare('DELETE FROM users WHERE id = ?').run(userId);
+    affectedDates.forEach((date) => deleteEmptyProposedEvent(database, date));
     return { user, affectedDates };
   });
   return transaction();
@@ -352,6 +367,7 @@ export function resetUserVotes(database, { adminUserId, targetUserId, requestId,
     const target = requireNormalTarget(database, targetUserId);
     const affectedDates = affectedVotes(database, targetUserId);
     const deletedVoteCount = database.prepare('DELETE FROM votes WHERE user_id = ?').run(targetUserId).changes;
+    affectedDates.forEach((date) => deleteEmptyProposedEvent(database, date));
     insertAdminAudit(database, {
       requestId,
       adminUserId,
@@ -383,7 +399,287 @@ export function deleteUserWithAudit(database, { adminUserId, targetUserId, reque
       occurredAt: timestamp(now),
     });
     database.prepare('DELETE FROM users WHERE id = ?').run(targetUserId);
+    affectedDates.forEach((date) => deleteEmptyProposedEvent(database, date));
     return { deletedVoteCount, requestId, replayed: false, affectedDates };
+  });
+  return transaction();
+}
+
+const RUN_EVENT_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+export class RunEventError extends Error {
+  constructor(status, code, message, { cause } = {}) {
+    super(message, { cause });
+    this.status = status;
+    this.code = code;
+  }
+}
+
+const RUN_EVENT_MESSAGES = {
+  invalidDate: 'วันที่กิจกรรมไม่ถูกต้อง / The event date is invalid.',
+  closedDate: 'วันนี้ไม่เปิดให้เลือก / This event date is not available.',
+  invalidRequest: 'คำขอกิจกรรมไม่ถูกต้อง / The event request is invalid.',
+  notMember: 'ไม่พบสมาชิกปัจจุบัน / The current member is not available.',
+  notVoter: 'ต้องเลือกวันที่นี้ก่อน / Vote for this date before changing its proposal.',
+  adminRequired: 'ต้องเป็นผู้ดูแลระบบ / Administrator access is required.',
+  eventExists: 'มีข้อเสนอสำหรับวันนี้แล้ว / An event already exists for this date.',
+  staleEvent: 'กิจกรรมมีการเปลี่ยนแปลงแล้ว / This event has changed; reload and try again.',
+  scheduledLocked: 'กิจกรรมที่กำหนดแล้วเปลี่ยนจากบัตรวันไม่ได้ / A scheduled event cannot be changed from the date card.',
+  requestConflict: 'รหัสคำขอนี้ถูกใช้กับการกระทำอื่น / The request ID was already used for another action.',
+};
+
+function canonicalEventDate(value) {
+  try {
+    return formatParsedDate(parseIsoDate(value));
+  } catch (error) {
+    throw new RunEventError(400, 'INVALID_RUN_EVENT_DATE', RUN_EVENT_MESSAGES.invalidDate, { cause: error });
+  }
+}
+
+function assertRunEventRequestId(requestId) {
+  if (typeof requestId !== 'string' || !RUN_EVENT_UUID.test(requestId)) {
+    throw new RunEventError(400, 'INVALID_RUN_EVENT_REQUEST', RUN_EVENT_MESSAGES.invalidRequest);
+  }
+}
+
+function assertRunEventExpectation(eventId, revision) {
+  if (!Number.isSafeInteger(eventId) || eventId < 1
+    || !Number.isSafeInteger(revision) || revision < 1) {
+    throw new RunEventError(400, 'INVALID_RUN_EVENT_REQUEST', RUN_EVENT_MESSAGES.invalidRequest);
+  }
+}
+
+function assertWritableEventDate(eventDate, now) {
+  if (!isDateWritable(eventDate, now)) {
+    throw new RunEventError(400, 'RUN_EVENT_DATE_CLOSED', RUN_EVENT_MESSAGES.closedDate);
+  }
+}
+
+function requireCurrentEventMember(database, userId, { admin = false } = {}) {
+  const user = database.prepare('SELECT id, role FROM users WHERE id = ?').get(userId);
+  if (!user) throw new RunEventError(403, 'RUN_EVENT_MEMBER_REQUIRED', RUN_EVENT_MESSAGES.notMember);
+  if (admin && user.role !== 'admin') {
+    throw new RunEventError(403, 'RUN_EVENT_ADMIN_REQUIRED', RUN_EVENT_MESSAGES.adminRequired);
+  }
+  return user;
+}
+
+function runEventRequestSignature(request) {
+  return {
+    actorUserId: request.actorUserId,
+    action: request.action,
+    eventDate: request.eventDate,
+    eventId: request.eventId ?? null,
+    expectedRevision: request.expectedRevision ?? null,
+    requestedStatus: request.requestedStatus ?? null,
+  };
+}
+
+function replayRunEventRequest(database, request) {
+  const existing = database.prepare('SELECT * FROM run_event_requests WHERE request_id = ?').get(request.requestId);
+  if (!existing) return null;
+  const expected = runEventRequestSignature(request);
+  if (existing.actor_user_id !== expected.actorUserId
+    || existing.action !== expected.action
+    || existing.event_date !== expected.eventDate
+    || existing.event_id !== expected.eventId
+    || existing.expected_revision !== expected.expectedRevision
+    || existing.requested_status !== expected.requestedStatus) {
+    throw new RunEventError(409, 'RUN_EVENT_REQUEST_ID_CONFLICT', RUN_EVENT_MESSAGES.requestConflict);
+  }
+  return { changed: false, replayed: true, event: getRunEventForDate(database, { eventDate: request.eventDate }) };
+}
+
+function recordRunEventRequest(database, request, { now = () => new Date() } = {}) {
+  const signature = runEventRequestSignature(request);
+  database.prepare(`
+    INSERT INTO run_event_requests
+      (request_id, actor_user_id, action, event_date, event_id, expected_revision, requested_status, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    request.requestId,
+    signature.actorUserId,
+    signature.action,
+    signature.eventDate,
+    signature.eventId,
+    signature.expectedRevision,
+    signature.requestedStatus,
+    timestamp(now),
+  );
+}
+
+function requireCurrentDateVoter(database, userId, eventDate) {
+  const vote = database.prepare(
+    'SELECT 1 AS present FROM votes WHERE user_id = ? AND vote_date = ?',
+  ).get(userId, eventDate);
+  if (!vote) throw new RunEventError(403, 'RUN_EVENT_VOTER_REQUIRED', RUN_EVENT_MESSAGES.notVoter);
+}
+
+function deleteEmptyProposedEvent(database, eventDate) {
+  const voteCount = database.prepare('SELECT COUNT(*) AS count FROM votes WHERE vote_date = ?').get(eventDate).count;
+  if (voteCount !== 0) return false;
+  return database.prepare("DELETE FROM run_events WHERE event_date = ? AND status = 'proposed'").run(eventDate).changes > 0;
+}
+
+function assertFreshRunEvent(event, { eventId, revision }) {
+  if (!event || event.id !== eventId || event.revision !== revision) {
+    throw new RunEventError(409, 'STALE_RUN_EVENT', RUN_EVENT_MESSAGES.staleEvent);
+  }
+}
+
+export function getRunEventForDate(database, { eventDate }) {
+  const canonicalDate = canonicalEventDate(eventDate);
+  const event = database.prepare(`
+    SELECT events.id, events.event_date, events.status, events.revision,
+      events.proposed_at, proposer.name AS proposed_by,
+      events.scheduled_at, scheduler.name AS scheduled_by
+    FROM run_events AS events
+    LEFT JOIN users AS proposer ON proposer.id = events.proposed_by
+    LEFT JOIN users AS scheduler ON scheduler.id = events.scheduled_by
+    WHERE events.event_date = ?
+  `).get(canonicalDate);
+  if (!event) return null;
+  const voterNames = database.prepare(`
+    SELECT users.name
+    FROM votes JOIN users ON users.id = votes.user_id
+    WHERE votes.vote_date = ?
+    ORDER BY users.name_key ASC, users.name ASC, users.id ASC
+  `).all(canonicalDate).map(({ name }) => name);
+  return {
+    eventId: event.id,
+    date: event.event_date,
+    status: event.status,
+    revision: event.revision,
+    proposedAt: event.proposed_at,
+    proposedBy: event.proposed_by,
+    scheduledAt: event.scheduled_at,
+    scheduledBy: event.scheduled_by,
+    voteCount: voterNames.length,
+    voterNames,
+  };
+}
+
+export function proposeRunEvent(database, { userId, eventDate, requestId, now = () => new Date() }) {
+  const canonicalDate = canonicalEventDate(eventDate);
+  assertRunEventRequestId(requestId);
+  const request = {
+    requestId, actorUserId: userId, action: 'propose', eventDate: canonicalDate, requestedStatus: 'proposed',
+  };
+  const transaction = database.transaction(() => {
+    requireCurrentEventMember(database, userId);
+    const replay = replayRunEventRequest(database, request);
+    if (replay) return replay;
+    assertWritableEventDate(canonicalDate, now);
+    requireCurrentDateVoter(database, userId, canonicalDate);
+    if (database.prepare('SELECT id FROM run_events WHERE event_date = ?').get(canonicalDate)) {
+      throw new RunEventError(409, 'RUN_EVENT_ALREADY_EXISTS', RUN_EVENT_MESSAGES.eventExists);
+    }
+    let eventId;
+    try {
+      const inserted = database.prepare(`
+        INSERT INTO run_events (event_date, status, revision, proposed_by, proposed_at)
+        VALUES (?, 'proposed', 1, ?, ?)
+      `).run(canonicalDate, userId, timestamp(now));
+      eventId = Number(inserted.lastInsertRowid);
+    } catch (error) {
+      if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+        throw new RunEventError(409, 'RUN_EVENT_ALREADY_EXISTS', RUN_EVENT_MESSAGES.eventExists, { cause: error });
+      }
+      throw error;
+    }
+    recordRunEventRequest(database, request, { now });
+    return { changed: true, replayed: false, event: getRunEventForDate(database, { eventDate: canonicalDate }) };
+  });
+  return transaction();
+}
+
+export function withdrawRunEvent(database, { userId, eventDate, eventId, revision, requestId, now = () => new Date() }) {
+  const canonicalDate = canonicalEventDate(eventDate);
+  assertRunEventRequestId(requestId);
+  assertRunEventExpectation(eventId, revision);
+  const request = { requestId, actorUserId: userId, action: 'withdraw', eventDate: canonicalDate, eventId, expectedRevision: revision };
+  const transaction = database.transaction(() => {
+    requireCurrentEventMember(database, userId);
+    const replay = replayRunEventRequest(database, request);
+    if (replay) return replay;
+    assertWritableEventDate(canonicalDate, now);
+    requireCurrentDateVoter(database, userId, canonicalDate);
+    const current = database.prepare('SELECT id, status, revision FROM run_events WHERE event_date = ?').get(canonicalDate);
+    assertFreshRunEvent(current, { eventId, revision });
+    if (current.status !== 'proposed') {
+      throw new RunEventError(409, 'RUN_EVENT_SCHEDULED', RUN_EVENT_MESSAGES.scheduledLocked);
+    }
+    database.prepare('DELETE FROM run_events WHERE id = ?').run(eventId);
+    recordRunEventRequest(database, request, { now });
+    return { changed: true, replayed: false, event: null };
+  });
+  return transaction();
+}
+
+export function setRunEventStatus(database, {
+  adminUserId, eventDate, eventId, revision, status, requestId, now = () => new Date(),
+}) {
+  const canonicalDate = canonicalEventDate(eventDate);
+  assertRunEventRequestId(requestId);
+  assertRunEventExpectation(eventId, revision);
+  if (status !== 'proposed' && status !== 'scheduled') {
+    throw new RunEventError(400, 'INVALID_RUN_EVENT_REQUEST', RUN_EVENT_MESSAGES.invalidRequest);
+  }
+  const action = status === 'scheduled' ? 'schedule' : 'revert';
+  const request = {
+    requestId, actorUserId: adminUserId, action, eventDate: canonicalDate, eventId,
+    expectedRevision: revision, requestedStatus: status,
+  };
+  const transaction = database.transaction(() => {
+    requireCurrentEventMember(database, adminUserId, { admin: true });
+    const replay = replayRunEventRequest(database, request);
+    if (replay) return replay;
+    assertWritableEventDate(canonicalDate, now);
+    const current = database.prepare('SELECT id, status, revision FROM run_events WHERE event_date = ?').get(canonicalDate);
+    assertFreshRunEvent(current, { eventId, revision });
+    let changed = false;
+    if (current.status !== status) {
+      if (status === 'scheduled') {
+        database.prepare(`
+          UPDATE run_events
+          SET status = 'scheduled', revision = revision + 1, scheduled_by = ?, scheduled_at = ?
+          WHERE id = ? AND revision = ?
+        `).run(adminUserId, timestamp(now), eventId, revision);
+      } else {
+        const votes = database.prepare('SELECT COUNT(*) AS count FROM votes WHERE vote_date = ?').get(canonicalDate).count;
+        if (votes === 0) {
+          database.prepare("DELETE FROM run_events WHERE id = ? AND revision = ? AND status = 'scheduled'").run(eventId, revision);
+        } else {
+          database.prepare(`
+            UPDATE run_events
+            SET status = 'proposed', revision = revision + 1, scheduled_by = NULL, scheduled_at = NULL
+            WHERE id = ? AND revision = ?
+          `).run(eventId, revision);
+        }
+      }
+      changed = true;
+    }
+    recordRunEventRequest(database, request, { now });
+    return { changed, replayed: false, event: getRunEventForDate(database, { eventDate: canonicalDate }) };
+  });
+  return transaction();
+}
+
+export function deleteRunEvent(database, { adminUserId, eventDate, eventId, revision, requestId, now = () => new Date() }) {
+  const canonicalDate = canonicalEventDate(eventDate);
+  assertRunEventRequestId(requestId);
+  assertRunEventExpectation(eventId, revision);
+  const request = { requestId, actorUserId: adminUserId, action: 'delete', eventDate: canonicalDate, eventId, expectedRevision: revision };
+  const transaction = database.transaction(() => {
+    requireCurrentEventMember(database, adminUserId, { admin: true });
+    const replay = replayRunEventRequest(database, request);
+    if (replay) return replay;
+    assertWritableEventDate(canonicalDate, now);
+    const current = database.prepare('SELECT id, status, revision FROM run_events WHERE event_date = ?').get(canonicalDate);
+    assertFreshRunEvent(current, { eventId, revision });
+    database.prepare('DELETE FROM run_events WHERE id = ? AND revision = ?').run(eventId, revision);
+    recordRunEventRequest(database, request, { now });
+    return { changed: true, replayed: false, event: null };
   });
   return transaction();
 }
