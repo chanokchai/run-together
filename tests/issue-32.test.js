@@ -414,9 +414,11 @@ test('event APIs enforce authentication, CSRF, current-voter and admin permissio
 });
 
 test('connected clients receive committed shared event state and recover date-specific voter updates', async () => {
-  await withHttpServer(async (baseUrl) => {
+  await withHttpServer(async (baseUrl, server) => {
     const alice = await registerMember(baseUrl, 'Realtime Alice');
     const bob = await registerMember(baseUrl, 'Realtime Bob');
+    const admin = await adminSessionFor(baseUrl);
+    assert.equal(admin.response.status, 200);
     for (const member of [alice, bob]) {
       const vote = await eventRequest(baseUrl, '/api/votes/2024-03-01', {
         method: 'PUT', cookie: member.cookie, csrfToken: member.session.csrfToken, body: { selected: true },
@@ -444,6 +446,30 @@ test('connected clients receive committed shared event state and recover date-sp
       assert.equal(aliceEvent.event.voteCount, 2);
       assert.deepEqual(aliceEvent.event.voterNames, ['Realtime Alice', 'Realtime Bob']);
 
+      const scheduleMessages = sockets.map((socket) => new Promise((resolve) => socket.once('event:changed', resolve)));
+      const schedule = await eventRequest(baseUrl, '/api/admin/events/2024-03-01', {
+        method: 'PUT', cookie: admin.cookie, csrfToken: admin.session.csrfToken,
+        body: { status: 'scheduled', eventId: aliceEvent.event.eventId, revision: aliceEvent.event.revision, requestId: requestId(62) },
+      });
+      assert.equal(schedule.status, 200);
+      const scheduledEvent = (await schedule.json()).event;
+      const [aliceScheduled, bobScheduled] = await Promise.all(scheduleMessages);
+      assert.equal(aliceScheduled.event.status, 'scheduled');
+      assert.equal(bobScheduled.event.status, 'scheduled');
+      assert.equal(aliceScheduled.event.revision, scheduledEvent.revision);
+
+      const revertMessages = sockets.map((socket) => new Promise((resolve) => socket.once('event:changed', resolve)));
+      const revert = await eventRequest(baseUrl, '/api/admin/events/2024-03-01', {
+        method: 'PUT', cookie: admin.cookie, csrfToken: admin.session.csrfToken,
+        body: { status: 'proposed', eventId: scheduledEvent.eventId, revision: scheduledEvent.revision, requestId: requestId(63) },
+      });
+      assert.equal(revert.status, 200);
+      const revertedEvent = (await revert.json()).event;
+      const [aliceReverted, bobReverted] = await Promise.all(revertMessages);
+      assert.equal(aliceReverted.event.status, 'proposed');
+      assert.equal(bobReverted.event.status, 'proposed');
+      assert.equal(bobReverted.event.revision, revertedEvent.revision);
+
       const bobVoteChanged = new Promise((resolve) => sockets[0].once('event:changed', resolve));
       const removeBob = await eventRequest(baseUrl, '/api/votes/2024-03-01', {
         method: 'PUT', cookie: bob.cookie, csrfToken: bob.session.csrfToken, body: { selected: false },
@@ -460,6 +486,33 @@ test('connected clients receive committed shared event state and recover date-sp
       assert.equal(removeAlice.status, 200);
       const removedEvent = await bobRemoval;
       assert.equal(removedEvent.event, null);
+
+      for (const member of [alice, bob]) {
+        const addVote = await eventRequest(baseUrl, '/api/votes/2024-03-01', {
+          method: 'PUT', cookie: member.cookie, csrfToken: member.session.csrfToken, body: { selected: true },
+        });
+        assert.equal(addVote.status, 200);
+      }
+      const recreatedMessages = sockets.map((socket) => new Promise((resolve) => socket.once('event:changed', resolve)));
+      const recreatedResponse = await eventRequest(baseUrl, '/api/events/2024-03-01', {
+        method: 'POST', cookie: alice.cookie, csrfToken: alice.session.csrfToken, body: { requestId: requestId(64) },
+      });
+      assert.equal(recreatedResponse.status, 201);
+      const recreated = (await recreatedResponse.json()).event;
+      const [aliceRecreated, bobRecreated] = await Promise.all(recreatedMessages);
+      assert.equal(aliceRecreated.event.eventId, recreated.eventId);
+      assert.equal(bobRecreated.event.eventId, recreated.eventId);
+
+      const deleteMessages = sockets.map((socket) => new Promise((resolve) => socket.once('event:changed', resolve)));
+      const deletion = await eventRequest(baseUrl, '/api/admin/events/2024-03-01', {
+        method: 'DELETE', cookie: admin.cookie, csrfToken: admin.session.csrfToken,
+        body: { eventId: recreated.eventId, revision: recreated.revision, requestId: requestId(65) },
+      });
+      assert.equal(deletion.status, 200);
+      const [aliceDeleted, bobDeleted] = await Promise.all(deleteMessages);
+      assert.equal(aliceDeleted.event, null);
+      assert.equal(bobDeleted.event, null);
+      assert.equal(server.database.prepare('SELECT COUNT(*) AS count FROM votes WHERE vote_date = ?').get('2024-03-01').count, 2);
     } finally {
       sockets.forEach((socket) => socket.close());
     }
