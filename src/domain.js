@@ -198,7 +198,13 @@ export function getEligiblePeriodVoteTotals(database, { now = () => new Date() }
     days.push({ date, voteCount: countByDate.get(date) ?? 0 });
     if (date === endDate) break;
   }
-  return { startDate, endDate, days };
+  const scheduledDates = database.prepare(`
+    SELECT event_date AS date
+    FROM run_events
+    WHERE status = 'scheduled' AND event_date >= ? AND event_date <= ?
+    ORDER BY event_date ASC
+  `).all(startDate, endDate).map(({ date }) => date);
+  return { startDate, endDate, days, scheduledDates };
 }
 
 export function getWeekState(database, { monday, currentUserId, now = () => new Date() }) {

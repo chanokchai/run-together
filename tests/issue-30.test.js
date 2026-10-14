@@ -104,7 +104,7 @@ test('vote timeline returns every inclusive eligible date and aggregate counts o
     assert.deepEqual(result.days.find(({ date }) => date === '2026-10-11'), { date: '2026-10-11', voteCount: 2 });
     assert.deepEqual(result.days.find(({ date }) => date === '2026-10-12'), { date: '2026-10-12', voteCount: 0 });
     assert.deepEqual(result.days.find(({ date }) => date === '2026-10-25'), { date: '2026-10-25', voteCount: 2 });
-    assert.deepEqual(Object.keys(result).sort(), ['days', 'endDate', 'startDate']);
+    assert.deepEqual(Object.keys(result).sort(), ['days', 'endDate', 'scheduledDates', 'startDate']);
     assert.ok(result.days.every((day) => Object.keys(day).sort().join(',') === 'date,voteCount'));
     const serialized = JSON.stringify(result);
     assert.equal(users.some(({ name }) => serialized.includes(name)), false);

@@ -90,11 +90,19 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       .vote-timeline__count { color: #14213d; font-size: clamp(.62rem, 2.8vw, .72rem); line-height: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
       .vote-timeline__day:nth-child(even) .vote-timeline__count { transform: translateY(15px); }
       .vote-timeline__track { position: relative; display: flex; min-width: 0; align-items: flex-end; justify-content: center; border-bottom: 1px solid #52606d; }
-      .vote-timeline__bar { display: block; width: min(100%, .8rem); min-height: 1px; border-radius: .15rem .15rem 0 0; background: #0b3d2e; }
+      .vote-timeline__bar { display: block; width: min(100%, .8rem); min-height: 0; border-radius: .15rem .15rem 0 0; background: #0b3d2e; }
       .vote-timeline__bar.is-top-ranked { border: 1px dashed #4c1d95; border-bottom: 0; background: #6b21a8; }
       .vote-timeline__top-cue { position: absolute; top: 0; left: 50%; z-index: 1; color: #fff; font-size: .62rem; line-height: 1; transform: translateX(-50%); }
       .vote-timeline__date { display: flex; flex-direction: column; align-items: center; overflow: hidden; color: #14213d; font-size: .62rem; line-height: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
       .vote-timeline__day:nth-child(even) .vote-timeline__date { transform: translateY(12px); }
+      .vote-timeline__count.is-zero { visibility: hidden; }
+      .vote-timeline__date.is-scheduled { position: relative; border-radius: .25rem; outline: 1px solid #15803d; background: #dcfce7; color: #14532d; font-weight: 700; }
+      .vote-timeline__date.is-scheduled::after, .run-event-banner--scheduled::after { content: ""; position: absolute; inset: 1px; border-radius: inherit; pointer-events: none; opacity: 0; background-image: radial-gradient(circle, #f59e0b 1.2px, transparent 1.8px), radial-gradient(circle, #15803d 1px, transparent 1.6px), radial-gradient(circle, #2563eb 1px, transparent 1.6px), radial-gradient(circle, #dc2626 1px, transparent 1.6px); background-size: 12px 5px, 12px 5px, 5px 12px, 5px 12px; background-position: left top, right bottom, left bottom, right top; background-repeat: repeat-x, repeat-x, repeat-y, repeat-y; }
+      .vote-timeline__date.is-celebrating, .vote-timeline__bar.is-celebrating, .run-event-banner--scheduled.is-celebrating { animation: scheduled-border-confetti 1.5s ease-out 1; }
+      .vote-timeline__date.is-celebrating::after, .run-event-banner--scheduled.is-celebrating::after { animation: scheduled-confetti-dots 1.5s ease-out 1; }
+      .vote-timeline__bar.is-celebrating { filter: drop-shadow(0 0 2px #f59e0b); }
+      @keyframes scheduled-border-confetti { 0%, 100% { box-shadow: 0 0 0 0 #22c55e00; } 30% { box-shadow: 0 0 0 3px #22c55e88; } 62% { box-shadow: 0 0 0 1px #f59e0bbb; } }
+      @keyframes scheduled-confetti-dots { 12% { opacity: .8; } 100% { opacity: 0; } }
       .vote-timeline__month { font-size: .42rem; line-height: 8px; }
       .vote-day { display: flex; min-width: 0; }
       .vote-card { display: flex; flex: 1 1 auto; flex-direction: column; align-items: stretch; gap: .4rem; width: 100%; min-width: 0; min-height: 8rem; height: 100%; margin: 0; padding: .55rem .3rem; border: .2rem solid transparent; border-radius: .6rem; background: var(--day-bg); color: var(--day-fg); font-size: clamp(.68rem, 1.45vw, .95rem); text-align: center; overflow: hidden; }
@@ -126,9 +134,7 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       .run-event-banner__swipe-cue:empty { display: none; }
       .run-event-day-action { position: absolute; z-index: 2; top: 50%; right: .15rem; width: 1px; height: 1px; min-height: 1px; margin: 0; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
       .run-event-day-action:focus-visible { width: auto; height: auto; min-height: 2.75rem; padding: .3rem .45rem; clip-path: none; }
-      .run-event-banner--pulse { animation: run-event-scheduled-pulse .8s ease-out 1; }
-      @keyframes run-event-scheduled-pulse { 50% { box-shadow: 0 0 0 .25rem #22c55e55; } }
-      @media (prefers-reduced-motion: reduce) { .vote-card, .run-event-banner { transition: none; } .run-event-banner--pulse { animation: none; } }
+      @media (prefers-reduced-motion: reduce) { .vote-card, .run-event-banner { transition: none; } .is-celebrating, .is-celebrating::after { animation: none !important; } }
       .vote-card.is-read-only, .vote-card.is-read-only:hover { --day-bg: #68717a !important; --day-fg: #d9dde1 !important; filter: grayscale(1); opacity: .62; cursor: not-allowed; border-color: transparent; }
       .vote-card:disabled { cursor: not-allowed; }
       .vote-card__header { display: flex; justify-content: space-between; align-items: flex-start; gap: .25rem; min-width: 0; font-weight: 700; }
@@ -753,19 +759,19 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           <p>ยินดีต้อนรับ / Welcome, <strong id="display-name">${displayName}</strong></p>
           <h2 id="week-heading">สัปดาห์ / Week</h2>
           <p id="week-range"></p>
-          <nav class="week-navigation actions" aria-label="Week navigation">
-            <button id="previous-week" type="button" class="secondary">Previous week</button>
-            <button id="current-week" type="button">Now</button>
-            <button id="next-week" type="button">Next week</button>
-          </nav>
           <p id="message" class="message" role="status"></p>
           <ol id="run-events" class="run-event-list" aria-label="Run events"></ol>
           <ol id="week-days" class="vote-board" aria-label="Seven-day voting board / กระดานเลือกวันทั้งเจ็ด"></ol>
+          <nav class="week-navigation actions" aria-label="Week navigation">
+            <button id="previous-week" type="button" class="secondary" aria-label="Previous week">&lt;&lt;</button>
+            <button id="current-week" type="button">Now</button>
+            <button id="next-week" type="button" aria-label="Next week">&gt;&gt;</button>
+          </nav>
           ${resetControl}
           <a id="change-pin" class="button" href="/change-pin">เปลี่ยน PIN / Change PIN</a>
           <div class="actions"><button id="logout" type="button" class="secondary">Logout</button></div>
         </section>`,
-        script: `import { applyVoteCardPresentation, colorForDay, configureVoterNamesMarquee, createSocketRepairController, createVoterNamesRegion as buildVoterNamesRegion, createVoteTimelineController, formatDisplayDate, patchVoteDay } from '/vote-board.js?v=issue-30';
+        script: `import { applyVoteCardPresentation, colorForDay, configureVoterNamesMarquee, createScheduledEffectController, createSocketRepairController, createVoterNamesRegion as buildVoterNamesRegion, createVoteTimelineController, formatDisplayDate, patchVoteDay } from '/vote-board.js?v=issue-34';
           import { attachHorizontalSwipe, formatRunEventDate, getDateCardSwipeAction, getDateCardSwipePreview, getRunEventBannerSwipeAction, getRunEventBannerSwipePreview, millisecondsUntilBangkokMidnight } from '/run-events.js?v=issue-32';
           let csrfToken = '';
           let sessionCheck = 0;
@@ -773,7 +779,9 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           let weekState = null;
           let eventsByDate = new Map();
           let rolloverTimer = null;
-          const scheduledHighlightDates = new Set();
+          const scheduledEffects = createScheduledEffectController();
+          const runEventElements = new Map();
+          const runEventHandlers = new Map();
           const pendingEventDates = new Set();
           let isAdmin = false;
           const currentWeekMonday = '${currentWeek}';
@@ -792,38 +800,68 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           const manageUser = document.querySelector('#manage-user');
           const message = document.querySelector('#message');
           const runEvents = document.querySelector('#run-events');
-          function guardProtectedContent() { weekLoadSequence += 1; window.clearTimeout(rolloverTimer); protectedContent.hidden = true; csrfToken = ''; displayName.textContent = ''; weekDays.replaceChildren(); runEvents.replaceChildren(); weekState = null; eventsByDate = new Map(); message.textContent = ''; }
+          function guardProtectedContent() { weekLoadSequence += 1; window.clearTimeout(rolloverTimer); protectedContent.hidden = true; csrfToken = ''; displayName.textContent = ''; weekDays.replaceChildren(); runEvents.replaceChildren(); timelineDays.replaceChildren(); scheduledEffects.sync('banner', []); scheduledEffects.sync('timeline', []); runEventHandlers.forEach(({ abort, disposeSwipe }) => { abort.abort(); disposeSwipe?.(); }); runEventHandlers.clear(); runEventElements.clear(); weekState = null; eventsByDate = new Map(); message.textContent = ''; }
           function redirectToLogin() { guardProtectedContent(); location.replace('/'); }
           function addText(parent, tag, text) { const element = document.createElement(tag); element.textContent = text; parent.append(element); return element; }
+          const timelineItemsByDate = new Map();
           const timelineController = createVoteTimelineController({
             render(rows) {
               timelineDays.style.gridTemplateColumns = 'repeat(' + rows.length + ', minmax(0, 1fr))';
+              const currentDates = new Set(rows.map(({ date }) => date));
+              timelineItemsByDate.forEach((item, date) => {
+                if (!currentDates.has(date)) { item.remove(); timelineItemsByDate.delete(date); }
+              });
               const items = rows.map((row, index) => {
-                const item = document.createElement('li');
-                item.className = 'vote-timeline__day';
+                let item = timelineItemsByDate.get(row.date);
+                if (!item) {
+                  item = document.createElement('li');
+                  item.className = 'vote-timeline__day';
+                  const count = addText(item, 'span', '');
+                  count.className = 'vote-timeline__count';
+                  const track = document.createElement('span');
+                  track.className = 'vote-timeline__track';
+                  track.setAttribute('aria-hidden', 'true');
+                  const bar = document.createElement('span');
+                  bar.className = 'vote-timeline__bar';
+                  const cue = document.createElement('span');
+                  cue.textContent = '★';
+                  cue.className = 'vote-timeline__top-cue';
+                  track.append(bar, cue);
+                  const date = document.createElement('time');
+                  date.className = 'vote-timeline__date';
+                  const day = addText(date, 'span', '');
+                  const month = addText(date, 'span', '');
+                  month.className = 'vote-timeline__month';
+                  item.append(count, track, date);
+                  timelineItemsByDate.set(row.date, item);
+                }
+                const [count, track, date] = item.children;
+                const [bar, cue] = track.children;
+                const [day, month] = date.children;
+                item.dataset.date = row.date;
                 item.setAttribute('aria-label', row.accessibleLabel);
-                const count = addText(item, 'span', String(row.voteCount));
-                count.className = 'vote-timeline__count';
-                const track = document.createElement('span');
-                track.className = 'vote-timeline__track';
-                track.setAttribute('aria-hidden', 'true');
-                const bar = document.createElement('span');
+                count.textContent = String(row.voteCount);
+                count.className = 'vote-timeline__count' + (row.showCount ? '' : ' is-zero');
+                count.setAttribute('aria-hidden', String(!row.showCount));
                 bar.className = 'vote-timeline__bar' + (row.isTopRanked ? ' is-top-ranked' : '');
                 bar.style.height = row.barHeightPercent + '%';
-                track.append(bar);
-                if (row.showTopCue) {
-                  const cue = addText(track, 'span', '★');
-                  cue.className = 'vote-timeline__top-cue';
-                }
-                const date = document.createElement('time');
+                cue.hidden = !row.showTopCue;
                 date.dateTime = row.date;
-                date.className = 'vote-timeline__date';
-                addText(date, 'span', row.dayLabel);
-                if (index === 0 || row.dayLabel === '1') addText(date, 'span', row.monthLabel).className = 'vote-timeline__month';
-                item.append(track, date);
-                return item;
+                date.className = 'vote-timeline__date' + (row.isScheduled ? ' is-scheduled' : '');
+                day.textContent = row.dayLabel;
+                month.textContent = row.monthLabel;
+                month.hidden = index !== 0 && row.dayLabel !== '1';
+                return { row, item, date, bar };
               });
-              timelineDays.replaceChildren(...items);
+              items.forEach(({ item }, index) => {
+                if (timelineDays.children[index] !== item) timelineDays.insertBefore(item, timelineDays.children[index] ?? null);
+              });
+              scheduledEffects.sync('timeline', items.filter(({ row }) => row.isScheduled).map(({ row, date, bar }) => ({
+                key: row.date,
+                element: date,
+                targets: row.voteCount > 0 ? [date, bar] : [date],
+                scheduled: true,
+              })));
             },
           });
           async function loadTimeline() {
@@ -836,9 +874,11 @@ export function createApp({ databaseReady = false, database, env = process.env, 
                 if (!response.ok) throw new Error(totals.message || 'Could not load vote totals.');
                 return totals;
               });
-              if (refreshed && totals) timelineRange.textContent = formatDisplayDate(totals.startDate) + ' – ' + formatDisplayDate(totals.endDate) + ' · ★ = highest votes';
+              if (refreshed && totals) { timelineRange.textContent = formatDisplayDate(totals.startDate) + ' – ' + formatDisplayDate(totals.endDate) + ' · ★ = highest votes'; return true; }
+              return false;
             } catch {
               timelineRange.textContent = 'Could not load vote totals.';
+              return false;
             }
           }
           const weekdays = [
@@ -867,10 +907,28 @@ export function createApp({ databaseReady = false, database, env = process.env, 
             row.append(button);
           }
           function renderRunEvents(events) {
-            runEvents.replaceChildren(...events.map((event) => {
-              const banner = document.createElement('li');
+            const activeDates = new Set(events.map(({ date }) => date));
+            runEventElements.forEach((banner, date) => {
+              if (activeDates.has(date)) return;
+              const handlers = runEventHandlers.get(date);
+              handlers?.abort.abort();
+              handlers?.disposeSwipe?.();
+              banner.remove();
+              runEventElements.delete(date);
+              runEventHandlers.delete(date);
+            });
+            const banners = events.map((event) => {
+              let banner = runEventElements.get(event.date);
+              if (!banner) {
+                banner = document.createElement('li');
+                runEventElements.set(event.date, banner);
+              }
+              const previousHandlers = runEventHandlers.get(event.date);
+              previousHandlers?.abort.abort();
+              previousHandlers?.disposeSwipe?.();
+              const abort = new AbortController();
+              banner.replaceChildren();
               banner.className = 'run-event-banner run-event-banner--' + event.status;
-              if (scheduledHighlightDates.has(event.date) && event.status === 'scheduled') banner.classList.add('run-event-banner--pulse');
               banner.dataset.date = event.date;
               const summary = document.createElement('div');
               summary.className = 'run-event-banner__summary';
@@ -893,7 +951,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
                 toggle.type = 'button';
                 toggle.dataset.runEventStatus = event.status;
                 toggle.disabled = pendingEventDates.has(event.date);
-                toggle.addEventListener('click', () => void submitRunEventAction(event.date, event.status === 'proposed' ? 'schedule' : 'revert', event));
+                toggle.addEventListener('click', () => void submitRunEventAction(event.date, event.status === 'proposed' ? 'schedule' : 'revert', event), { signal: abort.signal });
                 const remove = addText(actions, 'button', 'Delete event');
                 remove.type = 'button';
                 remove.className = 'run-event-delete';
@@ -902,17 +960,17 @@ export function createApp({ databaseReady = false, database, env = process.env, 
                   if (window.confirm('Delete this event permanently? There is no undo.')) {
                     void submitRunEventAction(event.date, 'delete', event);
                   }
-                });
+                }, { signal: abort.signal });
                 banner.append(actions);
                 banner.addEventListener('click', (clickEvent) => {
                   if (clickEvent.target.closest('button, a, input, select, textarea')) return;
                   void submitRunEventAction(event.date, event.status === 'proposed' ? 'schedule' : 'revert', event);
-                });
+                }, { signal: abort.signal });
               }
               const cue = addText(banner, 'span', '');
               cue.className = 'run-event-banner__swipe-cue';
               cue.setAttribute('aria-live', 'polite');
-              attachHorizontalSwipe(banner, {
+              const disposeSwipe = attachHorizontalSwipe(banner, {
                 resolveAction: (deltaX, deltaY) => getRunEventBannerSwipeAction({ deltaX, deltaY, isAdmin }),
                 resolvePreview: (deltaX, deltaY) => getRunEventBannerSwipePreview({ deltaX, deltaY, isAdmin }),
                 onPreview(action, deltaX, ready) {
@@ -922,8 +980,17 @@ export function createApp({ databaseReady = false, database, env = process.env, 
                 },
                 onCommit(action) { if (action === 'delete') void submitRunEventAction(event.date, 'delete', event); },
               });
+              runEventHandlers.set(event.date, { abort, disposeSwipe });
               return banner;
-            }));
+            });
+            banners.forEach((banner, index) => {
+              if (runEvents.children[index] !== banner) runEvents.insertBefore(banner, runEvents.children[index] ?? null);
+            });
+            scheduledEffects.sync('banner', events.filter(({ status }) => status === 'scheduled').map((event) => ({
+              key: event.date,
+              element: runEventElements.get(event.date),
+              scheduled: true,
+            })));
           }
           async function submitRunEventAction(date, action, event) {
             if (pendingEventDates.has(date)) return false;
@@ -962,9 +1029,8 @@ export function createApp({ databaseReady = false, database, env = process.env, 
                 message.textContent = errorMessage;
                 return false;
               }
-              if (action === 'schedule' && result.changed) scheduledHighlightDates.add(date);
-              const refreshed = await loadWeek(weekMonday);
-              if (!refreshed) {
+              const [refreshed, timelineRefreshed] = await Promise.all([loadWeek(weekMonday), loadTimeline()]);
+              if (!refreshed || !timelineRefreshed) {
                 message.textContent = 'Could not refresh the event board. Please reload.';
                 return false;
               }
@@ -972,12 +1038,6 @@ export function createApp({ databaseReady = false, database, env = process.env, 
                 : action === 'withdraw' ? 'Proposal withdrawn.'
                   : action === 'schedule' ? 'Run scheduled.'
                     : action === 'revert' ? 'Run reverted to proposed.' : 'Event deleted.';
-              if (action === 'schedule' && result.changed) {
-                window.setTimeout(() => {
-                  scheduledHighlightDates.delete(date);
-                  runEvents.querySelector('.run-event-banner[data-date="' + date + '"]')?.classList.remove('run-event-banner--pulse');
-                }, 900);
-              }
               return true;
             } catch {
               const errorMessage = 'Could not update the run event. Please try again.';
@@ -1172,6 +1232,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           socket.on('vote:changed', (patch) => { socketRepair.handlePatch(patch); timelineController.patch(patch); });
           socket.on('event:changed', ({ date }) => {
             if (weekState?.days.some((day) => day.date === date)) void loadWeek(weekMonday);
+            void loadTimeline();
           });
           socket.on('week:reset', ({ monday }) => { if (monday === weekMonday) loadWeek(weekMonday); loadTimeline(); });
           socket.on('connect', () => { void socketRepair.handleConnect(); void loadTimeline(); });

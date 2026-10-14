@@ -108,6 +108,15 @@ async function setVote(baseUrl, member, date) {
   assert.equal(response.status, 200);
 }
 
+async function removeVote(baseUrl, member, date) {
+  const response = await fetch(`${baseUrl}/api/votes/${date}`, {
+    method: 'PUT',
+    headers: { cookie: member.cookie, origin: baseUrl, 'content-type': 'application/json', 'x-csrf-token': member.csrfToken },
+    body: JSON.stringify({ selected: false }),
+  });
+  assert.equal(response.status, 200);
+}
+
 async function propose(baseUrl, member, date, index) {
   const response = await fetch(`${baseUrl}/api/events/${date}`, {
     method: 'POST',
@@ -166,6 +175,17 @@ async function swipe(client, selector, deltaX, deltaY = 0) {
   await endSwipe(client);
 }
 
+async function verticalPageSwipe(client, deltaY) {
+  const { innerHeight } = await evaluate(client, '({ innerHeight })');
+  const x = 4;
+  const startY = deltaY < 0 ? innerHeight - 20 : 20;
+  await client.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
+  await client.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ id: 2, x, y: startY, radiusX: 1, radiusY: 1, force: 1 }] });
+  await client.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ id: 2, x, y: startY + deltaY, radiusX: 1, radiusY: 1, force: 1 }] });
+  await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await delay(120);
+}
+
 test('Issue 32 vote page renders stacked event banners and remains keyboard/mobile usable', {
   skip: chromePath ? false : 'Chromium is unavailable; set CHROME_BIN to run Issue 32 browser coverage',
 }, async (t) => {
@@ -175,10 +195,12 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
   await once(server, 'listening');
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
   let client;
+  let client2;
   let browser;
   let profile;
   t.after(async () => {
     client?.close();
+    client2?.close();
     try {
       if (browser) await stopChromium(browser);
     } finally {
@@ -388,4 +410,140 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
   assert.equal(await waitFor(client, `document.querySelector('.run-event-banner[data-date="2024-03-01"]') === null`), true, 'admin left swipe permanently deletes a scheduled event');
   assert.deepEqual(await evaluate(client, 'window.issue32AdminMutations'), ['DELETE'], 'a completed banner swipe does not also synthesize an admin tap action');
   assert.equal(server.database.prepare('SELECT COUNT(*) AS count FROM votes WHERE vote_date = ?').get('2024-03-01').count, 4, 'event deletion preserves all availability votes');
+
+  let proposedEvent = server.database.prepare('SELECT id, revision, status FROM run_events WHERE event_date = ?').get('2024-03-03');
+  if (proposedEvent.status === 'scheduled') {
+    const revertResponse = await fetch(`${baseUrl}/api/admin/events/2024-03-03`, {
+      method: 'PUT',
+      headers: { cookie: admin.cookie, origin: baseUrl, 'content-type': 'application/json', 'x-csrf-token': admin.csrfToken },
+      body: JSON.stringify({ eventId: proposedEvent.id, revision: proposedEvent.revision, status: 'proposed', requestId: '00000000-0000-4000-8000-000000000143' }),
+    });
+    assert.equal(revertResponse.status, 200);
+    assert.equal(await waitFor(client, `document.querySelector('.run-event-banner[data-date="2024-03-03"] .run-event-banner__status')?.textContent === 'Proposed'`), true, 'the first client clears the prior scheduled state before replay');
+    proposedEvent = server.database.prepare('SELECT id, revision, status FROM run_events WHERE event_date = ?').get('2024-03-03');
+  }
+  assert.equal(proposedEvent.status, 'proposed');
+
+  const peerTarget = await createTarget(port);
+  client2 = createCdpClient(peerTarget.webSocketDebuggerUrl);
+  await client2.send('Page.enable');
+  await client2.send('Runtime.enable');
+  await client2.send('Network.enable');
+  await client2.send('Network.setCookie', { url: baseUrl, name: cookieName, value: cookieValue, path: '/' });
+  await client2.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+  await client2.send('Page.navigate', { url: `${baseUrl}/vote` });
+  assert.equal(await waitFor(client2, `document.querySelector('#protected-content') && !document.querySelector('#protected-content').hidden && document.querySelector('.run-event-banner[data-date="2024-03-03"]')`), true, 'second authenticated client loads the proposed event');
+  const watchScheduledEffects = `(() => {
+    window.issue34Starts = { banner: 0, date: 0 };
+    document.querySelector('.run-event-banner[data-date="2024-03-03"]')?.addEventListener('animationstart', (event) => { if (event.animationName === 'scheduled-border-confetti') window.issue34Starts.banner += 1; });
+    document.querySelector('.vote-timeline__date[datetime="2024-03-03"]')?.addEventListener('animationstart', (event) => { if (event.animationName === 'scheduled-border-confetti') window.issue34Starts.date += 1; });
+  })()`;
+  await evaluate(client, watchScheduledEffects);
+  await evaluate(client2, watchScheduledEffects);
+  const scheduleResponse = await fetch(`${baseUrl}/api/admin/events/2024-03-03`, {
+    method: 'PUT',
+    headers: { cookie: admin.cookie, origin: baseUrl, 'content-type': 'application/json', 'x-csrf-token': admin.csrfToken },
+    body: JSON.stringify({ eventId: proposedEvent.id, revision: proposedEvent.revision, status: 'scheduled', requestId: '00000000-0000-4000-8000-000000000144' }),
+  });
+  assert.equal(scheduleResponse.status, 200, 'admin schedules the same proposal through the protected mutation API');
+  for (const page of [client, client2]) {
+    assert.equal(await waitFor(page, `document.querySelector('.run-event-banner[data-date="2024-03-03"] .run-event-banner__status')?.textContent === 'Scheduled'`), true, 'both connected clients receive the scheduled state');
+  }
+  assert.equal(await evaluate(client, `getComputedStyle(document.querySelector('.run-event-banner[data-date="2024-03-03"]')).animationName`), 'none', 'reduced-motion user receives the static scheduled indicator');
+  assert.equal(await waitFor(client2, `document.querySelector('.run-event-banner[data-date="2024-03-03"]').classList.contains('is-celebrating')`), true, 'the peer client plays the brief banner effect');
+  const bannerConfetti = await evaluate(client2, `(() => { const style = getComputedStyle(document.querySelector('.run-event-banner[data-date="2024-03-03"]'), '::after'); return { repeat: style.backgroundRepeat, pointerEvents: style.pointerEvents }; })()`);
+  assert.equal(bannerConfetti.repeat, 'repeat-x, repeat-x, repeat-y, repeat-y', 'decorative confetti stays on the banner borders instead of covering text');
+  assert.equal(bannerConfetti.pointerEvents, 'none', 'confetti cannot intercept gesture or button input');
+  assert.equal(await evaluate(client2, `window.issue34Starts.banner`), 1, 'the peer banner starts one non-looping effect');
+  assert.equal(await waitFor(client2, `document.querySelector('.vote-timeline__date[datetime="2024-03-03"]').classList.contains('is-celebrating')`), true, 'the matching visible graph date plays its independent effect');
+  assert.equal(await waitFor(client2, `window.issue34Starts.date > 0`), true, 'the matching graph effect actually starts before a count update');
+  const graphStartsBeforeVoteUpdate = await evaluate(client2, `window.issue34Starts.date`);
+  await removeVote(baseUrl, runner, '2024-03-03');
+  for (const page of [client, client2]) {
+    assert.equal(await waitFor(page, `document.querySelector('.run-event-banner[data-date="2024-03-03"] .run-event-banner__count')?.textContent === '0 votes'`), true, 'the live vote removal updates its event count');
+    assert.equal(await evaluate(page, `document.querySelector('.vote-timeline__day[data-date="2024-03-03"] .vote-timeline__count').getAttribute('aria-hidden')`), 'true', 'scheduled zero labels are hidden visually');
+    assert.equal(await evaluate(page, `document.querySelector('.vote-timeline__day[data-date="2024-03-03"] .vote-timeline__bar').getBoundingClientRect().height`), 0, 'scheduled zero votes keep a zero-height bar');
+    assert.equal(await evaluate(page, `document.querySelector('.vote-timeline__day[data-date="2024-03-03"]').getAttribute('aria-label').includes('0 votes, scheduled run')`), true, 'the graph retains the actual zero count and accessible scheduled state');
+  }
+  assert.equal(await evaluate(client2, `window.issue34Starts.date`), graphStartsBeforeVoteUpdate, 'an ordinary vote-count update does not restart the visible graph effect');
+  assert.equal(await evaluate(client2, `document.querySelector('.run-event-banner[data-date="2024-03-03"]').classList.contains('is-celebrating')`), true, 'a vote update does not interrupt the peer animation');
+  assert.equal(await evaluate(client2, `window.issue34Starts.banner`), 1, 'a vote update does not create a second peer animation');
+  await delay(1600);
+  for (const page of [client, client2]) {
+    assert.equal(await evaluate(page, `document.querySelector('.run-event-banner[data-date="2024-03-03"]').classList.contains('is-celebrating')`), false, 'the brief effect ends without looping');
+  }
+  assert.equal(await evaluate(client2, `window.issue34Starts.banner`), 1, 'the scheduled indicator remains static after its effect');
+  await client2.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 300, deviceScaleFactor: 1, mobile: true });
+  const dateStartsBeforeReentry = await evaluate(client2, `window.issue34Starts.date`);
+  await verticalPageSwipe(client2, -240);
+  assert.equal(await waitFor(client2, `(() => { const box = document.querySelector('.vote-timeline__date[datetime="2024-03-03"]').getBoundingClientRect(); return box.bottom <= 0 || box.top >= innerHeight; })()`), true, 'a real vertical swipe moves the scheduled graph date fully offscreen');
+  await verticalPageSwipe(client2, 240);
+  assert.equal(await waitFor(client2, `document.querySelector('.vote-timeline__date[datetime="2024-03-03"]').classList.contains('is-celebrating')`), true, 'the scheduled graph effect replays on viewport re-entry');
+  assert.ok(await evaluate(client2, `window.issue34Starts.date`) > dateStartsBeforeReentry, 'viewport re-entry starts a fresh graph animation');
+  await client2.send('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0, connectionType: 'none' });
+  assert.equal(await waitFor(client2, '!navigator.onLine'), true, 'the peer browser goes offline before the authoritative change');
+  const scheduledEvent = server.database.prepare('SELECT id, revision FROM run_events WHERE event_date = ?').get('2024-03-03');
+  const revertResponse = await fetch(`${baseUrl}/api/admin/events/2024-03-03`, {
+    method: 'PUT',
+    headers: { cookie: admin.cookie, origin: baseUrl, 'content-type': 'application/json', 'x-csrf-token': admin.csrfToken },
+    body: JSON.stringify({ eventId: scheduledEvent.id, revision: scheduledEvent.revision, status: 'proposed', requestId: '00000000-0000-4000-8000-000000000145' }),
+  });
+  assert.equal(revertResponse.status, 200, 'the admin reverts the zero-vote scheduled event while the peer is disconnected');
+  assert.equal(await waitFor(client, `!document.querySelector('.run-event-banner[data-date="2024-03-03"]')`), true, 'the online client removes the reverted event immediately');
+  assert.equal(await evaluate(client2, `document.querySelector('.run-event-banner[data-date="2024-03-03"] .run-event-banner__status')?.textContent`), 'Scheduled', 'the offline peer retains its stale view until reconnect');
+  await client2.send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1, connectionType: 'wifi' });
+  assert.equal(await waitFor(client2, `!document.querySelector('.run-event-banner[data-date="2024-03-03"]')`), true, 'socket reconnect repairs the peer banner from authoritative state');
+  assert.equal(await evaluate(client2, `document.querySelector('.vote-timeline__date[datetime="2024-03-03"]').classList.contains('is-scheduled')`), false, 'socket reconnect repairs the scheduled graph state');
+  assert.equal(await evaluate(client2, `document.querySelector('.vote-timeline__date[datetime="2024-03-03"]').classList.contains('is-celebrating')`), false, 'reconnect cleanup stops any active stale effect');
+  for (const width of [320, 390, 1280]) {
+    await client2.send('Emulation.setDeviceMetricsOverride', { width, height: 844, deviceScaleFactor: 1, mobile: width <= 390 });
+    const layout = await evaluate(client2, `(() => {
+      const rows = document.querySelectorAll('.week-navigation');
+      const nav = rows[0];
+      const navBox = nav.getBoundingClientRect();
+      const lastCard = document.querySelector('#week-days > li:last-child .vote-card').getBoundingClientRect();
+      const buttons = [...nav.querySelectorAll('button')].map((button) => {
+        const box = button.getBoundingClientRect();
+        return { label: button.textContent.trim(), name: button.getAttribute('aria-label') || button.textContent.trim(), top: box.top };
+      });
+      return { count: rows.length, viewportWidth: innerWidth, pageWidth: document.documentElement.scrollWidth, navTop: navBox.top, navLeft: navBox.left, navRight: navBox.right, lastCardBottom: lastCard.bottom, buttons };
+    })()`);
+    assert.equal(layout.count, 1, `one navigation row at ${width}px`);
+    assert.equal(layout.viewportWidth, width);
+    assert.ok(layout.navTop >= layout.lastCardBottom, `navigation follows the final card at ${width}px`);
+    assert.ok(layout.pageWidth <= width, `no horizontal overflow at ${width}px`);
+    assert.ok(layout.navLeft >= 0 && layout.navRight <= width, `navigation stays in the viewport at ${width}px`);
+    assert.deepEqual(layout.buttons.map(({ label }) => label), ['<<', 'Now', '>>']);
+    assert.deepEqual(layout.buttons.map(({ name }) => name), ['Previous week', 'Now', 'Next week']);
+    assert.ok(layout.buttons.every(({ top }) => Math.abs(top - layout.buttons[0].top) < 1), `navigation is one row at ${width}px`);
+  }
+  server.database.transaction(() => {
+    server.database.prepare('DELETE FROM run_events').run();
+    server.database.prepare('DELETE FROM votes').run();
+  })();
+  await client2.send('Page.reload', { ignoreCache: true });
+  assert.equal(await waitFor(client2, `document.querySelectorAll('.vote-timeline__day').length > 0 && document.querySelectorAll('.run-event-banner').length === 0`), true, 'reloads the presentation with a fresh all-zero graph');
+  const allZeroGraph = await evaluate(client2, `(() => {
+    const days = [...document.querySelectorAll('.vote-timeline__day')];
+    return {
+      days: days.length,
+      datesVisible: days.every((day) => getComputedStyle(day.querySelector('.vote-timeline__date')).visibility !== 'hidden'),
+      countsHidden: days.every((day) => day.querySelector('.vote-timeline__count').getAttribute('aria-hidden') === 'true' && getComputedStyle(day.querySelector('.vote-timeline__count')).visibility === 'hidden'),
+      barsZeroHeight: days.every((day) => day.querySelector('.vote-timeline__bar').getBoundingClientRect().height === 0),
+      topCuesAbsent: days.every((day) => day.querySelector('.vote-timeline__top-cue').hidden),
+      accessibleCounts: days.every((day) => day.getAttribute('aria-label').includes('0 votes') && !day.getAttribute('aria-label').includes('highest-vote date')),
+    };
+  })()`);
+  assert.ok(allZeroGraph.days > 0);
+  assert.equal(allZeroGraph.datesVisible, true, 'all-zero graph retains dates');
+  assert.equal(allZeroGraph.countsHidden, true, 'all-zero graph hides every zero count label');
+  assert.equal(allZeroGraph.barsZeroHeight, true, 'all-zero graph does not invent positive bar heights');
+  assert.equal(allZeroGraph.topCuesAbsent, true, 'all-zero graph has no false highest-vote cues');
+  assert.equal(allZeroGraph.accessibleCounts, true, 'all-zero graph still announces true counts accessibly');
+  await evaluate(client2, `document.querySelector('#previous-week').focus()`);
+  await pressEnter(client2);
+  assert.equal(await waitFor(client2, `document.querySelector('#week-range').textContent === '2024-02-19 – 2024-02-25'`), true, 'keyboard activation of Previous week retains its existing navigation behavior');
+  await evaluate(client2, `document.querySelector('#current-week').focus()`);
+  await pressEnter(client2);
+  assert.equal(await waitFor(client2, `document.querySelector('#week-range').textContent === '2024-02-26 – 2024-03-03'`), true, 'keyboard activation of Now returns to the current week');
 });
