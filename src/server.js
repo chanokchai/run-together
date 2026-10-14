@@ -31,6 +31,7 @@ export function createServer({
     env,
     now,
     onVoteChanged: (date) => realtime?.broadcastVoteChanged(date),
+    onRunEventChanged: (date) => realtime?.broadcastRunEventChanged(date),
     onUserSessionsRevoked: (userId) => realtime?.disconnectUser(userId),
     onUserDeleted: (userId, affectedDates) => {
       realtime?.disconnectUser(userId);

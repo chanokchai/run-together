@@ -76,6 +76,37 @@ const MIGRATIONS = [
       )`,
     ],
   },
+  {
+    version: 5,
+    name: 'proposed_scheduled_run_events',
+    statements: [
+      `CREATE TABLE run_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_date TEXT NOT NULL UNIQUE,
+        status TEXT NOT NULL CHECK (status IN ('proposed', 'scheduled')),
+        revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0),
+        proposed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        proposed_at TEXT NOT NULL,
+        scheduled_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        scheduled_at TEXT,
+        CHECK (
+          (status = 'proposed' AND scheduled_by IS NULL AND scheduled_at IS NULL)
+          OR (status = 'scheduled' AND scheduled_by IS NOT NULL AND scheduled_at IS NOT NULL)
+        )
+      )`,
+      'CREATE INDEX run_events_date ON run_events(event_date)',
+      `CREATE TABLE run_event_requests (
+        request_id TEXT PRIMARY KEY,
+        actor_user_id INTEGER NOT NULL,
+        action TEXT NOT NULL CHECK (action IN ('propose', 'withdraw', 'schedule', 'revert', 'delete')),
+        event_date TEXT NOT NULL,
+        event_id INTEGER,
+        expected_revision INTEGER,
+        requested_status TEXT CHECK (requested_status IN ('proposed', 'scheduled') OR requested_status IS NULL),
+        created_at TEXT NOT NULL
+      )`,
+    ],
+  },
 ];
 
 export function openDatabase(databasePath) {
