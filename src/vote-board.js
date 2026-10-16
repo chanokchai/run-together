@@ -233,6 +233,27 @@ export function createScheduledEffectController({
     return `-${Math.floor(elapsed)}ms`;
   }
 
+  function alignTargetToPageTimeline(target, timestamp, wasRunning) {
+    const animation = target.ownerDocument?.getAnimations?.().find((candidate) => candidate.animationName === 'scheduled-border-beam'
+      && candidate.effect?.pseudoElement === '::before' && candidate.effect?.target === target);
+    if (!animation || !Number.isFinite(timestamp)) {
+      if (!wasRunning || !target.style?.getPropertyValue?.('--beam-delay')) {
+        target.style?.setProperty('--beam-delay', currentDelay(timestamp));
+      }
+      return;
+    }
+    target.style?.removeProperty('--beam-delay');
+    const phase = ((timestamp % cycleMs) + cycleMs) % cycleMs;
+    const sharedOrigin = timestamp - phase;
+    const currentStartPhase = Number.isFinite(animation.startTime)
+      ? ((animation.startTime % cycleMs) + cycleMs) % cycleMs
+      : Number.NaN;
+    const difference = Number.isFinite(currentStartPhase)
+      ? Math.min(currentStartPhase, cycleMs - currentStartPhase)
+      : Number.POSITIVE_INFINITY;
+    if (difference > 0.5) animation.startTime = sharedOrigin;
+  }
+
   function stopTargets(targets) {
     targets.forEach((target) => {
       target.classList.remove('is-beam-running');
@@ -240,12 +261,13 @@ export function createScheduledEffectController({
     });
   }
 
-  function applyState(state, delay = currentDelay()) {
+  function applyState(state, timestamp = pageTimelineTime()) {
     const active = state.inViewport && !motionQuery?.matches;
     state.targets.forEach((target) => {
       if (active) {
-        if (!target.classList.contains('is-beam-running')) target.style?.setProperty('--beam-delay', delay);
+        const wasRunning = target.classList.contains('is-beam-running');
         target.classList.add('is-beam-running');
+        alignTargetToPageTimeline(target, timestamp, wasRunning);
       } else {
         target.classList.remove('is-beam-running');
         target.style?.removeProperty('--beam-delay');
@@ -281,18 +303,18 @@ export function createScheduledEffectController({
     return right > left && bottom > top && elementStyle?.visibility !== 'hidden';
   }
 
-  function updateVisibility(element, isIntersecting, delay = currentDelay()) {
+  function updateVisibility(element, isIntersecting, timestamp = pageTimelineTime()) {
     const state = statesByElement.get(element);
     if (!state) return;
     const visible = typeof element.getBoundingClientRect === 'function' ? isElementVisible(element) : isIntersecting;
     if (state.inViewport === visible) return;
     state.inViewport = visible;
-    applyState(state, delay);
+    applyState(state, timestamp);
   }
 
   const observerCallback = (entries) => {
-    const delay = currentDelay();
-    entries.forEach(({ target, isIntersecting }) => updateVisibility(target, isIntersecting, delay));
+    const timestamp = pageTimelineTime();
+    entries.forEach(({ target, isIntersecting }) => updateVisibility(target, isIntersecting, timestamp));
   };
   const Observer = globalThis.IntersectionObserver ?? fallbackView?.IntersectionObserver;
   const observer = createObserver
@@ -303,17 +325,17 @@ export function createScheduledEffectController({
     if (!fallbackView) return;
     const width = fallbackView.innerWidth;
     const height = fallbackView.innerHeight;
-    const delay = currentDelay();
+    const timestamp = pageTimelineTime();
     statesByElement.forEach((state, element) => {
       const bounds = element.getBoundingClientRect?.();
       if (!bounds) return;
-      updateVisibility(element, bounds.bottom > 0 && bounds.right > 0 && bounds.top < height && bounds.left < width, delay);
+      updateVisibility(element, bounds.bottom > 0 && bounds.right > 0 && bounds.top < height && bounds.left < width, timestamp);
     });
   }
 
   function handleMotionChange() {
-    const delay = currentDelay();
-    states.forEach((state) => applyState(state, delay));
+    const timestamp = pageTimelineTime();
+    states.forEach((state) => applyState(state, timestamp));
   }
 
   motionQuery?.addEventListener?.('change', handleMotionChange);
@@ -335,7 +357,7 @@ export function createScheduledEffectController({
   return {
     sync(scope, items) {
       const currentKeys = new Set();
-      const delay = currentDelay();
+      const timestamp = pageTimelineTime();
       (Array.isArray(items) ? items : []).forEach((item) => {
         if (!item?.scheduled || !item.element || item.key === undefined || item.key === null) return;
         const key = `${scope}:${item.key}`;
@@ -363,7 +385,7 @@ export function createScheduledEffectController({
           state.targets = targets;
         }
         state.inViewport = isElementVisible(state.element);
-        applyState(state, delay);
+        applyState(state, timestamp);
       });
       const previousKeys = scopeKeys.get(scope) ?? new Set();
       previousKeys.forEach((key) => {
@@ -373,7 +395,7 @@ export function createScheduledEffectController({
         }
       });
       scopeKeys.set(scope, currentKeys);
-      states.forEach((state) => applyState(state, delay));
+      states.forEach((state) => applyState(state, timestamp));
       fallbackVisibility();
     },
     dispose() {

@@ -146,11 +146,14 @@ async function sampleScheduledBeamPhase(client, date, { includeGraphBar = true }
     return selectors.map((selector) => {
       const element = document.querySelector(selector);
       const beam = element ? getComputedStyle(element, '::before') : null;
+      const animation = element && document.getAnimations().find((current) => current.animationName === 'scheduled-border-beam'
+        && current.effect?.pseudoElement === '::before' && current.effect?.target === element);
       return {
         found: Boolean(element),
         active: element?.classList.contains('is-beam-running') ?? false,
         animation: beam?.animationName ?? 'none',
         angle: Number.parseFloat(beam?.getPropertyValue('--beam-angle') ?? 'NaN'),
+        progress: animation?.effect?.getComputedTiming().progress ?? Number.NaN,
       };
     });
   })()`);
@@ -165,8 +168,9 @@ function maxCircularDifference(values, circumference = 360) {
 }
 
 function assertSynchronizedBeamPhase(samples, context) {
-  assert.ok(samples.every(({ found, active, animation, angle }) => found && active && animation === 'scheduled-border-beam' && Number.isFinite(angle)), `${context}: all sampled scheduled representations expose a running beam angle: ${JSON.stringify(samples)}`);
+  assert.ok(samples.every(({ found, active, animation, angle, progress }) => found && active && animation === 'scheduled-border-beam' && Number.isFinite(angle) && Number.isFinite(progress)), `${context}: all sampled scheduled representations expose running CSS animation progress: ${JSON.stringify(samples)}`);
   assert.ok(maxCircularDifference(samples.map(({ angle }) => angle)) < 10, `${context}: measured beam angles remain in the same normalized phase: ${JSON.stringify(samples)}`);
+  assert.ok(maxCircularDifference(samples.map(({ progress }) => progress * 360)) < 10, `${context}: actual CSS animation progress remains in the same normalized phase: ${JSON.stringify(samples)}`);
 }
 
 async function pressEnter(client) {
