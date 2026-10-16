@@ -774,7 +774,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           <a id="change-pin" class="button" href="/change-pin">เปลี่ยน PIN / Change PIN</a>
           <div class="actions"><button id="logout" type="button" class="secondary">Logout</button></div>
         </section>`,
-        script: `import { applyVoteCardPresentation, colorForDay, configureVoterNamesMarquee, createScheduledEffectController, createSocketRepairController, createVoterNamesRegion as buildVoterNamesRegion, createVoteTimelineController, formatDisplayDate, patchVoteDay } from '/vote-board.js?v=issue-34-beam-2';
+        script: `import { applyVoteCardPresentation, colorForDay, configureVoterNamesMarquee, createScheduledEffectController, createSocketRepairController, createVoterNamesRegion as buildVoterNamesRegion, createVoteTimelineController, formatDisplayDate, patchVoteDay } from '/vote-board.js?v=issue-34-beam-3';
           import { attachHorizontalSwipe, formatRunEventDate, getDateCardSwipeAction, getDateCardSwipePreview, getRunEventBannerSwipeAction, getRunEventBannerSwipePreview, millisecondsUntilBangkokMidnight, sortRunEventsForPresentation } from '/run-events.js?v=issue-34-beam-1';
           let csrfToken = '';
           let sessionCheck = 0;
