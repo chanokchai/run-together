@@ -223,7 +223,12 @@ export function createScheduledEffectController({
   const cycleMs = 1400;
   const motionQuery = createMotionQuery('(prefers-reduced-motion: reduce)');
 
-  function currentDelay(timestamp = now()) {
+  function pageTimelineTime() {
+    const timelineTime = globalThis.document?.timeline?.currentTime;
+    return Number.isFinite(timelineTime) ? timelineTime : now();
+  }
+
+  function currentDelay(timestamp = pageTimelineTime()) {
     const elapsed = ((timestamp % cycleMs) + cycleMs) % cycleMs;
     return `-${Math.floor(elapsed)}ms`;
   }
@@ -239,7 +244,7 @@ export function createScheduledEffectController({
     const active = state.inViewport && !motionQuery?.matches;
     state.targets.forEach((target) => {
       if (active) {
-        target.style?.setProperty('--beam-delay', delay);
+        if (!target.classList.contains('is-beam-running')) target.style?.setProperty('--beam-delay', delay);
         target.classList.add('is-beam-running');
       } else {
         target.classList.remove('is-beam-running');

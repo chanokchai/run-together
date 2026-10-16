@@ -134,6 +134,38 @@ test('a stale observer exit does not pause a beam whose current geometry is stil
   controller.dispose();
 });
 
+test('ordinary sync preserves retained animation origins while replacement targets join the current page phase', async () => {
+  const { createScheduledEffectController } = await import('../src/vote-board.js');
+  const harness = createHarness({ now: 525 });
+  const controller = createScheduledEffectController(harness.controllerOptions);
+  const graphDate = makeElement();
+  const banner = makeElement();
+
+  controller.sync('timeline', [scheduled('2026-10-11', graphDate)]);
+  controller.sync('banner', [scheduled('2026-10-11', banner)]);
+  assert.equal(graphDate.style.getPropertyValue('--beam-delay'), '-525ms');
+  assert.equal(banner.style.getPropertyValue('--beam-delay'), '-525ms');
+
+  harness.setNow(1735);
+  const dateCard = makeElement();
+  controller.sync('date-card', [scheduled('2026-10-11', dateCard)]);
+  assert.equal(graphDate.classList.contains('is-beam-running'), true, 'ordinary sync does not restart a retained graph animation');
+  assert.equal(banner.classList.contains('is-beam-running'), true, 'ordinary sync does not restart a retained banner animation');
+  assert.equal(graphDate.style.getPropertyValue('--beam-delay'), '-525ms', 'retained graph animation keeps its original timeline phase');
+  assert.equal(banner.style.getPropertyValue('--beam-delay'), '-525ms', 'retained banner animation keeps its original timeline phase');
+  assert.equal(dateCard.style.getPropertyValue('--beam-delay'), '-335ms', 'a newly created date card joins the current shared page phase');
+
+  harness.setNow(2110);
+  const replacementBanner = makeElement();
+  controller.sync('banner', [scheduled('2026-10-11', replacementBanner)]);
+  assert.equal(banner.classList.contains('is-beam-running'), false, 'replaced targets are stopped and cleaned up');
+  assert.equal(graphDate.style.getPropertyValue('--beam-delay'), '-525ms', 'another replacement sync preserves the retained graph origin');
+  assert.equal(dateCard.style.getPropertyValue('--beam-delay'), '-335ms', 'another replacement sync preserves the retained card origin');
+  assert.equal(replacementBanner.style.getPropertyValue('--beam-delay'), '-710ms', 'the replacement banner joins the current page phase');
+
+  controller.dispose();
+});
+
 test('reduced motion is static and a live preference change updates visible beams', async () => {
   const { createScheduledEffectController } = await import('../src/vote-board.js');
   const harness = createHarness({ reducedMotion: true, now: 810 });

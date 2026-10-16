@@ -134,6 +134,41 @@ async function waitFor(client, expression) {
   return false;
 }
 
+async function sampleScheduledBeamPhase(client, date, { includeGraphBar = true } = {}) {
+  return evaluate(client, `(async () => {
+    for (let frame = 0; frame < 4; frame += 1) await new Promise(requestAnimationFrame);
+    const selectors = [
+      '.run-event-banner[data-date="${date}"]',
+      '#week-days .vote-card[data-date="${date}"]',
+      '.vote-timeline__date[datetime="${date}"]',
+    ];
+    if (${includeGraphBar}) selectors.push('.vote-timeline__bar[data-date="${date}"]');
+    return selectors.map((selector) => {
+      const element = document.querySelector(selector);
+      const beam = element ? getComputedStyle(element, '::before') : null;
+      return {
+        found: Boolean(element),
+        active: element?.classList.contains('is-beam-running') ?? false,
+        animation: beam?.animationName ?? 'none',
+        angle: Number.parseFloat(beam?.getPropertyValue('--beam-angle') ?? 'NaN'),
+      };
+    });
+  })()`);
+}
+
+function maxCircularDifference(values, circumference = 360) {
+  const normalized = values.map((value) => ((value % circumference) + circumference) % circumference);
+  return Math.max(0, ...normalized.flatMap((value, index) => normalized.slice(index + 1).map((other) => {
+    const difference = Math.abs(value - other);
+    return Math.min(difference, circumference - difference);
+  })));
+}
+
+function assertSynchronizedBeamPhase(samples, context) {
+  assert.ok(samples.every(({ found, active, animation, angle }) => found && active && animation === 'scheduled-border-beam' && Number.isFinite(angle)), `${context}: all sampled scheduled representations expose a running beam angle: ${JSON.stringify(samples)}`);
+  assert.ok(maxCircularDifference(samples.map(({ angle }) => angle)) < 10, `${context}: measured beam angles remain in the same normalized phase: ${JSON.stringify(samples)}`);
+}
+
 async function pressEnter(client) {
   await client.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', text: '\r', unmodifiedText: '\r', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
   await client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
@@ -558,6 +593,17 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
   assert.equal(await evaluate(client2, `document.querySelector('.vote-timeline__bar[data-date="2024-03-03"]').classList.contains('is-top-ranked')`), true, 'a scheduled bar tied for the highest count keeps its rank cue');
   assert.equal(await evaluate(client2, `document.querySelector('.vote-timeline__day[data-date="2024-03-03"] .vote-timeline__top-cue').hidden`), false, 'the top-rank marker remains visible on a scheduled tie');
   assert.equal(await evaluate(client2, `document.querySelector('.vote-timeline__day[data-date="2024-03-03"]').getAttribute('aria-label').includes('scheduled run')`), true, 'graph indicator announces scheduled status independently of its color');
+  await client2.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 1500, deviceScaleFactor: 1, mobile: false });
+  await evaluate(client2, 'window.scrollTo(0, 0)');
+  for (let navigation = 0; navigation < 3; navigation += 1) {
+    await evaluate(client2, "document.querySelector('#next-week').click()");
+    assert.equal(await waitFor(client2, `document.querySelector('#week-range').textContent === '2024-03-04 – 2024-03-10'`), true, `Next week completes before synchronization sample ${navigation + 1}`);
+    await delay(90 + navigation * 110);
+    await evaluate(client2, "document.querySelector('#current-week').click()");
+    assert.equal(await waitFor(client2, `document.querySelector('#week-range').textContent === '2024-02-26 – 2024-03-03'`), true, `Now completes before synchronization sample ${navigation + 1}`);
+    assert.equal(await waitFor(client2, `[...document.querySelectorAll('.run-event-banner[data-date="2024-03-03"], #week-days .vote-card[data-date="2024-03-03"], .vote-timeline__date[datetime="2024-03-03"], .vote-timeline__bar[data-date="2024-03-03"]')].every((element) => element.classList.contains('is-beam-running'))`), true, `all scheduled targets are visible after mixed retained/replacement cycle ${navigation + 1}`);
+    assertSynchronizedBeamPhase(await sampleScheduledBeamPhase(client2, '2024-03-03'), `week navigation cycle ${navigation + 1}`);
+  }
   for (const member of scheduledTieMembers) await removeVote(baseUrl, member, '2024-03-03');
   await removeVote(baseUrl, runner, '2024-03-03');
   for (const page of [client, client2]) {
@@ -569,8 +615,7 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
   assert.equal(await evaluate(client2, `document.querySelector('.run-event-banner[data-date="2024-03-03"]').classList.contains('is-beam-running')`), true, 'a vote update does not interrupt the peer beam');
   assert.equal(await evaluate(client2, `document.querySelector('.vote-timeline__date[datetime="2024-03-03"]').classList.contains('is-beam-running')`), true, 'a vote update preserves the scheduled graph indicator');
   assert.equal(await evaluate(client2, `document.querySelector('.vote-timeline__bar[data-date="2024-03-03"]').classList.contains('is-scheduled')`), true, 'zero-vote scheduled dates keep their gold status without a positive-height bar');
-  const voteUpdatePhases = await evaluate(client2, `['.run-event-banner[data-date="2024-03-03"]', '.vote-timeline__date[datetime="2024-03-03"]', '#week-days .vote-card[data-date="2024-03-03"]'].map((selector) => document.querySelector(selector).style.getPropertyValue('--beam-delay'))`);
-  assert.equal(new Set(voteUpdatePhases).size, 1, 'an ordinary vote update keeps all visible scheduled representations synchronized');
+  assertSynchronizedBeamPhase(await sampleScheduledBeamPhase(client2, '2024-03-03', { includeGraphBar: false }), 'ordinary vote update');
   await client2.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
   assert.equal(await evaluate(client2, `getComputedStyle(document.querySelector('.run-event-banner[data-date="2024-03-03"]'), '::before').animationName`), 'none', 'a live reduced-motion preference change stops the beam');
   await client2.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] });
@@ -589,8 +634,15 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
   assert.equal(await waitFor(client2, `(() => { const box = document.querySelector('.vote-timeline__date[datetime="2024-03-03"]').getBoundingClientRect(); return box.bottom <= 0 || box.top >= innerHeight; })()`), true, 'a real vertical swipe moves the scheduled graph date fully offscreen');
   await verticalPageSwipe(client2, 240);
   assert.equal(await waitFor(client2, `document.querySelector('.vote-timeline__date[datetime="2024-03-03"]').classList.contains('is-beam-running')`), true, 'the scheduled graph beam resumes on viewport re-entry');
-  const reentryPhase = await evaluate(client2, `(() => { const date = document.querySelector('.vote-timeline__date[datetime="2024-03-03"]'); const angle = Number.parseFloat(getComputedStyle(date, '::before').getPropertyValue('--beam-angle')); const expected = (performance.now() % 1400) / 1400 * 360; const rawDifference = Math.abs(angle - expected); return { difference: Math.min(rawDifference, 360 - rawDifference), active: date.classList.contains('is-beam-running') }; })()`);
-  assert.ok(reentryPhase.active && reentryPhase.difference < 30, 'viewport re-entry resumes at the current normalized page phase');
+  const reentryPhase = await evaluate(client2, `(async () => {
+    for (let frame = 0; frame < 4; frame += 1) await new Promise(requestAnimationFrame);
+    const date = document.querySelector('.vote-timeline__date[datetime="2024-03-03"]');
+    const angle = Number.parseFloat(getComputedStyle(date, '::before').getPropertyValue('--beam-angle'));
+    const expected = (document.timeline.currentTime % 1400) / 1400 * 360;
+    const rawDifference = Math.abs(angle - expected);
+    return { difference: Math.min(rawDifference, 360 - rawDifference), active: date.classList.contains('is-beam-running') };
+  })()`);
+  assert.ok(reentryPhase.active && reentryPhase.difference < 10, 'independent viewport re-entry resumes at the current normalized page phase after multiple animation frames');
   await client2.send('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0, connectionType: 'none' });
   assert.equal(await waitFor(client2, '!navigator.onLine'), true, 'the peer browser goes offline before the authoritative change');
   const scheduledEvent = server.database.prepare('SELECT id, revision FROM run_events WHERE event_date = ?').get('2024-03-03');
