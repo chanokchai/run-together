@@ -225,6 +225,13 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
     assert.equal(member.response.status, 201);
     await setVote(baseUrl, member, '2024-03-01');
   }
+  const scheduledTieMembers = [];
+  for (const name of ['ScheduledTieRunnerA', 'ScheduledTieRunnerB', 'ScheduledTieRunnerC']) {
+    const member = await registerMember(baseUrl, name);
+    assert.equal(member.response.status, 201);
+    await setVote(baseUrl, member, '2024-03-03');
+    scheduledTieMembers.push(member);
+  }
   const admin = await loginAdmin(baseUrl);
   assert.equal(admin.response.status, 200);
 
@@ -361,6 +368,7 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
   await evaluate(client, `document.querySelector('.run-event-banner[data-date="2024-03-01"] button[data-run-event-status="proposed"]')?.focus()`);
   await pressEnter(client);
   assert.equal(await waitFor(client, `document.querySelector('.run-event-banner[data-date="2024-03-01"] .run-event-banner__status')?.textContent === 'Scheduled'`), true, 'admin keyboard action schedules a proposal');
+  assert.equal(await evaluate(client, `document.activeElement?.closest('.run-event-banner')?.dataset.date === '2024-03-01' && document.activeElement.matches('.run-event-actions [data-run-event-status]')`), true, 'keyboard focus follows the status control when scheduling reorders its banner');
   await client.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
   assert.equal(await evaluate(client, `getComputedStyle(document.querySelector('.run-event-banner[data-date="2024-03-01"]')).animationName`), 'none', 'scheduled emphasis is disabled for reduced-motion users');
   await evaluate(client, `document.querySelector('.run-event-banner[data-date="2024-03-01"] button[data-run-event-status="scheduled"]')?.focus()`);
@@ -410,6 +418,7 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
   assert.equal(await waitFor(client, `document.querySelector('.run-event-banner[data-date="2024-03-01"]') === null`), true, 'admin left swipe permanently deletes a scheduled event');
   assert.deepEqual(await evaluate(client, 'window.issue32AdminMutations'), ['DELETE'], 'a completed banner swipe does not also synthesize an admin tap action');
   assert.equal(server.database.prepare('SELECT COUNT(*) AS count FROM votes WHERE vote_date = ?').get('2024-03-01').count, 4, 'event deletion preserves all availability votes');
+  await propose(baseUrl, runner, '2024-03-01', 3);
 
   let proposedEvent = server.database.prepare('SELECT id, revision, status FROM run_events WHERE event_date = ?').get('2024-03-03');
   if (proposedEvent.status === 'scheduled') {
@@ -434,9 +443,16 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
   await client2.send('Page.navigate', { url: `${baseUrl}/vote` });
   assert.equal(await waitFor(client2, `document.querySelector('#protected-content') && !document.querySelector('#protected-content').hidden && document.querySelector('.run-event-banner[data-date="2024-03-03"]')`), true, 'second authenticated client loads the proposed event');
   const watchScheduledEffects = `(() => {
-    window.issue34Starts = { banner: 0, date: 0 };
-    document.querySelector('.run-event-banner[data-date="2024-03-03"]')?.addEventListener('animationstart', (event) => { if (event.animationName === 'scheduled-border-confetti') window.issue34Starts.banner += 1; });
-    document.querySelector('.vote-timeline__date[datetime="2024-03-03"]')?.addEventListener('animationstart', (event) => { if (event.animationName === 'scheduled-border-confetti') window.issue34Starts.date += 1; });
+    window.issue34Starts = { banner: 0, date: 0, card: 0, bar: 0 };
+    const targets = {
+      banner: document.querySelector('.run-event-banner[data-date="2024-03-03"]'),
+      date: document.querySelector('.vote-timeline__date[datetime="2024-03-03"]'),
+      card: document.querySelector('#week-days .vote-card[data-date="2024-03-03"]'),
+      bar: document.querySelector('.vote-timeline__bar[data-date="2024-03-03"]'),
+    };
+    Object.entries(targets).forEach(([name, target]) => target?.addEventListener('animationstart', (event) => {
+      if (event.animationName === 'scheduled-border-beam') window.issue34Starts[name] += 1;
+    }));
   })()`;
   await evaluate(client, watchScheduledEffects);
   await evaluate(client2, watchScheduledEffects);
@@ -449,15 +465,100 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
   for (const page of [client, client2]) {
     assert.equal(await waitFor(page, `document.querySelector('.run-event-banner[data-date="2024-03-03"] .run-event-banner__status')?.textContent === 'Scheduled'`), true, 'both connected clients receive the scheduled state');
   }
-  assert.equal(await evaluate(client, `getComputedStyle(document.querySelector('.run-event-banner[data-date="2024-03-03"]')).animationName`), 'none', 'reduced-motion user receives the static scheduled indicator');
-  assert.equal(await waitFor(client2, `document.querySelector('.run-event-banner[data-date="2024-03-03"]').classList.contains('is-celebrating')`), true, 'the peer client plays the brief banner effect');
-  const bannerConfetti = await evaluate(client2, `(() => { const style = getComputedStyle(document.querySelector('.run-event-banner[data-date="2024-03-03"]'), '::after'); return { repeat: style.backgroundRepeat, pointerEvents: style.pointerEvents }; })()`);
-  assert.equal(bannerConfetti.repeat, 'repeat-x, repeat-x, repeat-y, repeat-y', 'decorative confetti stays on the banner borders instead of covering text');
-  assert.equal(bannerConfetti.pointerEvents, 'none', 'confetti cannot intercept gesture or button input');
-  assert.equal(await evaluate(client2, `window.issue34Starts.banner`), 1, 'the peer banner starts one non-looping effect');
-  assert.equal(await waitFor(client2, `document.querySelector('.vote-timeline__date[datetime="2024-03-03"]').classList.contains('is-celebrating')`), true, 'the matching visible graph date plays its independent effect');
-  assert.equal(await waitFor(client2, `window.issue34Starts.date > 0`), true, 'the matching graph effect actually starts before a count update');
-  const graphStartsBeforeVoteUpdate = await evaluate(client2, `window.issue34Starts.date`);
+  const eventOrders = await Promise.all([client, client2].map((page) => evaluate(page, `[...document.querySelectorAll('.run-event-banner')].map((banner) => banner.dataset.date + ':' + banner.querySelector('.run-event-banner__status').textContent)`)));
+  assert.deepEqual(eventOrders, [
+    ['2024-03-03:Scheduled', '2024-03-01:Proposed'],
+    ['2024-03-03:Scheduled', '2024-03-01:Proposed'],
+  ], 'a later scheduled event precedes an earlier proposed event on both clients');
+  const eventBeforeLiveRevert = server.database.prepare('SELECT id, revision FROM run_events WHERE event_date = ?').get('2024-03-03');
+  const liveRevert = await fetch(`${baseUrl}/api/admin/events/2024-03-03`, {
+    method: 'PUT',
+    headers: { cookie: admin.cookie, origin: baseUrl, 'content-type': 'application/json', 'x-csrf-token': admin.csrfToken },
+    body: JSON.stringify({ eventId: eventBeforeLiveRevert.id, revision: eventBeforeLiveRevert.revision, status: 'proposed', requestId: '00000000-0000-4000-8000-000000000146' }),
+  });
+  assert.equal(liveRevert.status, 200, 'admin reverts the event while both clients are connected');
+  for (const page of [client, client2]) {
+    assert.equal(await waitFor(page, `document.querySelector('.run-event-banner[data-date="2024-03-03"] .run-event-banner__status')?.textContent === 'Proposed'`), true, 'both clients remove the live scheduled status');
+    assert.equal(await evaluate(page, `!document.querySelector('#week-days .vote-card[data-date="2024-03-03"]').classList.contains('is-scheduled') && !document.querySelector('.vote-timeline__bar[data-date="2024-03-03"]').classList.contains('is-scheduled')`), true, 'live reversion removes the card and gold graph styling');
+  }
+  const revertedOrder = await evaluate(client2, `[...document.querySelectorAll('.run-event-banner')].map((banner) => banner.dataset.date)`);
+  assert.deepEqual(revertedOrder, ['2024-03-01', '2024-03-03'], 'proposed banners return to ascending date order');
+  const earlierProposal = server.database.prepare('SELECT id, revision FROM run_events WHERE event_date = ?').get('2024-03-01');
+  const deleteEarlierProposal = await fetch(`${baseUrl}/api/admin/events/2024-03-01`, {
+    method: 'DELETE',
+    headers: { cookie: admin.cookie, origin: baseUrl, 'content-type': 'application/json', 'x-csrf-token': admin.csrfToken },
+    body: JSON.stringify({ eventId: earlierProposal.id, revision: earlierProposal.revision, requestId: '00000000-0000-4000-8000-000000000147' }),
+  });
+  assert.equal(deleteEarlierProposal.status, 200, 'admin deletes the earlier proposal while both clients are connected');
+  for (const page of [client, client2]) {
+    assert.equal(await waitFor(page, `!document.querySelector('.run-event-banner[data-date="2024-03-01"]')`), true, 'live deletion removes the proposal from both clients');
+  }
+  assert.equal(server.database.prepare('SELECT COUNT(*) AS count FROM votes WHERE vote_date = ?').get('2024-03-01').count, 4, 'deleting a proposal preserves its availability votes');
+  const eventBeforeLiveSchedule = server.database.prepare('SELECT id, revision FROM run_events WHERE event_date = ?').get('2024-03-03');
+  const liveSchedule = await fetch(`${baseUrl}/api/admin/events/2024-03-03`, {
+    method: 'PUT',
+    headers: { cookie: admin.cookie, origin: baseUrl, 'content-type': 'application/json', 'x-csrf-token': admin.csrfToken },
+    body: JSON.stringify({ eventId: eventBeforeLiveSchedule.id, revision: eventBeforeLiveSchedule.revision, status: 'scheduled', requestId: '00000000-0000-4000-8000-000000000148' }),
+  });
+  assert.equal(liveSchedule.status, 200, 'admin reschedules the remaining event');
+  for (const page of [client, client2]) {
+    assert.equal(await waitFor(page, `document.querySelector('.run-event-banner[data-date="2024-03-03"] .run-event-banner__status')?.textContent === 'Scheduled'`), true, 'rescheduling restores the authoritative state on both clients');
+  }
+  assert.equal(await evaluate(client, `getComputedStyle(document.querySelector('.run-event-banner[data-date="2024-03-03"]'), '::before').animationName`), 'none', 'reduced-motion user receives a static scheduled indicator');
+  assert.equal(await evaluate(client, `document.querySelector('#week-days .vote-card[data-date="2024-03-03"]').getAttribute('aria-label').includes('Scheduled run')`), true, 'the scheduled date card exposes its status accessibly');
+  assert.equal(await evaluate(client, `document.querySelector('#week-days .vote-card[data-date="2024-03-03"]').classList.contains('is-selected')`), true, 'the scheduled card keeps its selected-vote state');
+  assert.equal(await evaluate(client, `getComputedStyle(document.querySelector('#week-days .vote-card[data-date="2024-03-03"]')).borderTopColor`), 'rgb(245, 197, 66)', 'the selected-vote border remains distinguishable in reduced motion');
+  assert.equal(await evaluate(client, `getComputedStyle(document.querySelector('#week-days .vote-card[data-date="2024-03-03"]')).boxShadow.includes('rgb(21, 128, 61)')`), true, 'reduced motion retains a static scheduled inset marker alongside the selected border');
+  await client2.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 1600, deviceScaleFactor: 1, mobile: true });
+  assert.equal(await waitFor(client2, `document.querySelector('#week-days .vote-card[data-date="2024-03-03"]')?.classList.contains('is-beam-running')`), true, 'the scheduled vote card begins its beam when visible');
+  const beamState = await evaluate(client2, `(() => {
+    const selectors = [
+      '.run-event-banner[data-date="2024-03-03"]',
+      '.vote-timeline__date[datetime="2024-03-03"]',
+      '#week-days .vote-card[data-date="2024-03-03"]',
+      '.vote-timeline__bar[data-date="2024-03-03"]',
+    ];
+    return selectors.map((selector) => {
+      const element = document.querySelector(selector);
+      const base = element ? getComputedStyle(element) : null;
+      const beam = element ? getComputedStyle(element, '::before') : null;
+      return {
+        found: Boolean(element),
+        scheduled: element?.classList.contains('is-scheduled') || element?.classList.contains('run-event-banner--scheduled'),
+        speed: base?.getPropertyValue('--beam-speed').trim() ?? '',
+        length: base?.getPropertyValue('--beam-length').trim() ?? '',
+        border: base?.getPropertyValue('--border-width').trim() ?? '',
+        blur: base?.getPropertyValue('--glow-blur').trim() ?? '',
+        color: base?.getPropertyValue('--beam-color').trim() ?? '',
+        running: element?.classList.contains('is-beam-running'),
+        animation: beam?.animationName ?? 'none',
+        duration: beam?.animationDuration ?? '',
+        iterations: beam?.animationIterationCount ?? '',
+        delay: base?.getPropertyValue('--beam-delay').trim() ?? '',
+        angle: beam?.getPropertyValue('--beam-angle').trim() ?? '',
+        clipPath: beam?.clipPath ?? 'none',
+        pointerEvents: beam?.pointerEvents ?? '',
+      };
+    });
+  })()`);
+  assert.ok(beamState.every(({ found, scheduled }) => found && scheduled), 'banner, vote card, graph date, and graph bar expose scheduled state');
+  assert.ok(beamState.every(({ speed, length, border, blur, color }) => speed === '1.4s' && length === '50%' && border === '5px' && blur === '24px' && color === '#22c55e'), 'all scheduled representations share the exact approved beam settings');
+  assert.ok(beamState.every(({ running, animation, duration, iterations, pointerEvents }) => running && animation === 'scheduled-border-beam' && duration === '1.4s' && iterations === 'infinite' && pointerEvents === 'none'), 'all visible scheduled representations run a continuous non-interactive beam');
+  assert.ok(beamState.every(({ clipPath }) => clipPath !== 'none'), 'the 24px glow remains clipped to each border instead of spilling across neighboring content');
+  const beamAngles = beamState.map(({ angle }) => Number.parseFloat(angle));
+  assert.ok(beamAngles.every(Number.isFinite) && Math.max(...beamAngles) - Math.min(...beamAngles) < 5, 'different perimeter sizes use one normalized page phase');
+  const angleSelectors = ['.run-event-banner[data-date="2024-03-03"]', '.vote-timeline__date[datetime="2024-03-03"]', '#week-days .vote-card[data-date="2024-03-03"]', '.vote-timeline__bar[data-date="2024-03-03"]'];
+  const initialAngles = await evaluate(client2, `(${JSON.stringify(angleSelectors)}).map((selector) => getComputedStyle(document.querySelector(selector), '::before').getPropertyValue('--beam-angle'))`);
+  await delay(220);
+  const movingAngles = await evaluate(client2, `(${JSON.stringify(angleSelectors)}).map((selector) => getComputedStyle(document.querySelector(selector), '::before').getPropertyValue('--beam-angle'))`);
+  assert.ok(movingAngles.every((angle, index) => angle !== initialAngles[index]), 'the beam angle continues to move on every scheduled representation');
+  const movingDegrees = movingAngles.map((angle) => Number.parseFloat(angle));
+  assert.ok(movingDegrees.every(Number.isFinite) && Math.max(...movingDegrees) - Math.min(...movingDegrees) < 5, 'the different-sized borders remain in the same normalized animation phase');
+  assert.equal(await evaluate(client2, `getComputedStyle(document.querySelector('.vote-timeline__bar[data-date="2024-03-03"]')).backgroundColor`), 'rgb(245, 197, 66)', 'scheduled graph bars retain their distinct gold fill');
+  assert.equal(await evaluate(client2, `document.querySelector('.vote-timeline__bar[data-date="2024-03-03"]').classList.contains('is-top-ranked')`), true, 'a scheduled bar tied for the highest count keeps its rank cue');
+  assert.equal(await evaluate(client2, `document.querySelector('.vote-timeline__day[data-date="2024-03-03"] .vote-timeline__top-cue').hidden`), false, 'the top-rank marker remains visible on a scheduled tie');
+  assert.equal(await evaluate(client2, `document.querySelector('.vote-timeline__day[data-date="2024-03-03"]').getAttribute('aria-label').includes('scheduled run')`), true, 'graph indicator announces scheduled status independently of its color');
+  for (const member of scheduledTieMembers) await removeVote(baseUrl, member, '2024-03-03');
   await removeVote(baseUrl, runner, '2024-03-03');
   for (const page of [client, client2]) {
     assert.equal(await waitFor(page, `document.querySelector('.run-event-banner[data-date="2024-03-03"] .run-event-banner__count')?.textContent === '0 votes'`), true, 'the live vote removal updates its event count');
@@ -465,21 +566,31 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
     assert.equal(await evaluate(page, `document.querySelector('.vote-timeline__day[data-date="2024-03-03"] .vote-timeline__bar').getBoundingClientRect().height`), 0, 'scheduled zero votes keep a zero-height bar');
     assert.equal(await evaluate(page, `document.querySelector('.vote-timeline__day[data-date="2024-03-03"]').getAttribute('aria-label').includes('0 votes, scheduled run')`), true, 'the graph retains the actual zero count and accessible scheduled state');
   }
-  assert.equal(await evaluate(client2, `window.issue34Starts.date`), graphStartsBeforeVoteUpdate, 'an ordinary vote-count update does not restart the visible graph effect');
-  assert.equal(await evaluate(client2, `document.querySelector('.run-event-banner[data-date="2024-03-03"]').classList.contains('is-celebrating')`), true, 'a vote update does not interrupt the peer animation');
-  assert.equal(await evaluate(client2, `window.issue34Starts.banner`), 1, 'a vote update does not create a second peer animation');
+  assert.equal(await evaluate(client2, `document.querySelector('.run-event-banner[data-date="2024-03-03"]').classList.contains('is-beam-running')`), true, 'a vote update does not interrupt the peer beam');
+  assert.equal(await evaluate(client2, `document.querySelector('.vote-timeline__date[datetime="2024-03-03"]').classList.contains('is-beam-running')`), true, 'a vote update preserves the scheduled graph indicator');
+  assert.equal(await evaluate(client2, `document.querySelector('.vote-timeline__bar[data-date="2024-03-03"]').classList.contains('is-scheduled')`), true, 'zero-vote scheduled dates keep their gold status without a positive-height bar');
+  const voteUpdatePhases = await evaluate(client2, `['.run-event-banner[data-date="2024-03-03"]', '.vote-timeline__date[datetime="2024-03-03"]', '#week-days .vote-card[data-date="2024-03-03"]'].map((selector) => document.querySelector(selector).style.getPropertyValue('--beam-delay'))`);
+  assert.equal(new Set(voteUpdatePhases).size, 1, 'an ordinary vote update keeps all visible scheduled representations synchronized');
+  await client2.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
+  assert.equal(await evaluate(client2, `getComputedStyle(document.querySelector('.run-event-banner[data-date="2024-03-03"]'), '::before').animationName`), 'none', 'a live reduced-motion preference change stops the beam');
+  await client2.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] });
+  assert.equal(await waitFor(client2, `getComputedStyle(document.querySelector('.run-event-banner[data-date="2024-03-03"]'), '::before').animationName === 'scheduled-border-beam'`), true, 'restoring normal motion restarts the beam at the shared phase');
   await delay(1600);
   for (const page of [client, client2]) {
-    assert.equal(await evaluate(page, `document.querySelector('.run-event-banner[data-date="2024-03-03"]').classList.contains('is-celebrating')`), false, 'the brief effect ends without looping');
+    if (page === client2) {
+      assert.equal(await evaluate(page, `getComputedStyle(document.querySelector('.run-event-banner[data-date="2024-03-03"]'), '::before').animationName`), 'scheduled-border-beam', 'the beam continues beyond the former 1.5-second cutoff');
+      assert.equal(await evaluate(page, `getComputedStyle(document.querySelector('.run-event-banner[data-date="2024-03-03"]'), '::before').animationIterationCount`), 'infinite', 'the beam has no one-shot timeout');
+    } else {
+      assert.equal(await evaluate(page, `getComputedStyle(document.querySelector('.run-event-banner[data-date="2024-03-03"]'), '::before').animationName`), 'none', 'reduced-motion remains static beyond the former cutoff');
+    }
   }
-  assert.equal(await evaluate(client2, `window.issue34Starts.banner`), 1, 'the scheduled indicator remains static after its effect');
   await client2.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 300, deviceScaleFactor: 1, mobile: true });
-  const dateStartsBeforeReentry = await evaluate(client2, `window.issue34Starts.date`);
   await verticalPageSwipe(client2, -240);
   assert.equal(await waitFor(client2, `(() => { const box = document.querySelector('.vote-timeline__date[datetime="2024-03-03"]').getBoundingClientRect(); return box.bottom <= 0 || box.top >= innerHeight; })()`), true, 'a real vertical swipe moves the scheduled graph date fully offscreen');
   await verticalPageSwipe(client2, 240);
-  assert.equal(await waitFor(client2, `document.querySelector('.vote-timeline__date[datetime="2024-03-03"]').classList.contains('is-celebrating')`), true, 'the scheduled graph effect replays on viewport re-entry');
-  assert.ok(await evaluate(client2, `window.issue34Starts.date`) > dateStartsBeforeReentry, 'viewport re-entry starts a fresh graph animation');
+  assert.equal(await waitFor(client2, `document.querySelector('.vote-timeline__date[datetime="2024-03-03"]').classList.contains('is-beam-running')`), true, 'the scheduled graph beam resumes on viewport re-entry');
+  const reentryPhase = await evaluate(client2, `(() => { const date = document.querySelector('.vote-timeline__date[datetime="2024-03-03"]'); const angle = Number.parseFloat(getComputedStyle(date, '::before').getPropertyValue('--beam-angle')); const expected = (performance.now() % 1400) / 1400 * 360; const rawDifference = Math.abs(angle - expected); return { difference: Math.min(rawDifference, 360 - rawDifference), active: date.classList.contains('is-beam-running') }; })()`);
+  assert.ok(reentryPhase.active && reentryPhase.difference < 30, 'viewport re-entry resumes at the current normalized page phase');
   await client2.send('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0, connectionType: 'none' });
   assert.equal(await waitFor(client2, '!navigator.onLine'), true, 'the peer browser goes offline before the authoritative change');
   const scheduledEvent = server.database.prepare('SELECT id, revision FROM run_events WHERE event_date = ?').get('2024-03-03');
@@ -494,7 +605,7 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
   await client2.send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1, connectionType: 'wifi' });
   assert.equal(await waitFor(client2, `!document.querySelector('.run-event-banner[data-date="2024-03-03"]')`), true, 'socket reconnect repairs the peer banner from authoritative state');
   assert.equal(await evaluate(client2, `document.querySelector('.vote-timeline__date[datetime="2024-03-03"]').classList.contains('is-scheduled')`), false, 'socket reconnect repairs the scheduled graph state');
-  assert.equal(await evaluate(client2, `document.querySelector('.vote-timeline__date[datetime="2024-03-03"]').classList.contains('is-celebrating')`), false, 'reconnect cleanup stops any active stale effect');
+  assert.equal(await evaluate(client2, `document.querySelector('.vote-timeline__date[datetime="2024-03-03"]').classList.contains('is-beam-running')`), false, 'reconnect cleanup stops any active stale beam');
   for (const width of [320, 390, 1280]) {
     await client2.send('Emulation.setDeviceMetricsOverride', { width, height: 844, deviceScaleFactor: 1, mobile: width <= 390 });
     const layout = await evaluate(client2, `(() => {
@@ -502,11 +613,12 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
       const nav = rows[0];
       const navBox = nav.getBoundingClientRect();
       const lastCard = document.querySelector('#week-days > li:last-child .vote-card').getBoundingClientRect();
+      const timelineDates = [...document.querySelectorAll('.vote-timeline__date')].map((date) => ({ top: date.getBoundingClientRect().top, transform: getComputedStyle(date).transform, text: date.textContent.trim() }));
       const buttons = [...nav.querySelectorAll('button')].map((button) => {
         const box = button.getBoundingClientRect();
         return { label: button.textContent.trim(), name: button.getAttribute('aria-label') || button.textContent.trim(), top: box.top };
       });
-      return { count: rows.length, viewportWidth: innerWidth, pageWidth: document.documentElement.scrollWidth, navTop: navBox.top, navLeft: navBox.left, navRight: navBox.right, lastCardBottom: lastCard.bottom, buttons };
+      return { count: rows.length, viewportWidth: innerWidth, pageWidth: document.documentElement.scrollWidth, navTop: navBox.top, navLeft: navBox.left, navRight: navBox.right, lastCardBottom: lastCard.bottom, buttons, timelineDates };
     })()`);
     assert.equal(layout.count, 1, `one navigation row at ${width}px`);
     assert.equal(layout.viewportWidth, width);
@@ -516,6 +628,9 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
     assert.deepEqual(layout.buttons.map(({ label }) => label), ['<<', 'Now', '>>']);
     assert.deepEqual(layout.buttons.map(({ name }) => name), ['Previous week', 'Now', 'Next week']);
     assert.ok(layout.buttons.every(({ top }) => Math.abs(top - layout.buttons[0].top) < 1), `navigation is one row at ${width}px`);
+    assert.ok(layout.timelineDates.length > 0 && layout.timelineDates.every(({ text }) => text.length > 0), `all graph dates remain visible at ${width}px`);
+    assert.ok(layout.timelineDates.every(({ top }) => Math.abs(top - layout.timelineDates[0].top) < 1), `graph date labels share one horizontal baseline at ${width}px`);
+    assert.ok(layout.timelineDates.every(({ transform }) => transform === 'none'), `graph date labels do not use alternating offsets at ${width}px`);
   }
   server.database.transaction(() => {
     server.database.prepare('DELETE FROM run_events').run();

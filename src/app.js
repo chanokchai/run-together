@@ -49,6 +49,7 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
     <title>${title}</title>
     <style>
       :root { color-scheme: light; font-family: system-ui, sans-serif; }
+      @property --beam-angle { syntax: "<angle>"; inherits: false; initial-value: 0deg; }
       body { margin: 0; background: #f3f6fa; color: #14213d; }
       main { max-width: 34rem; margin: 0 auto; padding: 2rem 1rem; }
       .vote-page-main { max-width: 90rem; padding-inline: clamp(1rem, 4vw, 3rem); }
@@ -86,28 +87,29 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       .vote-timeline > h2 { margin: .1rem 0 .2rem; font-size: .95rem; }
       .vote-timeline__range { margin: 0 0 .25rem; color: #334155; font-size: .68rem; line-height: 1.2; }
       .vote-timeline__days { display: grid; align-items: end; gap: 1px; width: 100%; margin: .15rem 0 0; padding: 0; list-style: none; }
-      .vote-timeline__day { display: grid; grid-template-rows: minmax(30px, max-content) 52px 32px; min-width: 0; text-align: center; }
-      .vote-timeline__count { color: #14213d; font-size: clamp(.62rem, 2.8vw, .72rem); line-height: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+      .vote-timeline__day { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(30px, max-content) 52px 32px; min-width: 0; text-align: center; }
+      .vote-timeline__count { justify-self: center; width: max-content; color: #14213d; font-size: clamp(.62rem, 2.8vw, .72rem); line-height: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
       .vote-timeline__day:nth-child(even) .vote-timeline__count { transform: translateY(15px); }
       .vote-timeline__track { position: relative; display: flex; min-width: 0; align-items: flex-end; justify-content: center; border-bottom: 1px solid #52606d; }
       .vote-timeline__bar { display: block; width: min(100%, .8rem); min-height: 0; border-radius: .15rem .15rem 0 0; background: #0b3d2e; }
       .vote-timeline__bar.is-top-ranked { border: 1px dashed #4c1d95; border-bottom: 0; background: #6b21a8; }
+      .vote-timeline__bar.is-scheduled { background: #f5c542; }
       .vote-timeline__top-cue { position: absolute; top: 0; left: 50%; z-index: 1; color: #fff; font-size: .62rem; line-height: 1; transform: translateX(-50%); }
-      .vote-timeline__date { display: flex; flex-direction: column; align-items: center; overflow: hidden; color: #14213d; font-size: .62rem; line-height: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-      .vote-timeline__day:nth-child(even) .vote-timeline__date { transform: translateY(12px); }
+      .vote-timeline__date { display: flex; flex-direction: column; align-items: center; min-width: 0; width: 100%; box-sizing: border-box; overflow: hidden; color: #14213d; font-size: clamp(.54rem, 2.75vw, .62rem); line-height: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
       .vote-timeline__count.is-zero { visibility: hidden; }
       .vote-timeline__date.is-scheduled { position: relative; border-radius: .25rem; outline: 1px solid #15803d; background: #dcfce7; color: #14532d; font-weight: 700; }
-      .vote-timeline__date.is-scheduled::after, .run-event-banner--scheduled::after { content: ""; position: absolute; inset: 1px; border-radius: inherit; pointer-events: none; opacity: 0; background-image: radial-gradient(circle, #f59e0b 1.2px, transparent 1.8px), radial-gradient(circle, #15803d 1px, transparent 1.6px), radial-gradient(circle, #2563eb 1px, transparent 1.6px), radial-gradient(circle, #dc2626 1px, transparent 1.6px); background-size: 12px 5px, 12px 5px, 5px 12px, 5px 12px; background-position: left top, right bottom, left bottom, right top; background-repeat: repeat-x, repeat-x, repeat-y, repeat-y; }
-      .vote-timeline__date.is-celebrating, .vote-timeline__bar.is-celebrating, .run-event-banner--scheduled.is-celebrating { animation: scheduled-border-confetti 1.5s ease-out 1; }
-      .vote-timeline__date.is-celebrating::after, .run-event-banner--scheduled.is-celebrating::after { animation: scheduled-confetti-dots 1.5s ease-out 1; }
-      .vote-timeline__bar.is-celebrating { filter: drop-shadow(0 0 2px #f59e0b); }
-      @keyframes scheduled-border-confetti { 0%, 100% { box-shadow: 0 0 0 0 #22c55e00; } 30% { box-shadow: 0 0 0 3px #22c55e88; } 62% { box-shadow: 0 0 0 1px #f59e0bbb; } }
-      @keyframes scheduled-confetti-dots { 12% { opacity: .8; } 100% { opacity: 0; } }
+      :is(.vote-timeline__date.is-scheduled, .vote-timeline__bar.is-scheduled, .vote-card.is-scheduled, .run-event-banner--scheduled) { --beam-speed: 1.4s; --beam-length: 50%; --border-width: 5px; --glow-blur: 24px; --beam-color: #22c55e; }
+      :is(.vote-timeline__date.is-scheduled, .vote-timeline__bar.is-scheduled, .vote-card.is-scheduled, .run-event-banner--scheduled).is-beam-running { position: relative; isolation: isolate; }
+      :is(.vote-timeline__date.is-scheduled, .vote-timeline__bar.is-scheduled, .vote-card.is-scheduled, .run-event-banner--scheduled).is-beam-running::before { content: ""; position: absolute; z-index: 0; inset: 0; box-sizing: border-box; padding: var(--border-width); border-radius: inherit; background: conic-gradient(from var(--beam-angle), transparent 0 25%, var(--beam-color) 38%, #f0fdf4 var(--beam-length), var(--beam-color) 62%, transparent 75% 100%); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; filter: drop-shadow(0 0 var(--glow-blur) var(--beam-color)); clip-path: inset(0); pointer-events: none; animation: scheduled-border-beam var(--beam-speed) linear infinite; animation-delay: var(--beam-delay, 0ms); }
+      :is(.vote-timeline__date, .vote-timeline__bar, .vote-card, .run-event-banner).is-beam-running > * { position: relative; z-index: 1; }
+      @keyframes scheduled-border-beam { to { --beam-angle: 360deg; } }
       .vote-timeline__month { font-size: .42rem; line-height: 8px; }
       .vote-day { display: flex; min-width: 0; }
       .vote-card { display: flex; flex: 1 1 auto; flex-direction: column; align-items: stretch; gap: .4rem; width: 100%; min-width: 0; min-height: 8rem; height: 100%; margin: 0; padding: .55rem .3rem; border: .2rem solid transparent; border-radius: .6rem; background: var(--day-bg); color: var(--day-fg); font-size: clamp(.68rem, 1.45vw, .95rem); text-align: center; overflow: hidden; }
       .vote-day { position: relative; }
       .vote-card:hover, .vote-card:focus-visible, .vote-card.is-selected { border-color: #f5c542; }
+      .vote-card.is-scheduled:not(:hover):not(:focus-visible):not(.is-selected) { border-color: #15803d; box-shadow: inset 0 0 0 1px #dcfce7; }
+      .vote-card.is-scheduled:hover, .vote-card.is-scheduled:focus-visible, .vote-card.is-scheduled.is-selected { border-color: #f5c542; box-shadow: inset 0 0 0 1px #15803d; }
       .vote-card:focus-visible { outline: .2rem solid #14213d; outline-offset: .15rem; }
       .vote-card { position: relative; touch-action: pan-y; transition: transform .12s ease-out; }
       .vote-card[data-swipe-action="withdraw"] { border-color: #b91c1c; }
@@ -134,8 +136,9 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       .run-event-banner__swipe-cue:empty { display: none; }
       .run-event-day-action { position: absolute; z-index: 2; top: 50%; right: .15rem; width: 1px; height: 1px; min-height: 1px; margin: 0; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
       .run-event-day-action:focus-visible { width: auto; height: auto; min-height: 2.75rem; padding: .3rem .45rem; clip-path: none; }
-      @media (prefers-reduced-motion: reduce) { .vote-card, .run-event-banner { transition: none; } .is-celebrating, .is-celebrating::after { animation: none !important; } }
+      @media (prefers-reduced-motion: reduce) { .vote-card, .run-event-banner { transition: none; } .is-beam-running::before { animation: none !important; } }
       .vote-card.is-read-only, .vote-card.is-read-only:hover { --day-bg: #68717a !important; --day-fg: #d9dde1 !important; filter: grayscale(1); opacity: .62; cursor: not-allowed; border-color: transparent; }
+      .vote-card.is-read-only.is-scheduled, .vote-card.is-read-only.is-scheduled:hover { border-color: #15803d; }
       .vote-card:disabled { cursor: not-allowed; }
       .vote-card__header { display: flex; justify-content: space-between; align-items: flex-start; gap: .25rem; min-width: 0; font-weight: 700; }
       .vote-card__weekday, .vote-card__date { overflow-wrap: anywhere; }
@@ -771,8 +774,8 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           <a id="change-pin" class="button" href="/change-pin">เปลี่ยน PIN / Change PIN</a>
           <div class="actions"><button id="logout" type="button" class="secondary">Logout</button></div>
         </section>`,
-        script: `import { applyVoteCardPresentation, colorForDay, configureVoterNamesMarquee, createScheduledEffectController, createSocketRepairController, createVoterNamesRegion as buildVoterNamesRegion, createVoteTimelineController, formatDisplayDate, patchVoteDay } from '/vote-board.js?v=issue-34';
-          import { attachHorizontalSwipe, formatRunEventDate, getDateCardSwipeAction, getDateCardSwipePreview, getRunEventBannerSwipeAction, getRunEventBannerSwipePreview, millisecondsUntilBangkokMidnight } from '/run-events.js?v=issue-32';
+        script: `import { applyVoteCardPresentation, colorForDay, configureVoterNamesMarquee, createScheduledEffectController, createSocketRepairController, createVoterNamesRegion as buildVoterNamesRegion, createVoteTimelineController, formatDisplayDate, patchVoteDay } from '/vote-board.js?v=issue-34-beam-2';
+          import { attachHorizontalSwipe, formatRunEventDate, getDateCardSwipeAction, getDateCardSwipePreview, getRunEventBannerSwipeAction, getRunEventBannerSwipePreview, millisecondsUntilBangkokMidnight, sortRunEventsForPresentation } from '/run-events.js?v=issue-34-beam-1';
           let csrfToken = '';
           let sessionCheck = 0;
           let weekLoadSequence = 0;
@@ -800,7 +803,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           const manageUser = document.querySelector('#manage-user');
           const message = document.querySelector('#message');
           const runEvents = document.querySelector('#run-events');
-          function guardProtectedContent() { weekLoadSequence += 1; window.clearTimeout(rolloverTimer); protectedContent.hidden = true; csrfToken = ''; displayName.textContent = ''; weekDays.replaceChildren(); runEvents.replaceChildren(); timelineDays.replaceChildren(); scheduledEffects.sync('banner', []); scheduledEffects.sync('timeline', []); runEventHandlers.forEach(({ abort, disposeSwipe }) => { abort.abort(); disposeSwipe?.(); }); runEventHandlers.clear(); runEventElements.clear(); weekState = null; eventsByDate = new Map(); message.textContent = ''; }
+          function guardProtectedContent() { weekLoadSequence += 1; window.clearTimeout(rolloverTimer); protectedContent.hidden = true; csrfToken = ''; displayName.textContent = ''; weekDays.replaceChildren(); runEvents.replaceChildren(); timelineDays.replaceChildren(); scheduledEffects.sync('banner', []); scheduledEffects.sync('date-card', []); scheduledEffects.sync('timeline', []); runEventHandlers.forEach(({ abort, disposeSwipe }) => { abort.abort(); disposeSwipe?.(); }); runEventHandlers.clear(); runEventElements.clear(); weekState = null; eventsByDate = new Map(); message.textContent = ''; }
           function redirectToLogin() { guardProtectedContent(); location.replace('/'); }
           function addText(parent, tag, text) { const element = document.createElement(tag); element.textContent = text; parent.append(element); return element; }
           const timelineItemsByDate = new Map();
@@ -843,7 +846,8 @@ export function createApp({ databaseReady = false, database, env = process.env, 
                 count.textContent = String(row.voteCount);
                 count.className = 'vote-timeline__count' + (row.showCount ? '' : ' is-zero');
                 count.setAttribute('aria-hidden', String(!row.showCount));
-                bar.className = 'vote-timeline__bar' + (row.isTopRanked ? ' is-top-ranked' : '');
+                bar.className = 'vote-timeline__bar' + (row.isTopRanked ? ' is-top-ranked' : '') + (row.isScheduled ? ' is-scheduled' : '');
+                bar.dataset.date = row.date;
                 bar.style.height = row.barHeightPercent + '%';
                 cue.hidden = !row.showTopCue;
                 date.dateTime = row.date;
@@ -906,8 +910,24 @@ export function createApp({ databaseReady = false, database, env = process.env, 
             button.addEventListener('click', () => void submitRunEventAction(day.date, action, event));
             row.append(button);
           }
+          function captureRunEventActionFocus(element) {
+            const banner = element?.closest?.('.run-event-banner');
+            if (!banner) return null;
+            if (element.matches('.run-event-actions [data-run-event-status]')) return { date: banner.dataset.date, action: 'status' };
+            if (element.matches('.run-event-actions .run-event-delete')) return { date: banner.dataset.date, action: 'delete' };
+            return null;
+          }
+          function restoreRunEventActionFocus(target) {
+            if (!target) return;
+            const banner = runEventElements.get(target.date);
+            const selector = target.action === 'status' ? '.run-event-actions [data-run-event-status]' : '.run-event-actions .run-event-delete';
+            const button = banner?.querySelector(selector);
+            if (button && !button.disabled) button.focus({ preventScroll: true });
+          }
           function renderRunEvents(events) {
-            const activeDates = new Set(events.map(({ date }) => date));
+            const focusIntent = captureRunEventActionFocus(document.activeElement);
+            const presentationEvents = sortRunEventsForPresentation(events);
+            const activeDates = new Set(presentationEvents.map(({ date }) => date));
             runEventElements.forEach((banner, date) => {
               if (activeDates.has(date)) return;
               const handlers = runEventHandlers.get(date);
@@ -917,7 +937,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
               runEventElements.delete(date);
               runEventHandlers.delete(date);
             });
-            const banners = events.map((event) => {
+            const banners = presentationEvents.map((event) => {
               let banner = runEventElements.get(event.date);
               if (!banner) {
                 banner = document.createElement('li');
@@ -986,14 +1006,17 @@ export function createApp({ databaseReady = false, database, env = process.env, 
             banners.forEach((banner, index) => {
               if (runEvents.children[index] !== banner) runEvents.insertBefore(banner, runEvents.children[index] ?? null);
             });
-            scheduledEffects.sync('banner', events.filter(({ status }) => status === 'scheduled').map((event) => ({
+            scheduledEffects.sync('banner', presentationEvents.filter(({ status }) => status === 'scheduled').map((event) => ({
               key: event.date,
               element: runEventElements.get(event.date),
               scheduled: true,
             })));
+            if (focusIntent && !pendingEventDates.has(focusIntent.date)) restoreRunEventActionFocus(focusIntent);
           }
           async function submitRunEventAction(date, action, event) {
             if (pendingEventDates.has(date)) return false;
+            const originalActiveElement = document.activeElement;
+            const focusIntent = captureRunEventActionFocus(originalActiveElement);
             pendingEventDates.add(date);
             runEvents.querySelectorAll('.run-event-actions button').forEach((button) => {
               if (button.closest('.run-event-banner')?.dataset.date === date) button.disabled = true;
@@ -1051,6 +1074,9 @@ export function createApp({ databaseReady = false, database, env = process.env, 
               runEvents.querySelectorAll('.run-event-actions button').forEach((button) => {
                 if (button.closest('.run-event-banner')?.dataset.date === date) button.disabled = false;
               });
+              if (focusIntent && (document.activeElement === document.body || document.activeElement === originalActiveElement)) {
+                restoreRunEventActionFocus(focusIntent);
+              }
             }
           }
           function renderWeek(state) {
@@ -1074,8 +1100,10 @@ export function createApp({ databaseReady = false, database, env = process.env, 
               resetWeek.dataset.sunday = state.week.sunday;
             }
             const weeklyMaximum = Math.max(...state.days.map(({ voteCount }) => voteCount), 0);
+            const scheduledCards = [];
             const rows = state.days.map((day, index) => {
               const selected = state.currentUserSelectedDates.includes(day.date);
+              const isScheduled = eventsByDate.get(day.date)?.status === 'scheduled';
               const weekday = weekdays[index];
               const colors = colorForDay(day.voteCount, weeklyMaximum);
               const displayDate = formatDisplayDate(day.date);
@@ -1102,7 +1130,11 @@ export function createApp({ databaseReady = false, database, env = process.env, 
               addText(card, 'span', String(day.voteCount)).className = 'vote-card__count';
               appendVoterNames(card, day.voterNames);
               const presentation = applyVoteCardPresentation(card, { selected, eligible: day.eligible, voteCount: day.voteCount });
-              card.setAttribute('aria-label', weekday.english + ', ' + formatDisplayDate(day.date) + ', ' + day.voteCount + ' votes, ' + presentation.accessibleState);
+              if (isScheduled) {
+                card.classList.add('is-scheduled');
+                scheduledCards.push({ key: day.date, element: card, scheduled: true });
+              }
+              card.setAttribute('aria-label', weekday.english + ', ' + formatDisplayDate(day.date) + ', ' + day.voteCount + ' votes, ' + presentation.accessibleState + (isScheduled ? ', Scheduled run' : ''));
               if (day.eligible) {
                 card.addEventListener('pointerdown', (event) => { if (event.pointerType === 'touch') card.classList.add('is-touch-paused'); });
                 card.addEventListener('click', () => toggleVote(day.date, card.dataset.selected !== 'true'));
@@ -1136,6 +1168,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
               return row;
             });
             weekDays.replaceChildren(...rows);
+            scheduledEffects.sync('date-card', scheduledCards);
             configureVoterNamesMarquee(weekDays);
           }
           function patchDay(patch) {

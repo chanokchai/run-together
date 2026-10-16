@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { createServer } from '../src/server.js';
 import { getVoteTimelinePresentation } from '../src/vote-board.js';
+import { sortRunEventsForPresentation } from '../src/run-events.js';
 
 const ENV = { ADMIN_NAME: 'Issue 34 Admin', ADMIN_PIN: '4826', PIN_PEPPER: 'synthetic-pepper' };
 const NOW = new Date('2026-10-11T16:59:59.000Z');
@@ -99,4 +100,22 @@ test('vote page moves a single compact navigation row immediately after the comp
   assert.match(app, /id="previous-week"[^>]*aria-label="Previous week"[^>]*>&lt;&lt;<\/button>/);
   assert.match(app, /id="current-week"[^>]*>Now<\/button>/);
   assert.match(app, /id="next-week"[^>]*aria-label="Next week"[^>]*>&gt;&gt;<\/button>/);
+});
+
+test('run-event presentation sorts scheduled first and dates ascending within each status without mutating API order', () => {
+  const events = [
+    { date: '2026-10-12', status: 'proposed', id: 'proposal-early' },
+    { date: '2026-10-18', status: 'scheduled', id: 'scheduled-late' },
+    { date: '2026-10-15', status: 'proposed', id: 'proposal-late' },
+    { date: '2026-10-13', status: 'scheduled', id: 'scheduled-early' },
+  ];
+
+  const sorted = sortRunEventsForPresentation(events);
+
+  assert.deepEqual(sorted.map(({ id }) => id), [
+    'scheduled-early', 'scheduled-late', 'proposal-early', 'proposal-late',
+  ]);
+  assert.deepEqual(events.map(({ id }) => id), [
+    'proposal-early', 'scheduled-late', 'proposal-late', 'scheduled-early',
+  ], 'presentation sorting does not mutate the authoritative input list');
 });

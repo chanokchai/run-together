@@ -1,146 +1,170 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-function createHarness({ reducedMotion = false } = {}) {
-  let notify;
-  const observed = new Set();
-  const timers = new Map();
-  let timerId = 0;
-  let timerStarts = 0;
-  const controllerOptions = {
-    createObserver(callback) {
-      notify = (element, isIntersecting) => callback([{ target: element, isIntersecting }]);
-      return {
-        observe: (element) => observed.add(element),
-        unobserve: (element) => observed.delete(element),
-        disconnect: () => observed.clear(),
-      };
-    },
-    reducedMotion: () => reducedMotion,
-    duration: 1500,
-    setTimer(callback, duration) {
-      const id = ++timerId;
-      timerStarts += 1;
-      timers.set(id, { callback, duration });
-      return id;
-    },
-    clearTimer(id) { timers.delete(id); },
-  };
-  return { controllerOptions, observed, timers, notify: (...args) => notify(...args), get timerStarts() { return timerStarts; } };
-}
-
-function item(key = '2026-10-11') {
+function makeElement({ visible = true } = {}) {
   const classes = new Set();
-  return {
-    key,
-    element: {
-      classList: {
-        add: (value) => classes.add(value),
-        remove: (value) => classes.delete(value),
+  const properties = new Map();
+  const element = {
+    classList: {
+      add: (name) => classes.add(name),
+      remove: (name) => classes.delete(name),
+      contains: (name) => classes.has(name),
+    },
+    style: {
+      setProperty: (name, value) => properties.set(name, value),
+      getPropertyValue: (name) => properties.get(name) ?? '',
+      removeProperty: (name) => properties.delete(name),
+    },
+    ownerDocument: {
+      defaultView: {
+        innerWidth: 390,
+        innerHeight: 844,
+        getComputedStyle: () => ({ visibility: 'visible', overflowX: 'visible', overflowY: 'visible' }),
       },
     },
-    targets: [],
-    scheduled: true,
+    getBoundingClientRect: () => visible
+      ? { top: 10, bottom: 40, left: 10, right: 40 }
+      : { top: 900, bottom: 930, left: 10, right: 40 },
     classes,
+    properties,
+    setVisible(value) { visible = value; },
+  };
+  return element;
+}
+
+function createHarness({ reducedMotion = false, now = 0 } = {}) {
+  let notify;
+  let preferenceListener;
+  const observed = new Set();
+  const preference = {
+    matches: reducedMotion,
+    addEventListener(_type, listener) { preferenceListener = listener; },
+    removeEventListener(_type, listener) { if (preferenceListener === listener) preferenceListener = undefined; },
+    change(value) { this.matches = value; preferenceListener?.({ matches: value }); },
+  };
+  return {
+    observed,
+    preference,
+    controllerOptions: {
+      now: () => now,
+      createMotionQuery: () => preference,
+      createObserver(callback) {
+        notify = (element, isIntersecting) => callback([{ target: element, isIntersecting }]);
+        return {
+          observe: (element) => observed.add(element),
+          unobserve: (element) => observed.delete(element),
+          disconnect: () => observed.clear(),
+        };
+      },
+    },
+    notify: (...args) => notify(...args),
+    setNow(value) { now = value; },
   };
 }
 
-test('scheduled effect replays on real viewport re-entry but ignores same-state rerenders', async () => {
+function scheduled(key, element, targets = [element]) {
+  return { key, element, targets, scheduled: true };
+}
+
+test('all visible scheduled representations share one continuous normalized 1.4-second phase', async () => {
   const { createScheduledEffectController } = await import('../src/vote-board.js');
-  assert.equal(typeof createScheduledEffectController, 'function');
-  const harness = createHarness();
+  const harness = createHarness({ now: 525 });
   const controller = createScheduledEffectController(harness.controllerOptions);
-  const banner = item();
-  const sync = () => controller.sync('banner', [banner]);
+  const banner = makeElement();
+  const dateCard = makeElement();
+  const graphDate = makeElement();
+  const graphBar = makeElement();
 
-  sync();
-  assert.equal(harness.observed.has(banner.element), true);
-  harness.notify(banner.element, true);
-  assert.equal(banner.classes.has('is-celebrating'), true);
-  assert.deepEqual([...harness.timers.values()].map(({ duration }) => duration), [1500]);
+  controller.sync('banner', [scheduled('2026-10-11', banner)]);
+  controller.sync('date-card', [scheduled('2026-10-11', dateCard)]);
+  controller.sync('timeline', [scheduled('2026-10-11', graphDate, [graphDate, graphBar])]);
 
-  sync();
-  harness.notify(banner.element, true);
-  assert.equal(harness.timers.size, 1, 'same visible state and incidental data render do not restart the effect');
-  harness.notify(banner.element, false);
-  harness.notify(banner.element, true);
-  assert.equal(harness.timers.size, 1, 're-entry replaces the active timer rather than overlapping it');
-  assert.equal(banner.classes.has('is-celebrating'), true);
-  [...harness.timers.values()][0].callback();
-  assert.equal(banner.classes.has('is-celebrating'), false);
-  harness.notify(banner.element, false);
-  harness.notify(banner.element, true);
-  assert.equal(banner.classes.has('is-celebrating'), true, 'a later real re-entry starts another brief effect');
+  for (const element of [banner, dateCard, graphDate, graphBar]) {
+    assert.equal(element.classList.contains('is-beam-running'), true, 'visible items run the decorative beam continuously');
+  }
+  assert.deepEqual(
+    [banner, dateCard, graphDate, graphBar].map((element) => element.style.getPropertyValue('--beam-delay')),
+    ['-525ms', '-525ms', '-525ms', '-525ms'],
+    'different item perimeters use the same normalized page phase',
+  );
+  assert.equal(harness.observed.size, 3, 'the controller observes each representation anchor once');
+  controller.dispose();
+  assert.equal(harness.observed.size, 0, 'dispose disconnects viewport observation');
+  for (const element of [banner, dateCard, graphDate, graphBar]) {
+    assert.equal(element.classList.contains('is-beam-running'), false, 'dispose stops every tracked beam');
+  }
+});
+
+test('viewport re-entry and replacement nodes join the current page phase without restarting a one-shot effect', async () => {
+  const { createScheduledEffectController } = await import('../src/vote-board.js');
+  const harness = createHarness({ now: 200 });
+  const controller = createScheduledEffectController(harness.controllerOptions);
+  const date = makeElement();
+  controller.sync('timeline', [scheduled('2026-10-11', date)]);
+  assert.equal(date.classList.contains('is-beam-running'), true);
+
+  date.setVisible(false);
+  harness.notify(date, false);
+  assert.equal(date.classList.contains('is-beam-running'), false, 'offscreen beam pauses to avoid unnecessary work');
+  harness.setNow(1735);
+  date.setVisible(true);
+  harness.notify(date, true);
+  assert.equal(date.classList.contains('is-beam-running'), true);
+  assert.equal(date.style.getPropertyValue('--beam-delay'), '-335ms', 're-entry resumes at current shared phase');
+
+  harness.setNow(2110);
+  const replacement = makeElement();
+  controller.sync('timeline', [scheduled('2026-10-11', replacement)]);
+  assert.equal(replacement.classList.contains('is-beam-running'), true, 'a replacement node becomes active immediately when visible');
+  assert.equal(replacement.style.getPropertyValue('--beam-delay'), '-710ms', 'rerendered nodes join the same current phase');
+  assert.equal(date.classList.contains('is-beam-running'), false, 'replaced nodes are cleaned up');
   controller.dispose();
 });
 
-test('banner and graph effects keep same-date viewport visibility independent', async () => {
+test('a stale observer exit does not pause a beam whose current geometry is still visible', async () => {
   const { createScheduledEffectController } = await import('../src/vote-board.js');
-  const harness = createHarness();
+  const harness = createHarness({ now: 900 });
   const controller = createScheduledEffectController(harness.controllerOptions);
-  const banner = item('2026-10-11');
-  const graphDate = item('2026-10-11');
+  const date = makeElement();
+  controller.sync('timeline', [scheduled('2026-10-11', date)]);
 
-  controller.sync('banner', [banner]);
-  controller.sync('timeline', [graphDate]);
-  harness.notify(banner.element, true);
-  assert.equal(banner.classes.has('is-celebrating'), true);
-  assert.equal(graphDate.classes.has('is-celebrating'), false);
+  harness.notify(date, false);
 
-  harness.notify(banner.element, false);
-  harness.notify(graphDate.element, true);
-  assert.equal(banner.classes.has('is-celebrating'), true, 'the banner effect may finish after its own viewport exit');
-  assert.equal(graphDate.classes.has('is-celebrating'), true, 'the graph starts when its own date enters view');
-  assert.equal(harness.timers.size, 2, 'same-date banner and graph animations use independent timers');
+  assert.equal(date.classList.contains('is-beam-running'), true, 'current viewport geometry outranks a stale observer notification');
   controller.dispose();
 });
 
-test('stale observer exit does not replay an item that remains geometrically visible', async () => {
+test('reduced motion is static and a live preference change updates visible beams', async () => {
   const { createScheduledEffectController } = await import('../src/vote-board.js');
-  const harness = createHarness();
+  const harness = createHarness({ reducedMotion: true, now: 810 });
   const controller = createScheduledEffectController(harness.controllerOptions);
-  const visible = item();
-  visible.element.ownerDocument = { defaultView: { innerWidth: 320, innerHeight: 240 } };
-  visible.element.getBoundingClientRect = () => ({ top: 10, bottom: 40, left: 10, right: 40 });
+  const banner = makeElement();
+  controller.sync('banner', [scheduled('2026-10-11', banner)]);
+  assert.equal(banner.classList.contains('is-beam-running'), false, 'reduced-motion visitors get a static scheduled indicator');
 
-  controller.sync('timeline', [visible]);
-  assert.equal(harness.timerStarts, 1, 'the visible schedule starts one effect');
-  harness.notify(visible.element, false);
-  harness.notify(visible.element, true);
-
-  assert.equal(harness.timerStarts, 1, 'an outdated observer exit cannot manufacture a viewport re-entry');
+  harness.preference.change(false);
+  assert.equal(banner.classList.contains('is-beam-running'), true, 'turning motion back on starts visible beam at shared phase');
+  assert.equal(banner.style.getPropertyValue('--beam-delay'), '-810ms');
+  harness.preference.change(true);
+  assert.equal(banner.classList.contains('is-beam-running'), false, 'a live reduced-motion change stops animation immediately');
+  assert.equal(harness.observed.has(banner), true, 'static scheduled state remains tracked');
   controller.dispose();
 });
 
-test('offscreen schedule waits for visibility and reversion cancels timer and observation', async () => {
+test('proposed, removed, and offscreen items do not keep scheduled beam effects', async () => {
   const { createScheduledEffectController } = await import('../src/vote-board.js');
-  assert.equal(typeof createScheduledEffectController, 'function');
-  const harness = createHarness();
+  const harness = createHarness({ now: 100 });
   const controller = createScheduledEffectController(harness.controllerOptions);
-  const graphDate = item();
-  controller.sync('timeline', [graphDate]);
-  harness.notify(graphDate.element, false);
-  assert.equal(graphDate.classes.has('is-celebrating'), false);
-  harness.notify(graphDate.element, true);
-  assert.equal(graphDate.classes.has('is-celebrating'), true);
-  controller.sync('timeline', [{ ...graphDate, scheduled: false }]);
-  assert.equal(graphDate.classes.has('is-celebrating'), false);
-  assert.equal(harness.observed.has(graphDate.element), false);
-  assert.equal(harness.timers.size, 0);
-  controller.dispose();
-});
+  const scheduledDate = makeElement();
+  const proposed = makeElement();
+  const offscreen = makeElement({ visible: false });
 
-test('reduced motion keeps static scheduled state without creating animation timers', async () => {
-  const { createScheduledEffectController } = await import('../src/vote-board.js');
-  assert.equal(typeof createScheduledEffectController, 'function');
-  const harness = createHarness({ reducedMotion: true });
-  const controller = createScheduledEffectController(harness.controllerOptions);
-  const date = item();
-  controller.sync('timeline', [date]);
-  harness.notify(date.element, true);
-  harness.notify(date.element, false);
-  harness.notify(date.element, true);
-  assert.equal(date.classes.has('is-celebrating'), false);
-  assert.equal(harness.timers.size, 0);
+  controller.sync('timeline', [scheduled('2026-10-11', scheduledDate), scheduled('2026-10-12', proposed, [])]);
+  assert.equal(scheduledDate.classList.contains('is-beam-running'), true);
+  controller.sync('banner', [scheduled('2026-10-13', offscreen)]);
+  assert.equal(offscreen.classList.contains('is-beam-running'), false, 'offscreen items wait for visibility');
+  controller.sync('timeline', []);
+  assert.equal(scheduledDate.classList.contains('is-beam-running'), false, 'reversion/removal stops the beam immediately');
+  assert.equal(harness.observed.has(scheduledDate), false, 'removed items stop being observed');
   controller.dispose();
 });
