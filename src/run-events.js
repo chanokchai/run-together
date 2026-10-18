@@ -3,6 +3,13 @@ const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
+export function sortRunEventsForPresentation(events) {
+  return [...(Array.isArray(events) ? events : [])].sort((left, right) => {
+    const statusOrder = Number(left.status !== 'scheduled') - Number(right.status !== 'scheduled');
+    return statusOrder || left.date.localeCompare(right.date);
+  });
+}
+
 function isValidIsoDate(value) {
   const match = ISO_DATE.exec(value);
   if (!match) return null;

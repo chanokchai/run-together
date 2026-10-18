@@ -184,16 +184,18 @@ export function createSocketRepairController({ loadWeek, patchDay }) {
   };
 }
 
-export function getVoteTimelinePresentation(days) {
+export function getVoteTimelinePresentation(days, { scheduledDates = [] } = {}) {
   const normalized = (Array.isArray(days) ? days : []).map(({ date, voteCount }) => ({
     date,
     voteCount: Number.isSafeInteger(voteCount) && voteCount >= 0 ? voteCount : 0,
   }));
+  const scheduled = new Set(Array.isArray(scheduledDates) ? scheduledDates : []);
   const maximum = Math.max(0, ...normalized.map(({ voteCount }) => voteCount));
   return normalized.map(({ date, voteCount }) => {
     const displayDate = formatDisplayDate(date);
     const [dayLabel, monthLabel] = displayDate.split(' ');
     const isTopRanked = maximum > 0 && voteCount === maximum;
+    const isScheduled = scheduled.has(date);
     return {
       date,
       dayLabel,
@@ -202,20 +204,226 @@ export function getVoteTimelinePresentation(days) {
       barHeightPercent: maximum > 0 ? (voteCount / maximum) * 100 : 0,
       isTopRanked,
       showTopCue: isTopRanked,
-      accessibleLabel: `${displayDate}, ${voteCount} ${voteCount === 1 ? 'vote' : 'votes'}${isTopRanked ? ', highest-vote date' : ''}`,
+      showCount: voteCount > 0,
+      isScheduled,
+      accessibleLabel: `${displayDate}, ${voteCount} ${voteCount === 1 ? 'vote' : 'votes'}${isTopRanked ? ', highest-vote date' : ''}${isScheduled ? ', scheduled run' : ''}`,
     };
   });
 }
 
+export function createScheduledEffectController({
+  createObserver,
+  createMotionQuery = (query) => globalThis.matchMedia?.(query),
+  now = () => globalThis.performance?.now?.() ?? Date.now(),
+} = {}) {
+  const states = new Map();
+  const statesByElement = new Map();
+  const scopeKeys = new Map();
+  const fallbackView = globalThis.window;
+  const cycleMs = 1400;
+  const motionQuery = createMotionQuery('(prefers-reduced-motion: reduce)');
+
+  function pageTimelineTime() {
+    const timelineTime = globalThis.document?.timeline?.currentTime;
+    return Number.isFinite(timelineTime) ? timelineTime : now();
+  }
+
+  function currentDelay(timestamp = pageTimelineTime()) {
+    const elapsed = ((timestamp % cycleMs) + cycleMs) % cycleMs;
+    return `-${Math.floor(elapsed)}ms`;
+  }
+
+  function alignTargetToPageTimeline(target, timestamp, wasRunning) {
+    const animation = target.ownerDocument?.getAnimations?.().find((candidate) => candidate.animationName === 'scheduled-border-beam'
+      && candidate.effect?.pseudoElement === '::before' && candidate.effect?.target === target);
+    if (!animation || !Number.isFinite(timestamp)) {
+      if (!wasRunning || !target.style?.getPropertyValue?.('--beam-delay')) {
+        target.style?.setProperty('--beam-delay', currentDelay(timestamp));
+      }
+      return;
+    }
+    target.style?.removeProperty('--beam-delay');
+    const phase = ((timestamp % cycleMs) + cycleMs) % cycleMs;
+    const sharedOrigin = timestamp - phase;
+    const currentStartPhase = Number.isFinite(animation.startTime)
+      ? ((animation.startTime % cycleMs) + cycleMs) % cycleMs
+      : Number.NaN;
+    const difference = Number.isFinite(currentStartPhase)
+      ? Math.min(currentStartPhase, cycleMs - currentStartPhase)
+      : Number.POSITIVE_INFINITY;
+    if (difference > 0.5) animation.startTime = sharedOrigin;
+  }
+
+  function stopTargets(targets) {
+    targets.forEach((target) => {
+      target.classList.remove('is-beam-running');
+      target.style?.removeProperty('--beam-delay');
+    });
+  }
+
+  function applyState(state, timestamp = pageTimelineTime()) {
+    const active = state.inViewport && !motionQuery?.matches;
+    state.targets.forEach((target) => {
+      if (active) {
+        const wasRunning = target.classList.contains('is-beam-running');
+        target.classList.add('is-beam-running');
+        alignTargetToPageTimeline(target, timestamp, wasRunning);
+      } else {
+        target.classList.remove('is-beam-running');
+        target.style?.removeProperty('--beam-delay');
+      }
+    });
+  }
+
+  function isElementVisible(element) {
+    const view = element.ownerDocument?.defaultView ?? fallbackView;
+    const bounds = element.getBoundingClientRect?.();
+    if (!bounds || !view) return false;
+    let left = Math.max(0, bounds.left);
+    let right = Math.min(view.innerWidth, bounds.right);
+    let top = Math.max(0, bounds.top);
+    let bottom = Math.min(view.innerHeight, bounds.bottom);
+    for (let ancestor = element.parentElement; ancestor && (right > left && bottom > top); ancestor = ancestor.parentElement) {
+      const style = view.getComputedStyle?.(ancestor);
+      if (!style) continue;
+      const clipX = ['hidden', 'clip', 'auto', 'scroll'].includes(style.overflowX);
+      const clipY = ['hidden', 'clip', 'auto', 'scroll'].includes(style.overflowY);
+      if (!clipX && !clipY) continue;
+      const clip = ancestor.getBoundingClientRect();
+      if (clipX) {
+        left = Math.max(left, clip.left);
+        right = Math.min(right, clip.right);
+      }
+      if (clipY) {
+        top = Math.max(top, clip.top);
+        bottom = Math.min(bottom, clip.bottom);
+      }
+    }
+    const elementStyle = view.getComputedStyle?.(element);
+    return right > left && bottom > top && elementStyle?.visibility !== 'hidden';
+  }
+
+  function updateVisibility(element, isIntersecting, timestamp = pageTimelineTime()) {
+    const state = statesByElement.get(element);
+    if (!state) return;
+    const visible = typeof element.getBoundingClientRect === 'function' ? isElementVisible(element) : isIntersecting;
+    if (state.inViewport === visible) return;
+    state.inViewport = visible;
+    applyState(state, timestamp);
+  }
+
+  const observerCallback = (entries) => {
+    const timestamp = pageTimelineTime();
+    entries.forEach(({ target, isIntersecting }) => updateVisibility(target, isIntersecting, timestamp));
+  };
+  const Observer = globalThis.IntersectionObserver ?? fallbackView?.IntersectionObserver;
+  const observer = createObserver
+    ? createObserver(observerCallback)
+    : Observer ? new Observer(observerCallback) : null;
+
+  function fallbackVisibility() {
+    if (!fallbackView) return;
+    const width = fallbackView.innerWidth;
+    const height = fallbackView.innerHeight;
+    const timestamp = pageTimelineTime();
+    statesByElement.forEach((state, element) => {
+      const bounds = element.getBoundingClientRect?.();
+      if (!bounds) return;
+      updateVisibility(element, bounds.bottom > 0 && bounds.right > 0 && bounds.top < height && bounds.left < width, timestamp);
+    });
+  }
+
+  function handleMotionChange() {
+    const timestamp = pageTimelineTime();
+    states.forEach((state) => applyState(state, timestamp));
+  }
+
+  motionQuery?.addEventListener?.('change', handleMotionChange);
+  if (!motionQuery?.addEventListener) motionQuery?.addListener?.(handleMotionChange);
+  if (fallbackView?.addEventListener) {
+    fallbackView.addEventListener('scroll', fallbackVisibility, { passive: true, capture: true });
+    fallbackView.addEventListener('resize', fallbackVisibility);
+  }
+  fallbackView?.document?.addEventListener('scroll', fallbackVisibility, { passive: true, capture: true });
+  fallbackView?.visualViewport?.addEventListener('scroll', fallbackVisibility, { passive: true });
+
+  function untrack(key, state) {
+    stopTargets(state.targets);
+    observer?.unobserve(state.element);
+    statesByElement.delete(state.element);
+    states.delete(key);
+  }
+
+  return {
+    sync(scope, items) {
+      const currentKeys = new Set();
+      const timestamp = pageTimelineTime();
+      (Array.isArray(items) ? items : []).forEach((item) => {
+        if (!item?.scheduled || !item.element || item.key === undefined || item.key === null) return;
+        const key = `${scope}:${item.key}`;
+        currentKeys.add(key);
+        const targets = Array.isArray(item.targets) && item.targets.length ? item.targets : [item.element];
+        let state = states.get(key);
+        if (!state) {
+          state = { element: item.element, targets, inViewport: false };
+          states.set(key, state);
+          statesByElement.set(state.element, state);
+          observer?.observe(state.element);
+        } else {
+          if (state.element !== item.element) {
+            stopTargets(state.targets);
+            observer?.unobserve(state.element);
+            statesByElement.delete(state.element);
+            state.element = item.element;
+            state.inViewport = false;
+            statesByElement.set(state.element, state);
+            observer?.observe(state.element);
+          }
+          state.targets.forEach((target) => {
+            if (!targets.includes(target)) stopTargets([target]);
+          });
+          state.targets = targets;
+        }
+        state.inViewport = isElementVisible(state.element);
+        applyState(state, timestamp);
+      });
+      const previousKeys = scopeKeys.get(scope) ?? new Set();
+      previousKeys.forEach((key) => {
+        if (!currentKeys.has(key)) {
+          const state = states.get(key);
+          if (state) untrack(key, state);
+        }
+      });
+      scopeKeys.set(scope, currentKeys);
+      states.forEach((state) => applyState(state, timestamp));
+      fallbackVisibility();
+    },
+    dispose() {
+      states.forEach((state, key) => untrack(key, state));
+      scopeKeys.clear();
+      observer?.disconnect();
+      motionQuery?.removeEventListener?.('change', handleMotionChange);
+      if (!motionQuery?.removeEventListener) motionQuery?.removeListener?.(handleMotionChange);
+      if (fallbackView?.removeEventListener) {
+        fallbackView.removeEventListener('scroll', fallbackVisibility, { capture: true });
+        fallbackView.removeEventListener('resize', fallbackVisibility);
+      }
+      fallbackView?.document?.removeEventListener('scroll', fallbackVisibility, { capture: true });
+      fallbackView?.visualViewport?.removeEventListener('scroll', fallbackVisibility);
+    },
+  };
+}
+
 export function createVoteTimelineController({ render }) {
   let daysByDate = new Map();
+  let scheduledDates = [];
   let refreshSequence = 0;
   let patchSequence = 0;
   let activeRefreshSequence = 0;
   const pendingPatches = new Map();
 
   function renderCurrent() {
-    render(getVoteTimelinePresentation([...daysByDate.values()]));
+    render(getVoteTimelinePresentation([...daysByDate.values()], { scheduledDates }));
   }
 
   return {
@@ -234,6 +442,7 @@ export function createVoteTimelineController({ render }) {
       }
       if (sequence !== refreshSequence) return false;
       daysByDate = new Map((Array.isArray(totals?.days) ? totals.days : []).map(({ date, voteCount }) => [date, { date, voteCount }]));
+      scheduledDates = Array.isArray(totals?.scheduledDates) ? [...totals.scheduledDates] : [];
       pendingPatches.forEach(({ voteCount, sequence: patchVersion }, date) => {
         if (patchVersion > patchSequenceAtStart && daysByDate.has(date)) daysByDate.set(date, { date, voteCount });
       });
