@@ -75,7 +75,7 @@ test('Issue #23 migration is repeatable and upgrades an existing version 3 datab
     }
     migrate(database);
     migrate(database);
-    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get().count, 5);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get().count, 6);
     assert.deepEqual(database.prepare('PRAGMA table_info(admin_action_audit)').all().map(({ name }) => name), [
       'id', 'request_id', 'admin_user_id', 'target_user_id', 'target_name', 'action', 'deleted_vote_count', 'occurred_at',
     ]);

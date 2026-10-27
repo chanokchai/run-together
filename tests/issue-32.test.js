@@ -7,6 +7,7 @@ import { once } from 'node:events';
 import { io as connectSocket } from 'socket.io-client';
 import { createServer } from '../src/server.js';
 import { openDatabase, migrate } from '../src/database.js';
+import { LEGACY_ROOM_ID } from '../src/room-contract.js';
 import {
   addVote,
   createUser,
@@ -97,8 +98,8 @@ test('Issue 32 migration adds durable event and retry tables without changing ex
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `).run('Migration Runner', 'migration runner', Buffer.from('salt'), Buffer.from('hash'), 'user', '2024-02-29T04:00:00.000Z', '2024-02-29T04:00:00.000Z');
     const userId = Number(user.lastInsertRowid);
-    database.prepare('INSERT INTO votes (user_id, vote_date, created_at) VALUES (?, ?, ?)')
-      .run(userId, '2024-03-01', '2024-02-29T04:01:00.000Z');
+    database.prepare('INSERT INTO votes (room_id, user_id, vote_date, created_at) VALUES (?, ?, ?, ?)')
+      .run(LEGACY_ROOM_ID, userId, '2024-03-01', '2024-02-29T04:01:00.000Z');
     database.prepare(`
       INSERT INTO sessions (token_hash, user_id, csrf_secret, created_at, last_seen_at, expires_at)
       VALUES (?, ?, ?, ?, ?, ?)
@@ -107,14 +108,16 @@ test('Issue 32 migration adds durable event and retry tables without changing ex
     migrate(database);
 
     const migration = database.prepare('SELECT version, name FROM schema_migrations ORDER BY version DESC LIMIT 1').get();
-    assert.equal(migration.version, 5);
-    assert.equal(migration.name, 'proposed_scheduled_run_events');
+    assert.equal(migration.version, 6);
+    assert.equal(migration.name, 'room_storage_and_legacy_board');
     assert.deepEqual(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('run_events', 'run_event_requests') ORDER BY name").all(), [
       { name: 'run_event_requests' },
       { name: 'run_events' },
     ]);
     assert.deepEqual(database.prepare('SELECT id, name FROM users WHERE id = ?').get(userId), { id: userId, name: 'Migration Runner' });
-    assert.deepEqual(database.prepare('SELECT user_id, vote_date FROM votes WHERE user_id = ?').get(userId), { user_id: userId, vote_date: '2024-03-01' });
+    assert.deepEqual(database.prepare('SELECT room_id, user_id, vote_date FROM votes WHERE user_id = ?').get(userId), {
+      room_id: LEGACY_ROOM_ID, user_id: userId, vote_date: '2024-03-01',
+    });
     assert.equal(database.prepare('SELECT COUNT(*) AS count FROM sessions WHERE user_id = ?').get(userId).count, 1);
     assert.equal(database.pragma('foreign_keys', { simple: true }), 1);
   });

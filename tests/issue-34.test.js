@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { createServer } from '../src/server.js';
+import { LEGACY_ROOM_ID } from '../src/room-contract.js';
 import { getVoteTimelinePresentation } from '../src/vote-board.js';
 import { sortRunEventsForPresentation } from '../src/run-events.js';
 
@@ -43,8 +44,8 @@ test('authenticated timeline returns only authoritative scheduled dates within i
     const admin = server.database.prepare("SELECT id FROM users WHERE role = 'admin'").get();
     const member = server.database.prepare("SELECT id FROM users WHERE role = 'user'").get();
     const insertEvent = server.database.prepare(`
-      INSERT INTO run_events (event_date, status, revision, proposed_by, proposed_at, scheduled_by, scheduled_at)
-      VALUES (?, ?, 1, ?, ?, ?, ?)
+      INSERT INTO run_events (room_id, event_date, status, revision, proposed_by, proposed_at, scheduled_by, scheduled_at)
+      VALUES (?, ?, ?, 1, ?, ?, ?, ?)
     `);
     for (const [date, status] of [
       ['2026-10-10', 'scheduled'],
@@ -53,7 +54,7 @@ test('authenticated timeline returns only authoritative scheduled dates within i
       ['2026-10-25', 'scheduled'],
       ['2026-10-26', 'scheduled'],
     ]) {
-      insertEvent.run(date, status, member.id, NOW.toISOString(), status === 'scheduled' ? admin.id : null, status === 'scheduled' ? NOW.toISOString() : null);
+      insertEvent.run(LEGACY_ROOM_ID, date, status, member.id, NOW.toISOString(), status === 'scheduled' ? admin.id : null, status === 'scheduled' ? NOW.toISOString() : null);
     }
 
     const response = await fetch(`${baseUrl}/api/vote-timeline`, { headers: { cookie: cookieFrom(registration) } });
