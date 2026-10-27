@@ -345,6 +345,7 @@ const ADMIN_ACTION_MESSAGES = {
   targetNotFound: 'ไม่พบผู้ใช้ / User not found.',
   adminProtected: 'ไม่อนุญาตให้แก้ไขผู้ดูแลระบบ / The administrator account cannot be changed.',
   conflict: 'รหัสคำขอถูกใช้กับการกระทำอื่น / The request ID was already used for another action.',
+  legacyRoomOnly: 'การดำเนินการนี้รองรับเฉพาะห้องเดิม / This operation only supports the migrated room.',
 };
 
 function existingAdminAudit(database, requestId, { adminUserId, targetUserId, action }) {
@@ -395,6 +396,9 @@ export function resetUserVotes(database, {
   requestId,
   now = () => new Date(),
 }) {
+  if (roomId !== LEGACY_ROOM_ID) {
+    throw new AdminActionError(400, 'ROOM_SCOPE_UNSUPPORTED', ADMIN_ACTION_MESSAGES.legacyRoomOnly);
+  }
   const transaction = database.transaction(() => {
     const replay = existingAdminAudit(database, requestId, { adminUserId, targetUserId, action: 'reset_votes' });
     if (replay) return replay;
