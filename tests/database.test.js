@@ -17,6 +17,11 @@ test('opens SQLite with foreign keys and WAL and applies repeatable migrations',
       database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all(),
       [
         { name: 'admin_action_audit' },
+        { name: 'room_display_counter' },
+        { name: 'room_identity_ledger' },
+        { name: 'room_memberships' },
+        { name: 'room_migration_ledger' },
+        { name: 'rooms' },
         { name: 'run_event_requests' },
         { name: 'run_events' },
         { name: 'schema_migrations' },
@@ -30,7 +35,7 @@ test('opens SQLite with foreign keys and WAL and applies repeatable migrations',
     migrate(database);
     const secondTables = database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all();
     assert.deepEqual(secondTables, firstTables);
-    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get().count, 5);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get().count, 6);
     database.close();
   } finally {
     await rm(directory, { recursive: true, force: true });

@@ -1,5 +1,6 @@
 import { randomBytes, scryptSync } from 'node:crypto';
 import { normalizeName } from './names.js';
+import { LEGACY_ROOM_ID } from './room-contract.js';
 import {
   addDays,
   getBangkokDate,
@@ -114,11 +115,16 @@ export function bootstrapAdmin(database, { env = process.env, now = () => new Da
   });
 }
 
-export function addVote(database, { userId, voteDate, createdAt = new Date().toISOString() }) {
+export function addVote(database, {
+  roomId = LEGACY_ROOM_ID,
+  userId,
+  voteDate,
+  createdAt = new Date().toISOString(),
+}) {
   const canonicalDate = formatParsedDate(parseIsoDate(voteDate));
   const result = database.prepare(`
-    INSERT INTO votes (user_id, vote_date, created_at) VALUES (?, ?, ?)
-  `).run(userId, canonicalDate, createdAt);
+    INSERT INTO votes (room_id, user_id, vote_date, created_at) VALUES (?, ?, ?, ?)
+  `).run(roomId, userId, canonicalDate, createdAt);
   return database.prepare('SELECT * FROM votes WHERE id = ?').get(result.lastInsertRowid);
 }
 
@@ -138,14 +144,14 @@ export function assertVoteBody(body) {
   }
 }
 
-function getDayState(database, { date, currentUserId }) {
+function getDayState(database, { roomId, date, currentUserId }) {
   const rows = database.prepare(`
     SELECT votes.user_id AS userId, users.name AS voterName
     FROM votes
     JOIN users ON users.id = votes.user_id
-    WHERE votes.vote_date = ?
+    WHERE votes.room_id = ? AND votes.vote_date = ?
     ORDER BY users.name_key ASC, users.name ASC, votes.user_id ASC
-  `).all(date);
+  `).all(roomId, date);
   const voterNames = rows.map(({ voterName }) => voterName);
   return {
     date,
@@ -155,7 +161,13 @@ function getDayState(database, { date, currentUserId }) {
   };
 }
 
-export function setVote(database, { userId, voteDate, now = () => new Date(), body }) {
+export function setVote(database, {
+  roomId = LEGACY_ROOM_ID,
+  userId,
+  voteDate,
+  now = () => new Date(),
+  body,
+}) {
   assertVoteBody(body);
   const { selected } = body;
   const canonicalDate = canonicalVoteDate(voteDate);
@@ -165,33 +177,34 @@ export function setVote(database, { userId, voteDate, now = () => new Date(), bo
     }
     const result = selected
       ? database.prepare(`
-        INSERT INTO votes (user_id, vote_date, created_at)
-        VALUES (?, ?, ?)
-        ON CONFLICT (user_id, vote_date) DO NOTHING
-      `).run(userId, canonicalDate, timestamp(now))
-      : database.prepare('DELETE FROM votes WHERE user_id = ? AND vote_date = ?').run(userId, canonicalDate);
-    if (!selected && result.changes > 0) deleteEmptyProposedEvent(database, canonicalDate);
+        INSERT INTO votes (room_id, user_id, vote_date, created_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT (room_id, user_id, vote_date) DO NOTHING
+      `).run(roomId, userId, canonicalDate, timestamp(now))
+      : database.prepare('DELETE FROM votes WHERE room_id = ? AND user_id = ? AND vote_date = ?')
+        .run(roomId, userId, canonicalDate);
+    if (!selected && result.changes > 0) deleteEmptyProposedEvent(database, canonicalDate, roomId);
     return {
       changed: result.changes > 0,
-      patch: getDayState(database, { date: canonicalDate, currentUserId: userId }),
+      patch: getDayState(database, { roomId, date: canonicalDate, currentUserId: userId }),
     };
   });
   return transaction();
 }
 
-export function getDayPatch(database, { date, currentUserId }) {
-  return getDayState(database, { date: canonicalVoteDate(date), currentUserId });
+export function getDayPatch(database, { roomId = LEGACY_ROOM_ID, date, currentUserId }) {
+  return getDayState(database, { roomId, date: canonicalVoteDate(date), currentUserId });
 }
 
-export function getEligiblePeriodVoteTotals(database, { now = () => new Date() } = {}) {
+export function getEligiblePeriodVoteTotals(database, { roomId = LEGACY_ROOM_ID, now = () => new Date() } = {}) {
   const startDate = getBangkokDate(now);
   const endDate = addDays(getCurrentWeekMonday(now), 20);
   const counts = database.prepare(`
     SELECT vote_date AS date, COUNT(*) AS voteCount
     FROM votes
-    WHERE vote_date >= ? AND vote_date <= ?
+    WHERE room_id = ? AND vote_date >= ? AND vote_date <= ?
     GROUP BY vote_date
-  `).all(startDate, endDate);
+  `).all(roomId, startDate, endDate);
   const countByDate = new Map(counts.map(({ date, voteCount }) => [date, voteCount]));
   const days = [];
   for (let date = startDate; ; date = addDays(date, 1)) {
@@ -201,21 +214,21 @@ export function getEligiblePeriodVoteTotals(database, { now = () => new Date() }
   const scheduledDates = database.prepare(`
     SELECT event_date AS date
     FROM run_events
-    WHERE status = 'scheduled' AND event_date >= ? AND event_date <= ?
+    WHERE room_id = ? AND status = 'scheduled' AND event_date >= ? AND event_date <= ?
     ORDER BY event_date ASC
-  `).all(startDate, endDate).map(({ date }) => date);
+  `).all(roomId, startDate, endDate).map(({ date }) => date);
   return { startDate, endDate, days, scheduledDates };
 }
 
-export function getWeekState(database, { monday, currentUserId, now = () => new Date() }) {
+export function getWeekState(database, { roomId = LEGACY_ROOM_ID, monday, currentUserId, now = () => new Date() }) {
   const { sunday } = getWeekRange(monday);
   const rows = database.prepare(`
     SELECT votes.vote_date AS date, votes.user_id AS userId, users.name AS voterName
     FROM votes
     JOIN users ON users.id = votes.user_id
-    WHERE votes.vote_date >= ? AND votes.vote_date <= ?
+    WHERE votes.room_id = ? AND votes.vote_date >= ? AND votes.vote_date <= ?
     ORDER BY votes.vote_date ASC, users.name_key ASC, users.name ASC, votes.user_id ASC
-  `).all(monday, sunday);
+  `).all(roomId, monday, sunday);
   const byDate = new Map();
   const currentUserSelectedDates = [];
   for (const row of rows) {
@@ -238,9 +251,10 @@ export function getWeekState(database, { monday, currentUserId, now = () => new 
   const events = database.prepare(`
     SELECT event_date AS date
     FROM run_events
-    WHERE event_date >= ? AND event_date >= ? AND event_date <= ?
+    WHERE room_id = ? AND event_date >= ? AND event_date >= ? AND event_date <= ?
     ORDER BY event_date ASC
-  `).all(monday, today, sunday).map(({ date }) => getRunEventForDate(database, { eventDate: date }));
+  `).all(roomId, monday, today, sunday)
+    .map(({ date }) => getRunEventForDate(database, { roomId, eventDate: date }));
   const isoWeek = getIsoWeek(monday);
   const nextMonday = addDays(monday, 7);
   return {
@@ -261,7 +275,7 @@ export function getWeekState(database, { monday, currentUserId, now = () => new 
   };
 }
 
-export function resetWeek(database, { monday, now = () => new Date() }) {
+export function resetWeek(database, { roomId = LEGACY_ROOM_ID, monday, now = () => new Date() }) {
   try {
     parseIsoDate(monday);
   } catch (error) {
@@ -277,10 +291,11 @@ export function resetWeek(database, { monday, now = () => new Date() }) {
   const transaction = database.transaction(() => {
     const affectedDates = database.prepare(`
       SELECT DISTINCT vote_date AS date FROM votes
-      WHERE vote_date >= ? AND vote_date <= ? ORDER BY vote_date ASC
-    `).all(monday, sunday).map(({ date }) => date);
-    const result = database.prepare('DELETE FROM votes WHERE vote_date >= ? AND vote_date <= ?').run(monday, sunday);
-    affectedDates.forEach((date) => deleteEmptyProposedEvent(database, date));
+      WHERE room_id = ? AND vote_date >= ? AND vote_date <= ? ORDER BY vote_date ASC
+    `).all(roomId, monday, sunday).map(({ date }) => date);
+    const result = database.prepare('DELETE FROM votes WHERE room_id = ? AND vote_date >= ? AND vote_date <= ?')
+      .run(roomId, monday, sunday);
+    affectedDates.forEach((date) => deleteEmptyProposedEvent(database, date, roomId));
     return { monday, sunday, deletedCount: result.changes, affectedDates };
   });
   return transaction();
@@ -311,11 +326,12 @@ export function deleteUserAndCollectAffectedDates(database, userId) {
     const user = database.prepare('SELECT id, name, role FROM users WHERE id = ?').get(userId);
     if (!user) return null;
     if (user.role === 'admin') throw new Error('seeded admin cannot be deleted');
-    const affectedDates = database.prepare(
-      'SELECT DISTINCT vote_date AS date FROM votes WHERE user_id = ? ORDER BY vote_date ASC',
-    ).all(userId).map(({ date }) => date);
+    const affectedRoomDates = database.prepare(
+      'SELECT DISTINCT room_id, vote_date AS date FROM votes WHERE user_id = ? ORDER BY room_id, vote_date',
+    ).all(userId);
     database.prepare('DELETE FROM users WHERE id = ?').run(userId);
-    affectedDates.forEach((date) => deleteEmptyProposedEvent(database, date));
+    affectedRoomDates.forEach(({ room_id: roomId, date }) => deleteEmptyProposedEvent(database, date, roomId));
+    const affectedDates = [...new Set(affectedRoomDates.map(({ date }) => date))];
     return { user, affectedDates };
   });
   return transaction();
@@ -329,6 +345,7 @@ const ADMIN_ACTION_MESSAGES = {
   targetNotFound: 'ไม่พบผู้ใช้ / User not found.',
   adminProtected: 'ไม่อนุญาตให้แก้ไขผู้ดูแลระบบ / The administrator account cannot be changed.',
   conflict: 'รหัสคำขอถูกใช้กับการกระทำอื่น / The request ID was already used for another action.',
+  legacyRoomOnly: 'การดำเนินการนี้รองรับเฉพาะห้องเดิม / This operation only supports the migrated room.',
 };
 
 function existingAdminAudit(database, requestId, { adminUserId, targetUserId, action }) {
@@ -352,10 +369,16 @@ function requireNormalTarget(database, targetUserId) {
   return target;
 }
 
-function affectedVotes(database, targetUserId) {
+function affectedVotes(database, targetUserId, roomId = LEGACY_ROOM_ID) {
   return database.prepare(
-    'SELECT DISTINCT vote_date AS date FROM votes WHERE user_id = ? ORDER BY vote_date ASC',
-  ).all(targetUserId).map(({ date }) => date);
+    'SELECT DISTINCT vote_date AS date FROM votes WHERE room_id = ? AND user_id = ? ORDER BY vote_date ASC',
+  ).all(roomId, targetUserId).map(({ date }) => date);
+}
+
+function affectedRoomVotes(database, targetUserId) {
+  return database.prepare(
+    'SELECT DISTINCT room_id AS roomId, vote_date AS date FROM votes WHERE user_id = ? ORDER BY room_id, vote_date',
+  ).all(targetUserId);
 }
 
 function insertAdminAudit(database, { requestId, adminUserId, targetUserId, targetName, action, deletedVoteCount, occurredAt }) {
@@ -366,14 +389,24 @@ function insertAdminAudit(database, { requestId, adminUserId, targetUserId, targ
   `).run(requestId, adminUserId, targetUserId, targetName, action, deletedVoteCount, occurredAt);
 }
 
-export function resetUserVotes(database, { adminUserId, targetUserId, requestId, now = () => new Date() }) {
+export function resetUserVotes(database, {
+  roomId = LEGACY_ROOM_ID,
+  adminUserId,
+  targetUserId,
+  requestId,
+  now = () => new Date(),
+}) {
+  if (roomId !== LEGACY_ROOM_ID) {
+    throw new AdminActionError(400, 'ROOM_SCOPE_UNSUPPORTED', ADMIN_ACTION_MESSAGES.legacyRoomOnly);
+  }
   const transaction = database.transaction(() => {
     const replay = existingAdminAudit(database, requestId, { adminUserId, targetUserId, action: 'reset_votes' });
     if (replay) return replay;
     const target = requireNormalTarget(database, targetUserId);
-    const affectedDates = affectedVotes(database, targetUserId);
-    const deletedVoteCount = database.prepare('DELETE FROM votes WHERE user_id = ?').run(targetUserId).changes;
-    affectedDates.forEach((date) => deleteEmptyProposedEvent(database, date));
+    const affectedDates = affectedVotes(database, targetUserId, roomId);
+    const deletedVoteCount = database.prepare('DELETE FROM votes WHERE room_id = ? AND user_id = ?')
+      .run(roomId, targetUserId).changes;
+    affectedDates.forEach((date) => deleteEmptyProposedEvent(database, date, roomId));
     insertAdminAudit(database, {
       requestId,
       adminUserId,
@@ -393,7 +426,7 @@ export function deleteUserWithAudit(database, { adminUserId, targetUserId, reque
     const replay = existingAdminAudit(database, requestId, { adminUserId, targetUserId, action: 'delete_user' });
     if (replay) return replay;
     const target = requireNormalTarget(database, targetUserId);
-    const affectedDates = affectedVotes(database, targetUserId);
+    const affectedRoomDates = affectedRoomVotes(database, targetUserId);
     const deletedVoteCount = database.prepare('SELECT COUNT(*) AS count FROM votes WHERE user_id = ?').get(targetUserId).count;
     insertAdminAudit(database, {
       requestId,
@@ -405,7 +438,8 @@ export function deleteUserWithAudit(database, { adminUserId, targetUserId, reque
       occurredAt: timestamp(now),
     });
     database.prepare('DELETE FROM users WHERE id = ?').run(targetUserId);
-    affectedDates.forEach((date) => deleteEmptyProposedEvent(database, date));
+    affectedRoomDates.forEach(({ roomId, date }) => deleteEmptyProposedEvent(database, date, roomId));
+    const affectedDates = [...new Set(affectedRoomDates.map(({ date }) => date))];
     return { deletedVoteCount, requestId, replayed: false, affectedDates };
   });
   return transaction();
@@ -461,9 +495,13 @@ function assertWritableEventDate(eventDate, now) {
   }
 }
 
-function requireCurrentEventMember(database, userId, { admin = false } = {}) {
+function requireCurrentEventMember(database, userId, roomId, { admin = false } = {}) {
   const user = database.prepare('SELECT id, role FROM users WHERE id = ?').get(userId);
   if (!user) throw new RunEventError(403, 'RUN_EVENT_MEMBER_REQUIRED', RUN_EVENT_MESSAGES.notMember);
+  const membership = database.prepare(
+    'SELECT 1 FROM room_memberships WHERE room_id = ? AND user_id = ?',
+  ).get(roomId, userId);
+  if (!membership) throw new RunEventError(403, 'RUN_EVENT_MEMBER_REQUIRED', RUN_EVENT_MESSAGES.notMember);
   if (admin && user.role !== 'admin') {
     throw new RunEventError(403, 'RUN_EVENT_ADMIN_REQUIRED', RUN_EVENT_MESSAGES.adminRequired);
   }
@@ -482,7 +520,9 @@ function runEventRequestSignature(request) {
 }
 
 function replayRunEventRequest(database, request) {
-  const existing = database.prepare('SELECT * FROM run_event_requests WHERE request_id = ?').get(request.requestId);
+  const existing = database.prepare(
+    'SELECT * FROM run_event_requests WHERE room_id = ? AND request_id = ?',
+  ).get(request.roomId, request.requestId);
   if (!existing) return null;
   const expected = runEventRequestSignature(request);
   if (existing.actor_user_id !== expected.actorUserId
@@ -493,16 +533,21 @@ function replayRunEventRequest(database, request) {
     || existing.requested_status !== expected.requestedStatus) {
     throw new RunEventError(409, 'RUN_EVENT_REQUEST_ID_CONFLICT', RUN_EVENT_MESSAGES.requestConflict);
   }
-  return { changed: false, replayed: true, event: getRunEventForDate(database, { eventDate: request.eventDate }) };
+  return {
+    changed: false,
+    replayed: true,
+    event: getRunEventForDate(database, { roomId: request.roomId, eventDate: request.eventDate }),
+  };
 }
 
 function recordRunEventRequest(database, request, { now = () => new Date() } = {}) {
   const signature = runEventRequestSignature(request);
   database.prepare(`
     INSERT INTO run_event_requests
-      (request_id, actor_user_id, action, event_date, event_id, expected_revision, requested_status, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      (room_id, request_id, actor_user_id, action, event_date, event_id, expected_revision, requested_status, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
+    request.roomId,
     request.requestId,
     signature.actorUserId,
     signature.action,
@@ -514,17 +559,19 @@ function recordRunEventRequest(database, request, { now = () => new Date() } = {
   );
 }
 
-function requireCurrentDateVoter(database, userId, eventDate) {
+function requireCurrentDateVoter(database, userId, eventDate, roomId) {
   const vote = database.prepare(
-    'SELECT 1 AS present FROM votes WHERE user_id = ? AND vote_date = ?',
-  ).get(userId, eventDate);
+    'SELECT 1 AS present FROM votes WHERE room_id = ? AND user_id = ? AND vote_date = ?',
+  ).get(roomId, userId, eventDate);
   if (!vote) throw new RunEventError(403, 'RUN_EVENT_VOTER_REQUIRED', RUN_EVENT_MESSAGES.notVoter);
 }
 
-function deleteEmptyProposedEvent(database, eventDate) {
-  const voteCount = database.prepare('SELECT COUNT(*) AS count FROM votes WHERE vote_date = ?').get(eventDate).count;
+function deleteEmptyProposedEvent(database, eventDate, roomId = LEGACY_ROOM_ID) {
+  const voteCount = database.prepare('SELECT COUNT(*) AS count FROM votes WHERE room_id = ? AND vote_date = ?')
+    .get(roomId, eventDate).count;
   if (voteCount !== 0) return false;
-  return database.prepare("DELETE FROM run_events WHERE event_date = ? AND status = 'proposed'").run(eventDate).changes > 0;
+  return database.prepare("DELETE FROM run_events WHERE room_id = ? AND event_date = ? AND status = 'proposed'")
+    .run(roomId, eventDate).changes > 0;
 }
 
 function assertFreshRunEvent(event, { eventId, revision }) {
@@ -533,7 +580,7 @@ function assertFreshRunEvent(event, { eventId, revision }) {
   }
 }
 
-export function getRunEventForDate(database, { eventDate }) {
+export function getRunEventForDate(database, { roomId = LEGACY_ROOM_ID, eventDate }) {
   const canonicalDate = canonicalEventDate(eventDate);
   const event = database.prepare(`
     SELECT events.id, events.event_date, events.status, events.revision,
@@ -542,15 +589,15 @@ export function getRunEventForDate(database, { eventDate }) {
     FROM run_events AS events
     LEFT JOIN users AS proposer ON proposer.id = events.proposed_by
     LEFT JOIN users AS scheduler ON scheduler.id = events.scheduled_by
-    WHERE events.event_date = ?
-  `).get(canonicalDate);
+    WHERE events.room_id = ? AND events.event_date = ?
+  `).get(roomId, canonicalDate);
   if (!event) return null;
   const voterNames = database.prepare(`
     SELECT users.name
     FROM votes JOIN users ON users.id = votes.user_id
-    WHERE votes.vote_date = ?
+    WHERE votes.room_id = ? AND votes.vote_date = ?
     ORDER BY users.name_key ASC, users.name ASC, users.id ASC
-  `).all(canonicalDate).map(({ name }) => name);
+  `).all(roomId, canonicalDate).map(({ name }) => name);
   return {
     eventId: event.id,
     date: event.event_date,
@@ -565,27 +612,33 @@ export function getRunEventForDate(database, { eventDate }) {
   };
 }
 
-export function proposeRunEvent(database, { userId, eventDate, requestId, now = () => new Date() }) {
+export function proposeRunEvent(database, {
+  roomId = LEGACY_ROOM_ID,
+  userId,
+  eventDate,
+  requestId,
+  now = () => new Date(),
+}) {
   const canonicalDate = canonicalEventDate(eventDate);
   assertRunEventRequestId(requestId);
   const request = {
-    requestId, actorUserId: userId, action: 'propose', eventDate: canonicalDate, requestedStatus: 'proposed',
+    roomId, requestId, actorUserId: userId, action: 'propose', eventDate: canonicalDate, requestedStatus: 'proposed',
   };
   const transaction = database.transaction(() => {
-    requireCurrentEventMember(database, userId);
+    requireCurrentEventMember(database, userId, roomId);
     const replay = replayRunEventRequest(database, request);
     if (replay) return replay;
     assertWritableEventDate(canonicalDate, now);
-    requireCurrentDateVoter(database, userId, canonicalDate);
-    if (database.prepare('SELECT id FROM run_events WHERE event_date = ?').get(canonicalDate)) {
+    requireCurrentDateVoter(database, userId, canonicalDate, roomId);
+    if (database.prepare('SELECT id FROM run_events WHERE room_id = ? AND event_date = ?').get(roomId, canonicalDate)) {
       throw new RunEventError(409, 'RUN_EVENT_ALREADY_EXISTS', RUN_EVENT_MESSAGES.eventExists);
     }
     let eventId;
     try {
       const inserted = database.prepare(`
-        INSERT INTO run_events (event_date, status, revision, proposed_by, proposed_at)
-        VALUES (?, 'proposed', 1, ?, ?)
-      `).run(canonicalDate, userId, timestamp(now));
+        INSERT INTO run_events (room_id, event_date, status, revision, proposed_by, proposed_at)
+        VALUES (?, ?, 'proposed', 1, ?, ?)
+      `).run(roomId, canonicalDate, userId, timestamp(now));
       eventId = Number(inserted.lastInsertRowid);
     } catch (error) {
       if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
@@ -594,28 +647,45 @@ export function proposeRunEvent(database, { userId, eventDate, requestId, now = 
       throw error;
     }
     recordRunEventRequest(database, request, { now });
-    return { changed: true, replayed: false, event: getRunEventForDate(database, { eventDate: canonicalDate }) };
+    return {
+      changed: true,
+      replayed: false,
+      event: getRunEventForDate(database, { roomId, eventDate: canonicalDate }),
+    };
   });
   return transaction();
 }
 
-export function withdrawRunEvent(database, { userId, eventDate, eventId, revision, requestId, now = () => new Date() }) {
+export function withdrawRunEvent(database, {
+  roomId = LEGACY_ROOM_ID,
+  userId,
+  eventDate,
+  eventId,
+  revision,
+  requestId,
+  now = () => new Date(),
+}) {
   const canonicalDate = canonicalEventDate(eventDate);
   assertRunEventRequestId(requestId);
   assertRunEventExpectation(eventId, revision);
-  const request = { requestId, actorUserId: userId, action: 'withdraw', eventDate: canonicalDate, eventId, expectedRevision: revision };
+  const request = {
+    roomId, requestId, actorUserId: userId, action: 'withdraw',
+    eventDate: canonicalDate, eventId, expectedRevision: revision,
+  };
   const transaction = database.transaction(() => {
-    requireCurrentEventMember(database, userId);
+    requireCurrentEventMember(database, userId, roomId);
     const replay = replayRunEventRequest(database, request);
     if (replay) return replay;
     assertWritableEventDate(canonicalDate, now);
-    requireCurrentDateVoter(database, userId, canonicalDate);
-    const current = database.prepare('SELECT id, status, revision FROM run_events WHERE event_date = ?').get(canonicalDate);
+    requireCurrentDateVoter(database, userId, canonicalDate, roomId);
+    const current = database.prepare(
+      'SELECT id, status, revision FROM run_events WHERE room_id = ? AND event_date = ?',
+    ).get(roomId, canonicalDate);
     assertFreshRunEvent(current, { eventId, revision });
     if (current.status !== 'proposed') {
       throw new RunEventError(409, 'RUN_EVENT_SCHEDULED', RUN_EVENT_MESSAGES.scheduledLocked);
     }
-    database.prepare('DELETE FROM run_events WHERE id = ?').run(eventId);
+    database.prepare('DELETE FROM run_events WHERE room_id = ? AND id = ?').run(roomId, eventId);
     recordRunEventRequest(database, request, { now });
     return { changed: true, replayed: false, event: null };
   });
@@ -623,7 +693,14 @@ export function withdrawRunEvent(database, { userId, eventDate, eventId, revisio
 }
 
 export function setRunEventStatus(database, {
-  adminUserId, eventDate, eventId, revision, status, requestId, now = () => new Date(),
+  roomId = LEGACY_ROOM_ID,
+  adminUserId,
+  eventDate,
+  eventId,
+  revision,
+  status,
+  requestId,
+  now = () => new Date(),
 }) {
   const canonicalDate = canonicalEventDate(eventDate);
   assertRunEventRequestId(requestId);
@@ -633,15 +710,17 @@ export function setRunEventStatus(database, {
   }
   const action = status === 'scheduled' ? 'schedule' : 'revert';
   const request = {
-    requestId, actorUserId: adminUserId, action, eventDate: canonicalDate, eventId,
+    roomId, requestId, actorUserId: adminUserId, action, eventDate: canonicalDate, eventId,
     expectedRevision: revision, requestedStatus: status,
   };
   const transaction = database.transaction(() => {
-    requireCurrentEventMember(database, adminUserId, { admin: true });
+    requireCurrentEventMember(database, adminUserId, roomId, { admin: true });
     const replay = replayRunEventRequest(database, request);
     if (replay) return replay;
     assertWritableEventDate(canonicalDate, now);
-    const current = database.prepare('SELECT id, status, revision FROM run_events WHERE event_date = ?').get(canonicalDate);
+    const current = database.prepare(
+      'SELECT id, status, revision FROM run_events WHERE room_id = ? AND event_date = ?',
+    ).get(roomId, canonicalDate);
     assertFreshRunEvent(current, { eventId, revision });
     let changed = false;
     if (current.status !== status) {
@@ -649,41 +728,61 @@ export function setRunEventStatus(database, {
         database.prepare(`
           UPDATE run_events
           SET status = 'scheduled', revision = revision + 1, scheduled_by = ?, scheduled_at = ?
-          WHERE id = ? AND revision = ?
-        `).run(adminUserId, timestamp(now), eventId, revision);
+          WHERE room_id = ? AND id = ? AND revision = ?
+        `).run(adminUserId, timestamp(now), roomId, eventId, revision);
       } else {
-        const votes = database.prepare('SELECT COUNT(*) AS count FROM votes WHERE vote_date = ?').get(canonicalDate).count;
+        const votes = database.prepare('SELECT COUNT(*) AS count FROM votes WHERE room_id = ? AND vote_date = ?')
+          .get(roomId, canonicalDate).count;
         if (votes === 0) {
-          database.prepare("DELETE FROM run_events WHERE id = ? AND revision = ? AND status = 'scheduled'").run(eventId, revision);
+          database.prepare("DELETE FROM run_events WHERE room_id = ? AND id = ? AND revision = ? AND status = 'scheduled'")
+            .run(roomId, eventId, revision);
         } else {
           database.prepare(`
             UPDATE run_events
             SET status = 'proposed', revision = revision + 1, scheduled_by = NULL, scheduled_at = NULL
-            WHERE id = ? AND revision = ?
-          `).run(eventId, revision);
+            WHERE room_id = ? AND id = ? AND revision = ?
+          `).run(roomId, eventId, revision);
         }
       }
       changed = true;
     }
     recordRunEventRequest(database, request, { now });
-    return { changed, replayed: false, event: getRunEventForDate(database, { eventDate: canonicalDate }) };
+    return {
+      changed,
+      replayed: false,
+      event: getRunEventForDate(database, { roomId, eventDate: canonicalDate }),
+    };
   });
   return transaction();
 }
 
-export function deleteRunEvent(database, { adminUserId, eventDate, eventId, revision, requestId, now = () => new Date() }) {
+export function deleteRunEvent(database, {
+  roomId = LEGACY_ROOM_ID,
+  adminUserId,
+  eventDate,
+  eventId,
+  revision,
+  requestId,
+  now = () => new Date(),
+}) {
   const canonicalDate = canonicalEventDate(eventDate);
   assertRunEventRequestId(requestId);
   assertRunEventExpectation(eventId, revision);
-  const request = { requestId, actorUserId: adminUserId, action: 'delete', eventDate: canonicalDate, eventId, expectedRevision: revision };
+  const request = {
+    roomId, requestId, actorUserId: adminUserId, action: 'delete',
+    eventDate: canonicalDate, eventId, expectedRevision: revision,
+  };
   const transaction = database.transaction(() => {
-    requireCurrentEventMember(database, adminUserId, { admin: true });
+    requireCurrentEventMember(database, adminUserId, roomId, { admin: true });
     const replay = replayRunEventRequest(database, request);
     if (replay) return replay;
     assertWritableEventDate(canonicalDate, now);
-    const current = database.prepare('SELECT id, status, revision FROM run_events WHERE event_date = ?').get(canonicalDate);
+    const current = database.prepare(
+      'SELECT id, status, revision FROM run_events WHERE room_id = ? AND event_date = ?',
+    ).get(roomId, canonicalDate);
     assertFreshRunEvent(current, { eventId, revision });
-    database.prepare('DELETE FROM run_events WHERE id = ? AND revision = ?').run(eventId, revision);
+    database.prepare('DELETE FROM run_events WHERE room_id = ? AND id = ? AND revision = ?')
+      .run(roomId, eventId, revision);
     recordRunEventRequest(database, request, { now });
     return { changed: true, replayed: false, event: null };
   });
