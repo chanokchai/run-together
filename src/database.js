@@ -243,6 +243,54 @@ const MIGRATIONS = [
       `);
     },
   },
+  {
+    version: 7,
+    name: 'preserve_event_attribution_after_user_deletion',
+    apply(database) {
+      const previousSequence = database.prepare(
+        "SELECT seq FROM sqlite_sequence WHERE name = 'run_events'",
+      ).get()?.seq ?? 0;
+      database.exec(`
+        CREATE TABLE run_events_v7 (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+          event_date TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (status IN ('proposed', 'scheduled')),
+          revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0),
+          proposed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          proposed_by_name TEXT,
+          proposed_at TEXT NOT NULL,
+          scheduled_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          scheduled_by_name TEXT,
+          scheduled_at TEXT,
+          CHECK (
+            (status = 'proposed' AND scheduled_by IS NULL AND scheduled_at IS NULL)
+            OR (status = 'scheduled' AND scheduled_at IS NOT NULL
+              AND (scheduled_by IS NOT NULL OR scheduled_by_name IS NOT NULL))
+          ),
+          UNIQUE (room_id, event_date)
+        );
+        INSERT INTO run_events_v7
+          (id, room_id, event_date, status, revision, proposed_by, proposed_by_name, proposed_at,
+            scheduled_by, scheduled_by_name, scheduled_at)
+          SELECT events.id, events.room_id, events.event_date, events.status, events.revision,
+            events.proposed_by, proposer.name, events.proposed_at,
+            events.scheduled_by, scheduler.name, events.scheduled_at
+          FROM run_events AS events
+          LEFT JOIN users AS proposer ON proposer.id = events.proposed_by
+          LEFT JOIN users AS scheduler ON scheduler.id = events.scheduled_by;
+        DROP TABLE run_events;
+        ALTER TABLE run_events_v7 RENAME TO run_events;
+        CREATE INDEX run_events_date ON run_events(room_id, event_date);
+      `);
+      const maxId = database.prepare('SELECT COALESCE(MAX(id), 0) AS id FROM run_events').get().id;
+      database.prepare("DELETE FROM sqlite_sequence WHERE name IN ('run_events', 'run_events_v7')").run();
+      const sequence = Math.max(previousSequence, maxId);
+      if (sequence > 0) {
+        database.prepare('INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)').run('run_events', sequence);
+      }
+    },
+  },
 ];
 
 export function openDatabase(databasePath) {

@@ -329,12 +329,41 @@ export function deleteUserAndCollectAffectedDates(database, userId) {
     const affectedRoomDates = database.prepare(
       'SELECT DISTINCT room_id, vote_date AS date FROM votes WHERE user_id = ? ORDER BY room_id, vote_date',
     ).all(userId);
+    const transferredRoomIds = transferOwnedRoomsToApplicationAdmin(database, userId);
+    preserveDeletedUserEventAttribution(database, userId, user.name);
     database.prepare('DELETE FROM users WHERE id = ?').run(userId);
     affectedRoomDates.forEach(({ room_id: roomId, date }) => deleteEmptyProposedEvent(database, date, roomId));
     const affectedDates = [...new Set(affectedRoomDates.map(({ date }) => date))];
-    return { user, affectedDates };
+    const roomDatePairs = affectedRoomDates.map(({ room_id: roomId, date }) => ({ roomId, date }));
+    return { user, affectedDates, affectedRoomDates: roomDatePairs, transferredRoomIds };
   });
   return transaction();
+}
+
+function transferOwnedRoomsToApplicationAdmin(database, userId) {
+  const ownedRooms = database.prepare('SELECT id FROM rooms WHERE owner_user_id = ?').all(userId);
+  if (ownedRooms.length === 0) return [];
+  const admin = database.prepare("SELECT id FROM users WHERE role = 'admin'").get();
+  if (!admin) throw new Error('application admin is required for room ownership transfer');
+  for (const { id: roomId } of ownedRooms) {
+    database.prepare(`
+      INSERT INTO room_memberships (room_id, user_id, joined_at)
+      SELECT ?, id, created_at FROM users WHERE id = ?
+      ON CONFLICT (room_id, user_id) DO NOTHING
+    `).run(roomId, admin.id);
+    database.prepare('UPDATE rooms SET owner_user_id = ? WHERE id = ? AND owner_user_id = ?')
+      .run(admin.id, roomId, userId);
+  }
+  return ownedRooms.map(({ id }) => id);
+}
+
+function preserveDeletedUserEventAttribution(database, userId, userName) {
+  database.prepare(`
+    UPDATE run_events
+    SET proposed_by_name = CASE WHEN proposed_by = ? THEN ? ELSE proposed_by_name END,
+      scheduled_by_name = CASE WHEN scheduled_by = ? THEN ? ELSE scheduled_by_name END
+    WHERE proposed_by = ? OR scheduled_by = ?
+  `).run(userId, userName, userId, userName, userId, userId);
 }
 
 function formatParsedDate({ year, month, day }) {
@@ -345,7 +374,7 @@ const ADMIN_ACTION_MESSAGES = {
   targetNotFound: 'ไม่พบผู้ใช้ / User not found.',
   adminProtected: 'ไม่อนุญาตให้แก้ไขผู้ดูแลระบบ / The administrator account cannot be changed.',
   conflict: 'รหัสคำขอถูกใช้กับการกระทำอื่น / The request ID was already used for another action.',
-  legacyRoomOnly: 'การดำเนินการนี้รองรับเฉพาะห้องเดิม / This operation only supports the migrated room.',
+
 };
 
 function existingAdminAudit(database, requestId, { adminUserId, targetUserId, action }) {
@@ -359,6 +388,8 @@ function existingAdminAudit(database, requestId, { adminUserId, targetUserId, ac
     requestId: audit.request_id,
     replayed: true,
     affectedDates: [],
+    affectedRoomDates: [],
+    transferredRoomIds: [],
   };
 }
 
@@ -367,12 +398,6 @@ function requireNormalTarget(database, targetUserId) {
   if (!target) throw new AdminActionError(404, 'USER_NOT_FOUND', ADMIN_ACTION_MESSAGES.targetNotFound);
   if (target.role === 'admin') throw new AdminActionError(403, 'ADMIN_PROTECTED', ADMIN_ACTION_MESSAGES.adminProtected);
   return target;
-}
-
-function affectedVotes(database, targetUserId, roomId = LEGACY_ROOM_ID) {
-  return database.prepare(
-    'SELECT DISTINCT vote_date AS date FROM votes WHERE room_id = ? AND user_id = ? ORDER BY vote_date ASC',
-  ).all(roomId, targetUserId).map(({ date }) => date);
 }
 
 function affectedRoomVotes(database, targetUserId) {
@@ -390,23 +415,18 @@ function insertAdminAudit(database, { requestId, adminUserId, targetUserId, targ
 }
 
 export function resetUserVotes(database, {
-  roomId = LEGACY_ROOM_ID,
   adminUserId,
   targetUserId,
   requestId,
   now = () => new Date(),
 }) {
-  if (roomId !== LEGACY_ROOM_ID) {
-    throw new AdminActionError(400, 'ROOM_SCOPE_UNSUPPORTED', ADMIN_ACTION_MESSAGES.legacyRoomOnly);
-  }
   const transaction = database.transaction(() => {
     const replay = existingAdminAudit(database, requestId, { adminUserId, targetUserId, action: 'reset_votes' });
     if (replay) return replay;
     const target = requireNormalTarget(database, targetUserId);
-    const affectedDates = affectedVotes(database, targetUserId, roomId);
-    const deletedVoteCount = database.prepare('DELETE FROM votes WHERE room_id = ? AND user_id = ?')
-      .run(roomId, targetUserId).changes;
-    affectedDates.forEach((date) => deleteEmptyProposedEvent(database, date, roomId));
+    const affectedRoomDates = affectedRoomVotes(database, targetUserId);
+    const deletedVoteCount = database.prepare('DELETE FROM votes WHERE user_id = ?').run(targetUserId).changes;
+    affectedRoomDates.forEach(({ roomId, date }) => deleteEmptyProposedEvent(database, date, roomId));
     insertAdminAudit(database, {
       requestId,
       adminUserId,
@@ -416,7 +436,8 @@ export function resetUserVotes(database, {
       deletedVoteCount,
       occurredAt: timestamp(now),
     });
-    return { deletedVoteCount, requestId, replayed: false, affectedDates };
+    const affectedDates = [...new Set(affectedRoomDates.map(({ date }) => date))];
+    return { deletedVoteCount, requestId, replayed: false, affectedDates, affectedRoomDates };
   });
   return transaction();
 }
@@ -437,10 +458,12 @@ export function deleteUserWithAudit(database, { adminUserId, targetUserId, reque
       deletedVoteCount,
       occurredAt: timestamp(now),
     });
+    const transferredRoomIds = transferOwnedRoomsToApplicationAdmin(database, targetUserId);
+    preserveDeletedUserEventAttribution(database, targetUserId, target.name);
     database.prepare('DELETE FROM users WHERE id = ?').run(targetUserId);
     affectedRoomDates.forEach(({ roomId, date }) => deleteEmptyProposedEvent(database, date, roomId));
     const affectedDates = [...new Set(affectedRoomDates.map(({ date }) => date))];
-    return { deletedVoteCount, requestId, replayed: false, affectedDates };
+    return { deletedVoteCount, requestId, replayed: false, affectedDates, affectedRoomDates, transferredRoomIds };
   });
   return transaction();
 }
@@ -495,9 +518,16 @@ function assertWritableEventDate(eventDate, now) {
   }
 }
 
-function requireCurrentEventMember(database, userId, roomId, { admin = false } = {}) {
+function requireCurrentEventMember(database, userId, roomId, { admin = false, manager = false } = {}) {
   const user = database.prepare('SELECT id, role FROM users WHERE id = ?').get(userId);
   if (!user) throw new RunEventError(403, 'RUN_EVENT_MEMBER_REQUIRED', RUN_EVENT_MESSAGES.notMember);
+  if (manager) {
+    const room = database.prepare('SELECT owner_user_id FROM rooms WHERE id = ?').get(roomId);
+    if (user.role !== 'admin' && room?.owner_user_id !== userId) {
+      throw new RunEventError(403, 'RUN_EVENT_ADMIN_REQUIRED', RUN_EVENT_MESSAGES.adminRequired);
+    }
+    return user;
+  }
   const membership = database.prepare(
     'SELECT 1 FROM room_memberships WHERE room_id = ? AND user_id = ?',
   ).get(roomId, userId);
@@ -584,8 +614,8 @@ export function getRunEventForDate(database, { roomId = LEGACY_ROOM_ID, eventDat
   const canonicalDate = canonicalEventDate(eventDate);
   const event = database.prepare(`
     SELECT events.id, events.event_date, events.status, events.revision,
-      events.proposed_at, proposer.name AS proposed_by,
-      events.scheduled_at, scheduler.name AS scheduled_by
+      events.proposed_at, COALESCE(proposer.name, events.proposed_by_name) AS proposed_by,
+      events.scheduled_at, COALESCE(scheduler.name, events.scheduled_by_name) AS scheduled_by
     FROM run_events AS events
     LEFT JOIN users AS proposer ON proposer.id = events.proposed_by
     LEFT JOIN users AS scheduler ON scheduler.id = events.scheduled_by
@@ -714,7 +744,7 @@ export function setRunEventStatus(database, {
     expectedRevision: revision, requestedStatus: status,
   };
   const transaction = database.transaction(() => {
-    requireCurrentEventMember(database, adminUserId, roomId, { admin: true });
+    requireCurrentEventMember(database, adminUserId, roomId, { manager: true });
     const replay = replayRunEventRequest(database, request);
     if (replay) return replay;
     assertWritableEventDate(canonicalDate, now);
@@ -727,7 +757,7 @@ export function setRunEventStatus(database, {
       if (status === 'scheduled') {
         database.prepare(`
           UPDATE run_events
-          SET status = 'scheduled', revision = revision + 1, scheduled_by = ?, scheduled_at = ?
+          SET status = 'scheduled', revision = revision + 1, scheduled_by = ?, scheduled_by_name = NULL, scheduled_at = ?
           WHERE room_id = ? AND id = ? AND revision = ?
         `).run(adminUserId, timestamp(now), roomId, eventId, revision);
       } else {
@@ -739,7 +769,7 @@ export function setRunEventStatus(database, {
         } else {
           database.prepare(`
             UPDATE run_events
-            SET status = 'proposed', revision = revision + 1, scheduled_by = NULL, scheduled_at = NULL
+            SET status = 'proposed', revision = revision + 1, scheduled_by = NULL, scheduled_by_name = NULL, scheduled_at = NULL
             WHERE room_id = ? AND id = ? AND revision = ?
           `).run(roomId, eventId, revision);
         }
@@ -773,7 +803,7 @@ export function deleteRunEvent(database, {
     eventDate: canonicalDate, eventId, expectedRevision: revision,
   };
   const transaction = database.transaction(() => {
-    requireCurrentEventMember(database, adminUserId, roomId, { admin: true });
+    requireCurrentEventMember(database, adminUserId, roomId, { manager: true });
     const replay = replayRunEventRequest(database, request);
     if (replay) return replay;
     assertWritableEventDate(canonicalDate, now);

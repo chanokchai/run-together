@@ -8,6 +8,8 @@ import {
   parseIsoDate,
 } from './calendar.js';
 import { AuthError, createAuthService } from './auth.js';
+import { DEFAULT_ROOM_ICON, LEGACY_ROOM_ID, ROOM_ICONS } from './room-contract.js';
+import { addRoomMember, createRoom, getRoom, getRoomSummary, hasRoomMember, listRooms, updateRoomMetadata } from './room-storage.js';
 import {
   AdminActionError,
   deleteRunEvent,
@@ -481,7 +483,7 @@ const adminPage = () => page({
   `,
 });
 
-export function createApp({ databaseReady = false, database, env = process.env, now = () => new Date(), onVoteChanged = () => {}, onRunEventChanged = () => {}, onUserSessionsRevoked = () => {}, onUserDeleted = () => {}, onWeekReset = () => {} } = {}) {
+export function createApp({ databaseReady = false, database, env = process.env, now = () => new Date(), onVoteChanged = () => {}, onRunEventChanged = () => {}, onUserSessionsRevoked = () => {}, onUserDeleted = () => {}, onWeekReset = () => {}, onRoomSummaryChanged = () => {} } = {}) {
   const app = express();
   app.disable('x-powered-by');
   app.use(express.json({ limit: '10kb' }));
@@ -494,6 +496,32 @@ export function createApp({ databaseReady = false, database, env = process.env, 
     if (!(error instanceof AuthError) && !(error instanceof AdminActionError) && !(error instanceof VoteError) && !(error instanceof RunEventError)) console.error('Request failed:', error);
     response.status(safe.status).json({ code: safe.code, message: safe.message });
   };
+
+  function requireRoom(roomId) {
+    const room = getRoom(database, { roomId });
+    if (!room) throw new AuthError(404, 'ROOM_NOT_FOUND', 'The room was not found.');
+    return room;
+  }
+
+  function requireRoomMember(room, session) {
+    if (!hasRoomMember(database, { roomId: room.id, userId: session.user_id })) {
+      throw new AuthError(403, 'ROOM_MEMBERSHIP_REQUIRED', 'Enter this room before using its board.');
+    }
+  }
+
+  function requireRoomManager(room, session) {
+    if (session.role !== 'admin' && room.ownerUserId !== session.user_id) {
+      throw new AuthError(403, 'ROOM_OWNER_REQUIRED', 'Room owner or application admin access is required.');
+    }
+  }
+
+  function roomScopedEventResult(roomId, result) {
+    return {
+      ...result,
+      roomId,
+      event: result.event ? { ...result.event, roomId } : null,
+    };
+  }
 
   app.get('/health', (_request, response) => {
     response.json({
@@ -544,6 +572,259 @@ export function createApp({ databaseReady = false, database, env = process.env, 
       if (session) response.json(auth.sessionPayload(session));
     });
 
+    app.get('/api/rooms', (request, response) => {
+      response.setHeader('Cache-Control', 'no-store');
+      const session = auth.requireSession(request, response);
+      if (!session) return;
+      response.json({ rooms: listRooms(database, { now }) });
+    });
+
+    app.post('/api/rooms', (request, response) => {
+      response.setHeader('Cache-Control', 'no-store');
+      const session = auth.requireSession(request, response);
+      if (!session) return;
+      try {
+        auth.assertCsrf(request, session);
+        const body = request.body;
+        if (!body || typeof body !== 'object' || Array.isArray(body)
+          || Object.keys(body).some((key) => !['title', 'icon'].includes(key))
+          || !Object.hasOwn(body, 'title')) {
+          throw new AuthError(400, 'INVALID_ROOM_REQUEST', 'Room title and supported icon are required.');
+        }
+        if (body.icon !== undefined && !ROOM_ICONS.includes(body.icon)) {
+          throw new AuthError(400, 'INVALID_ROOM_ICON', 'The room icon is not supported.');
+        }
+        const room = createRoom(database, {
+          creatorUserId: session.user_id,
+          title: body.title,
+          icon: body.icon ?? DEFAULT_ROOM_ICON,
+          now,
+        });
+        const summary = getRoomSummary(database, { roomId: room.id, now });
+        onRoomSummaryChanged(room.id);
+        response.status(201).json({ room: { ...room, summary } });
+      } catch (error) {
+        if (error instanceof TypeError || error instanceof RangeError) {
+          sendError(response, new AuthError(400, 'INVALID_ROOM_REQUEST', 'Room title or icon is invalid.', { cause: error }));
+          return;
+        }
+        sendError(response, error);
+      }
+    });
+
+    app.get('/api/rooms/:roomId', (request, response) => {
+      response.setHeader('Cache-Control', 'no-store');
+      const session = auth.requireSession(request, response);
+      if (!session) return;
+      const room = getRoom(database, { roomId: request.params.roomId });
+      if (!room) {
+        sendError(response, new AuthError(404, 'ROOM_NOT_FOUND', 'The room was not found.'));
+        return;
+      }
+      response.json({ room: { ...room, summary: getRoomSummary(database, { roomId: room.id, now }) } });
+    });
+
+    app.post('/api/rooms/:roomId/enter', (request, response) => {
+      response.setHeader('Cache-Control', 'no-store');
+      const session = auth.requireSession(request, response);
+      if (!session) return;
+      try {
+        auth.assertCsrf(request, session);
+        const room = getRoom(database, { roomId: request.params.roomId });
+        if (!room) throw new AuthError(404, 'ROOM_NOT_FOUND', 'The room was not found.');
+        const membership = addRoomMember(database, { roomId: room.id, userId: session.user_id, now });
+        response.json({ room: { ...room, summary: getRoomSummary(database, { roomId: room.id, now }) }, membership });
+      } catch (error) {
+        sendError(response, error);
+      }
+    });
+
+    app.put('/api/rooms/:roomId', (request, response) => {
+      response.setHeader('Cache-Control', 'no-store');
+      const session = auth.requireSession(request, response);
+      if (!session) return;
+      try {
+        auth.assertCsrf(request, session);
+        const body = request.body;
+        const keys = body && typeof body === 'object' && !Array.isArray(body) ? Object.keys(body) : [];
+        if (!body || typeof body !== 'object' || Array.isArray(body) || keys.length === 0
+          || keys.some((key) => !['title', 'icon'].includes(key))) {
+          throw new AuthError(400, 'INVALID_ROOM_REQUEST', 'Only a room title or supported icon can be changed.');
+        }
+        if (body.icon !== undefined && !ROOM_ICONS.includes(body.icon)) {
+          throw new AuthError(400, 'INVALID_ROOM_ICON', 'The room icon is not supported.');
+        }
+        const room = getRoom(database, { roomId: request.params.roomId });
+        if (!room) throw new AuthError(404, 'ROOM_NOT_FOUND', 'The room was not found.');
+        if (room.ownerUserId !== session.user_id) {
+          throw new AuthError(403, 'ROOM_OWNER_REQUIRED', 'Only the room owner can change its title or icon.');
+        }
+        const updated = updateRoomMetadata(database, { roomId: room.id, ...body });
+        const summary = getRoomSummary(database, { roomId: room.id, now });
+        onRoomSummaryChanged(room.id);
+        response.json({ room: { ...updated, summary } });
+      } catch (error) {
+        if (error instanceof TypeError || error instanceof RangeError) {
+          sendError(response, new AuthError(400, 'INVALID_ROOM_REQUEST', 'Room title or icon is invalid.', { cause: error }));
+          return;
+        }
+        sendError(response, error);
+      }
+    });
+
+    app.get('/api/rooms/:roomId/weeks/:monday', (request, response) => {
+      response.setHeader('Cache-Control', 'no-store');
+      const session = auth.requireSession(request, response);
+      if (!session) return;
+      try {
+        const room = requireRoom(request.params.roomId);
+        requireRoomMember(room, session);
+        const monday = requestedWeek(request.params.monday, now);
+        const state = getWeekState(database, { roomId: room.id, monday, currentUserId: session.user_id, now });
+        response.json({
+          ...state,
+          roomId: room.id,
+          events: state.events.map((event) => ({ ...event, roomId: room.id })),
+        });
+      } catch (error) {
+        sendError(response, error);
+      }
+    });
+
+    app.get('/api/rooms/:roomId/vote-timeline', (request, response) => {
+      response.setHeader('Cache-Control', 'no-store');
+      const session = auth.requireSession(request, response);
+      if (!session) return;
+      try {
+        const room = requireRoom(request.params.roomId);
+        requireRoomMember(room, session);
+        response.json({ roomId: room.id, ...getEligiblePeriodVoteTotals(database, { roomId: room.id, now }) });
+      } catch (error) {
+        sendError(response, error);
+      }
+    });
+
+    app.put('/api/rooms/:roomId/votes/:date', (request, response) => {
+      response.setHeader('Cache-Control', 'no-store');
+      const session = auth.requireSession(request, response);
+      if (!session) return;
+      try {
+        auth.assertCsrf(request, session);
+        const room = requireRoom(request.params.roomId);
+        requireRoomMember(room, session);
+        assertVoteBody(request.body);
+        const result = setVote(database, {
+          roomId: room.id, userId: session.user_id, voteDate: request.params.date, now, body: request.body,
+        });
+        const patch = { ...result.patch, roomId: room.id };
+        if (result.changed) {
+          onVoteChanged(room.id, result.patch.date);
+        }
+        response.json(patch);
+      } catch (error) {
+        sendError(response, error);
+      }
+    });
+
+    app.post('/api/rooms/:roomId/events/:date', (request, response) => {
+      response.setHeader('Cache-Control', 'no-store');
+      const session = auth.requireSession(request, response);
+      if (!session) return;
+      try {
+        auth.assertCsrf(request, session);
+        const room = requireRoom(request.params.roomId);
+        requireRoomMember(room, session);
+        const { requestId } = runEventActionBody(request.body, { proposal: true });
+        const result = proposeRunEvent(database, {
+          roomId: room.id, userId: session.user_id, eventDate: request.params.date, requestId, now,
+        });
+        if (result.changed) onRunEventChanged(room.id, request.params.date);
+        response.status(result.changed ? 201 : 200).json(roomScopedEventResult(room.id, result));
+      } catch (error) {
+        sendError(response, error);
+      }
+    });
+
+    app.delete('/api/rooms/:roomId/events/:date', (request, response) => {
+      response.setHeader('Cache-Control', 'no-store');
+      const session = auth.requireSession(request, response);
+      if (!session) return;
+      try {
+        auth.assertCsrf(request, session);
+        const room = requireRoom(request.params.roomId);
+        requireRoomMember(room, session);
+        const { eventId, revision, requestId } = runEventActionBody(request.body);
+        const result = withdrawRunEvent(database, {
+          roomId: room.id, userId: session.user_id, eventDate: request.params.date,
+          eventId, revision, requestId, now,
+        });
+        if (result.changed) onRunEventChanged(room.id, request.params.date);
+        response.json(roomScopedEventResult(room.id, result));
+      } catch (error) {
+        sendError(response, error);
+      }
+    });
+
+    app.put('/api/rooms/:roomId/admin/events/:date', (request, response) => {
+      response.setHeader('Cache-Control', 'no-store');
+      const session = auth.requireSession(request, response);
+      if (!session) return;
+      try {
+        auth.assertCsrf(request, session);
+        const room = requireRoom(request.params.roomId);
+        requireRoomManager(room, session);
+        const { eventId, revision, requestId, status } = runEventActionBody(request.body, { status: true });
+        const result = setRunEventStatus(database, {
+          roomId: room.id, adminUserId: session.user_id, eventDate: request.params.date,
+          eventId, revision, requestId, status, now,
+        });
+        if (result.changed) onRunEventChanged(room.id, request.params.date);
+        response.json(roomScopedEventResult(room.id, result));
+      } catch (error) {
+        sendError(response, error);
+      }
+    });
+
+    app.delete('/api/rooms/:roomId/admin/events/:date', (request, response) => {
+      response.setHeader('Cache-Control', 'no-store');
+      const session = auth.requireSession(request, response);
+      if (!session) return;
+      try {
+        auth.assertCsrf(request, session);
+        const room = requireRoom(request.params.roomId);
+        requireRoomManager(room, session);
+        const { eventId, revision, requestId } = runEventActionBody(request.body);
+        const result = deleteRunEvent(database, {
+          roomId: room.id, adminUserId: session.user_id, eventDate: request.params.date,
+          eventId, revision, requestId, now,
+        });
+        if (result.changed) onRunEventChanged(room.id, request.params.date);
+        response.json(roomScopedEventResult(room.id, result));
+      } catch (error) {
+        sendError(response, error);
+      }
+    });
+
+    app.delete('/api/rooms/:roomId/admin/weeks/:monday/votes', (request, response) => {
+      response.setHeader('Cache-Control', 'no-store');
+      const session = auth.requireSession(request, response);
+      if (!session) return;
+      try {
+        auth.assertCsrf(request, session);
+        const room = requireRoom(request.params.roomId);
+        requireRoomManager(room, session);
+        if (request.body?.confirmation !== true) {
+          throw new AuthError(400, 'RESET_CONFIRMATION_REQUIRED', 'Explicit reset confirmation is required.');
+        }
+        const result = resetWeek(database, { roomId: room.id, monday: request.params.monday, now });
+        result.affectedDates.forEach((date) => onVoteChanged(room.id, date));
+        onWeekReset(room.id, result.monday, result.sunday);
+        response.status(204).end();
+      } catch (error) {
+        sendError(response, error);
+      }
+    });
+
     app.get('/admin', (request, response) => {
       const session = auth.requireAdmin(request, response);
       if (!session) return;
@@ -591,7 +872,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
         if (!Number.isSafeInteger(userId) || userId < 1) throw new AdminActionError(400, 'INVALID_USER_ID', 'ผู้ใช้ไม่ถูกต้อง / The user is invalid.');
         const { requestId } = adminActionBody(request.body);
         const result = resetUserVotes(database, { adminUserId: session.user_id, targetUserId: userId, requestId, now });
-        if (!result.replayed) result.affectedDates.forEach((date) => onVoteChanged(date));
+        if (!result.replayed) result.affectedRoomDates.forEach(({ roomId, date }) => onVoteChanged(roomId, date));
         response.json({ deletedVoteCount: result.deletedVoteCount, requestId: result.requestId, replayed: result.replayed });
       } catch (error) {
         sendError(response, error);
@@ -608,7 +889,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
         if (!Number.isSafeInteger(userId) || userId < 1) throw new AdminActionError(400, 'INVALID_USER_ID', 'ผู้ใช้ไม่ถูกต้อง / The user is invalid.');
         const { requestId } = adminActionBody(request.body);
         const deletion = deleteUserWithAudit(database, { adminUserId: session.user_id, targetUserId: userId, requestId, now });
-        if (!deletion.replayed) onUserDeleted(userId, deletion.affectedDates);
+        if (!deletion.replayed) onUserDeleted(userId, deletion.affectedRoomDates, deletion.transferredRoomIds);
         response.json({ deletedVoteCount: deletion.deletedVoteCount, requestId: deletion.requestId, replayed: deletion.replayed });
       } catch (error) {
         sendError(response, error);
@@ -739,20 +1020,32 @@ export function createApp({ databaseReady = false, database, env = process.env, 
       }
     });
 
-    app.get('/vote', (request, response) => {
+    app.get(['/vote', '/vote/:roomId'], (request, response) => {
       response.setHeader('Cache-Control', 'no-store');
       const session = auth.requireSession(request, response);
       if (!session) return;
+      const room = request.params.roomId
+        ? getRoom(database, { roomId: request.params.roomId })
+        : getRoom(database, { roomId: LEGACY_ROOM_ID });
+      if (!room) {
+        sendError(response, new AuthError(404, 'ROOM_NOT_FOUND', 'The room was not found.'));
+        return;
+      }
+      if (request.params.roomId && !hasRoomMember(database, { roomId: room.id, userId: session.user_id })) {
+        sendError(response, new AuthError(403, 'ROOM_MEMBERSHIP_REQUIRED', 'Enter this room before opening its board.'));
+        return;
+      }
       const displayName = escapeHtml(session.name);
       const currentWeek = getCurrentWeekMonday(now);
-      const resetControl = session.role === 'admin'
-        ? '<div class="actions"><button id="reset-week" type="button" class="admin-action" hidden>Reset votes</button><button id="manage-user" type="button" class="admin-action">manage user</button></div>'
-        : '';
+      const canManageRoom = session.role === 'admin' || room.ownerUserId === session.user_id;
+      const roomApiPrefix = room.id === LEGACY_ROOM_ID ? '' : `/api/rooms/${encodeURIComponent(room.id)}`;
+      const roomControls = `${canManageRoom ? '<button id="reset-week" type="button" class="admin-action" hidden>Reset votes</button>' : ''}${session.role === 'admin' ? '<button id="manage-user" type="button" class="admin-action">manage user</button>' : ''}`;
+      const resetControl = roomControls ? `<div class="actions">${roomControls}</div>` : '';
       response.type('html').send(page({
         title: 'Run Together | Vote',
         mainClass: 'vote-page-main',
         scriptSrc: '/socket.io/socket.io.js',
-        content: `<section id="protected-content" hidden>
+        content: `<section id="protected-content" hidden data-room-id="${room.id}">
           <h1>Run Together</h1>
           <section id="vote-timeline" class="vote-timeline" aria-labelledby="vote-timeline-heading">
             <h2 id="vote-timeline-heading">Vote timeline</h2>
@@ -787,7 +1080,10 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           const runEventHandlers = new Map();
           const pendingEventDates = new Set();
           let isAdmin = false;
+          let canManageRoom = ${JSON.stringify(canManageRoom)};
           const currentWeekMonday = '${currentWeek}';
+          const roomId = '${room.id}';
+          const roomApiPrefix = ${JSON.stringify(roomApiPrefix)};
           let weekMonday = currentWeekMonday;
           const protectedContent = document.querySelector('#protected-content');
           const displayName = document.querySelector('#display-name');
@@ -803,6 +1099,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           const manageUser = document.querySelector('#manage-user');
           const message = document.querySelector('#message');
           const runEvents = document.querySelector('#run-events');
+          function roomApiPath(legacyPath, scopedPath) { return roomApiPrefix ? roomApiPrefix + scopedPath : legacyPath; }
           function guardProtectedContent() { weekLoadSequence += 1; window.clearTimeout(rolloverTimer); protectedContent.hidden = true; csrfToken = ''; displayName.textContent = ''; weekDays.replaceChildren(); runEvents.replaceChildren(); timelineDays.replaceChildren(); scheduledEffects.sync('banner', []); scheduledEffects.sync('date-card', []); scheduledEffects.sync('timeline', []); runEventHandlers.forEach(({ abort, disposeSwipe }) => { abort.abort(); disposeSwipe?.(); }); runEventHandlers.clear(); runEventElements.clear(); weekState = null; eventsByDate = new Map(); message.textContent = ''; }
           function redirectToLogin() { guardProtectedContent(); location.replace('/'); }
           function addText(parent, tag, text) { const element = document.createElement(tag); element.textContent = text; parent.append(element); return element; }
@@ -872,7 +1169,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
             let totals;
             try {
               const refreshed = await timelineController.refresh(async () => {
-                const response = await fetch('/api/vote-timeline', { cache: 'no-store' });
+                const response = await fetch(roomApiPath('/api/vote-timeline', '/vote-timeline'), { cache: 'no-store' });
                 if (response.status === 401) { redirectToLogin(); throw new Error('unauthenticated'); }
                 totals = await response.json();
                 if (!response.ok) throw new Error(totals.message || 'Could not load vote totals.');
@@ -964,7 +1261,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
               voters.className = 'run-event-banner__voters';
               voters.setAttribute('aria-label', 'Current voters');
               banner.prepend(summary);
-              if (isAdmin) {
+              if (canManageRoom) {
                 const actions = document.createElement('div');
                 actions.className = 'run-event-actions';
                 const toggle = addText(actions, 'button', event.status === 'proposed' ? 'Schedule run' : 'Revert to proposed');
@@ -991,8 +1288,8 @@ export function createApp({ databaseReady = false, database, env = process.env, 
               cue.className = 'run-event-banner__swipe-cue';
               cue.setAttribute('aria-live', 'polite');
               const disposeSwipe = attachHorizontalSwipe(banner, {
-                resolveAction: (deltaX, deltaY) => getRunEventBannerSwipeAction({ deltaX, deltaY, isAdmin }),
-                resolvePreview: (deltaX, deltaY) => getRunEventBannerSwipePreview({ deltaX, deltaY, isAdmin }),
+                resolveAction: (deltaX, deltaY) => getRunEventBannerSwipeAction({ deltaX, deltaY, isAdmin: canManageRoom }),
+                resolvePreview: (deltaX, deltaY) => getRunEventBannerSwipePreview({ deltaX, deltaY, isAdmin: canManageRoom }),
                 onPreview(action, deltaX, ready) {
                   cue.textContent = action ? (ready ? 'Release to delete' : 'Swipe ' + (deltaX < 0 ? 'left' : 'right') + ' to delete') : '';
                   if (action) cue.dataset.destructive = 'true';
@@ -1022,18 +1319,18 @@ export function createApp({ databaseReady = false, database, env = process.env, 
               if (button.closest('.run-event-banner')?.dataset.date === date) button.disabled = true;
             });
             const requestId = crypto.randomUUID();
-            let path = '/api/events/' + encodeURIComponent(date);
+            let path = roomApiPath('/api/events/' + encodeURIComponent(date), '/events/' + encodeURIComponent(date));
             let method = 'POST';
             let body = { requestId };
             if (action === 'withdraw') {
               method = 'DELETE';
               body = { eventId: event.eventId, revision: event.revision, requestId };
             } else if (action === 'schedule' || action === 'revert') {
-              path = '/api/admin/events/' + encodeURIComponent(date);
+              path = roomApiPath('/api/admin/events/' + encodeURIComponent(date), '/admin/events/' + encodeURIComponent(date));
               method = 'PUT';
               body = { eventId: event.eventId, revision: event.revision, requestId, status: action === 'schedule' ? 'scheduled' : 'proposed' };
             } else if (action === 'delete') {
-              path = '/api/admin/events/' + encodeURIComponent(date);
+              path = roomApiPath('/api/admin/events/' + encodeURIComponent(date), '/admin/events/' + encodeURIComponent(date));
               method = 'DELETE';
               body = { eventId: event.eventId, revision: event.revision, requestId };
             }
@@ -1092,7 +1389,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
             nextWeek.disabled = !state.navigation.nextMonday;
             nextWeek.dataset.monday = state.navigation.nextMonday || '';
             if (resetWeek) {
-              resetWeek.hidden = !(isAdmin && state.week.resetEligible);
+              resetWeek.hidden = !(canManageRoom && state.week.resetEligible);
               resetWeek.disabled = resetWeek.hidden;
               resetWeek.dataset.monday = state.week.monday;
               resetWeek.dataset.isoWeek = state.week.isoWeek;
@@ -1193,7 +1490,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
             card.setAttribute('aria-busy', 'true');
             message.textContent = '';
             try {
-              const response = await fetch('/api/votes/' + encodeURIComponent(date), { method: 'PUT', headers: { 'content-type': 'application/json', 'x-csrf-token': csrfToken }, body: JSON.stringify({ selected }) });
+              const response = await fetch(roomApiPath('/api/votes/' + encodeURIComponent(date), '/votes/' + encodeURIComponent(date)), { method: 'PUT', headers: { 'content-type': 'application/json', 'x-csrf-token': csrfToken }, body: JSON.stringify({ selected }) });
               const result = await response.json();
               if (response.status === 401) { redirectToLogin(); return; }
               if (!response.ok) { message.textContent = result.message; return; }
@@ -1217,7 +1514,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
             resetWeek.disabled = true;
             message.textContent = '';
             try {
-              const response = await fetch('/api/admin/weeks/' + encodeURIComponent(monday) + '/votes', { method: 'DELETE', headers: { 'content-type': 'application/json', 'x-csrf-token': csrfToken }, body: JSON.stringify({ confirmation: true }) });
+              const response = await fetch(roomApiPath('/api/admin/weeks/' + encodeURIComponent(monday) + '/votes', '/admin/weeks/' + encodeURIComponent(monday) + '/votes'), { method: 'DELETE', headers: { 'content-type': 'application/json', 'x-csrf-token': csrfToken }, body: JSON.stringify({ confirmation: true }) });
               if (response.status === 401) { redirectToLogin(); return; }
               const result = response.status === 204 ? null : await response.json();
               if (!response.ok) { message.textContent = result.message; return; }
@@ -1234,11 +1531,12 @@ export function createApp({ databaseReady = false, database, env = process.env, 
             const sequence = ++weekLoadSequence;
             message.textContent = '';
             try {
-              const response = await fetch('/api/weeks/' + encodeURIComponent(monday), { cache: 'no-store' });
+              const response = await fetch(roomApiPath('/api/weeks/' + encodeURIComponent(monday), '/weeks/' + encodeURIComponent(monday)), { cache: 'no-store' });
               const state = await response.json();
               if (sequence !== weekLoadSequence) return false;
               if (response.status === 401) { redirectToLogin(); return false; }
               if (!response.ok) { message.textContent = state.message; return false; }
+              if (roomApiPrefix && state.roomId !== roomId) return false;
               renderWeek(state);
               return true;
             } catch {
@@ -1262,13 +1560,21 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           document.querySelector('#logout').addEventListener('click', async () => { const response = await fetch('/api/auth/logout', { method: 'POST', headers: { 'x-csrf-token': csrfToken } }); if (response.ok) location.href = '/'; });
           const socket = window.io({ transports: ['websocket'] });
           const socketRepair = createSocketRepairController({ loadWeek: () => loadWeek(weekMonday), patchDay });
-          socket.on('vote:changed', (patch) => { socketRepair.handlePatch(patch); timelineController.patch(patch); });
-          socket.on('event:changed', ({ date }) => {
+          socket.on('vote:changed', (patch) => { if (patch.roomId !== roomId) return; socketRepair.handlePatch(patch); timelineController.patch(patch); });
+          socket.on('event:changed', ({ roomId: changedRoomId, date }) => {
+            if (changedRoomId !== roomId) return;
             if (weekState?.days.some((day) => day.date === date)) void loadWeek(weekMonday);
             void loadTimeline();
           });
-          socket.on('week:reset', ({ monday }) => { if (monday === weekMonday) loadWeek(weekMonday); loadTimeline(); });
-          socket.on('connect', () => { void socketRepair.handleConnect(); void loadTimeline(); });
+          socket.on('week:reset', ({ roomId: changedRoomId, monday }) => { if (changedRoomId !== roomId) return; if (monday === weekMonday) loadWeek(weekMonday); loadTimeline(); });
+          socket.on('connect', () => {
+            const repair = () => { void socketRepair.handleConnect(); void loadTimeline(); };
+            if (!roomApiPrefix) { repair(); return; }
+            socket.emit('room:subscribe', { roomId }, (result) => {
+              if (!result?.ok || result.roomId !== roomId) { message.textContent = 'Room access changed. Re-enter the room.'; return; }
+              repair();
+            });
+          });
           socket.on('auth:revoked', redirectToLogin);
           socket.on('connect_error', (error) => { if (error.message === 'unauthenticated') redirectToLogin(); });
           window.addEventListener('pageshow', loadSession);

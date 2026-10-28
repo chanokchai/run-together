@@ -51,7 +51,7 @@ test('keeps the board one-row, accessible, safe, and read-only', () => {
   assert.match(appSource, /state\.days\.map/);
   assert.match(appSource, /import \{ applyVoteCardPresentation, colorForDay, configureVoterNamesMarquee, createScheduledEffectController, createSocketRepairController, createVoterNamesRegion as buildVoterNamesRegion, createVoteTimelineController, formatDisplayDate, patchVoteDay \} from '\/vote-board\.js\?v=issue-34-beam-3'/);
   assert.match(appSource, /aria-busy/);
-  assert.match(appSource, /fetch\('\/api\/votes\//);
+  assert.match(appSource, /fetch\(roomApiPath\('\/api\/votes\//);
   assert.equal(appSource.includes('.innerHTML'), false);
   assert.equal(appSource.includes('insertAdjacentHTML'), false);
 });
