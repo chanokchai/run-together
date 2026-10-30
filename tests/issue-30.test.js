@@ -8,6 +8,7 @@ import { io as connectSocket } from 'socket.io-client';
 import { createServer } from '../src/server.js';
 import { addDays } from '../src/calendar.js';
 import { addVote } from '../src/domain.js';
+import { LEGACY_ROOM_ID } from '../src/room-contract.js';
 
 const ENV = { ADMIN_NAME: 'Synthetic Coach', ADMIN_PIN: '4826', PIN_PEPPER: 'synthetic-pepper' };
 const SUNDAY_NOW = new Date('2026-10-11T16:59:59.000Z');
@@ -40,7 +41,7 @@ async function register(baseUrl, name) {
 }
 
 async function timeline(baseUrl, cookie) {
-  return fetch(`${baseUrl}/api/vote-timeline`, { headers: cookie ? { cookie } : {} });
+  return fetch(`${baseUrl}/api/rooms/${LEGACY_ROOM_ID}/vote-timeline`, { headers: cookie ? { cookie } : {} });
 }
 
 async function session(baseUrl, cookie) {
@@ -55,8 +56,19 @@ function waitForSocket(socket) {
   });
 }
 
+function subscribeToRoom(socket, roomId) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Timed out subscribing to room ${roomId}`)), 2000);
+    socket.emit('room:subscribe', { roomId }, (result) => {
+      clearTimeout(timer);
+      if (!result?.ok || result.roomId !== roomId) reject(new Error(`Could not subscribe to room ${roomId}`));
+      else resolve(result);
+    });
+  });
+}
+
 async function putVote(baseUrl, cookie, csrfToken, date, selected) {
-  return fetch(`${baseUrl}/api/votes/${date}`, {
+  return fetch(`${baseUrl}/api/rooms/${LEGACY_ROOM_ID}/votes/${date}`, {
     method: 'PUT',
     headers: { cookie, origin: baseUrl, 'content-type': 'application/json', 'x-csrf-token': csrfToken },
     body: JSON.stringify({ selected }),
@@ -104,7 +116,8 @@ test('vote timeline returns every inclusive eligible date and aggregate counts o
     assert.deepEqual(result.days.find(({ date }) => date === '2026-10-11'), { date: '2026-10-11', voteCount: 2 });
     assert.deepEqual(result.days.find(({ date }) => date === '2026-10-12'), { date: '2026-10-12', voteCount: 0 });
     assert.deepEqual(result.days.find(({ date }) => date === '2026-10-25'), { date: '2026-10-25', voteCount: 2 });
-    assert.deepEqual(Object.keys(result).sort(), ['days', 'endDate', 'scheduledDates', 'startDate']);
+    assert.deepEqual(Object.keys(result).sort(), ['days', 'endDate', 'roomId', 'scheduledDates', 'startDate'].sort());
+    assert.equal(result.roomId, LEGACY_ROOM_ID);
     assert.ok(result.days.every((day) => Object.keys(day).sort().join(',') === 'date,voteCount'));
     const serialized = JSON.stringify(result);
     assert.equal(users.some(({ name }) => serialized.includes(name)), false);
@@ -136,6 +149,7 @@ test('vote additions and removals publish updated eligible totals to two signed-
     const aliceSocket = connectSocket(baseUrl, { extraHeaders: { origin: baseUrl, cookie: aliceCookie } });
     const bobSocket = connectSocket(baseUrl, { extraHeaders: { origin: baseUrl, cookie: bobCookie } });
     await Promise.all([waitForSocket(aliceSocket), waitForSocket(bobSocket)]);
+    await Promise.all([subscribeToRoom(aliceSocket, LEGACY_ROOM_ID), subscribeToRoom(bobSocket, LEGACY_ROOM_ID)]);
     try {
       const aliceAdded = new Promise((resolve) => aliceSocket.once('vote:changed', resolve));
       const bobAdded = new Promise((resolve) => bobSocket.once('vote:changed', resolve));
@@ -176,9 +190,10 @@ test('week reset broadcasts and removes its counts from the full eligible-period
     const adminSession = await session(baseUrl, adminCookie);
     const memberSocket = connectSocket(baseUrl, { extraHeaders: { origin: baseUrl, cookie: memberCookie } });
     await waitForSocket(memberSocket);
+    await subscribeToRoom(memberSocket, LEGACY_ROOM_ID);
     try {
       const resetEvent = new Promise((resolve) => memberSocket.once('week:reset', resolve));
-      const reset = await fetch(`${baseUrl}/api/admin/weeks/2026-10-05/votes`, {
+      const reset = await fetch(`${baseUrl}/api/rooms/${LEGACY_ROOM_ID}/admin/weeks/2026-10-05/votes`, {
         method: 'DELETE',
         headers: { cookie: adminCookie, origin: baseUrl, 'content-type': 'application/json', 'x-csrf-token': adminSession.csrfToken },
         body: JSON.stringify({ confirmation: true }),

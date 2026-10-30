@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { createServer } from '../src/server.js';
 import { validateCredentials } from '../src/auth.js';
+import { LEGACY_ROOM_ID } from '../src/room-contract.js';
 
 const ENV = {
   ADMIN_NAME: 'Synthetic Coach',
@@ -112,7 +113,7 @@ test('registration immediately authenticates and session response is safe', asyn
     assert.equal('id' in session, false);
     assert.equal('tokenHash' in session, false);
     assert.equal('rawToken' in session, false);
-    const votePage = await fetch(`${baseUrl}/vote`, { headers: { cookie } });
+    const votePage = await fetch(`${baseUrl}/vote/${LEGACY_ROOM_ID}`, { headers: { cookie } });
     assert.equal(votePage.status, 200);
     assert.match(await votePage.text(), /Runner One/);
   });
@@ -124,7 +125,7 @@ test('protected HTML and session responses are not cacheable', async () => {
     const cookie = cookieFrom(registration);
 
     const sessionResponse = await fetch(`${baseUrl}/api/session`, { headers: { cookie } });
-    const votePage = await fetch(`${baseUrl}/vote`, { headers: { cookie } });
+    const votePage = await fetch(`${baseUrl}/vote/${LEGACY_ROOM_ID}`, { headers: { cookie } });
 
     assert.equal(sessionResponse.headers.get('cache-control'), 'no-store');
     assert.equal(votePage.headers.get('cache-control'), 'no-store');
@@ -134,7 +135,7 @@ test('protected HTML and session responses are not cacheable', async () => {
 test('protected page guards BFCache restoration with pageshow session revalidation', async () => {
   await withServer(async (baseUrl) => {
     const registration = await register(baseUrl, 'BFCache Runner', '0042');
-    const votePage = await fetch(`${baseUrl}/vote`, { headers: { cookie: cookieFrom(registration) } });
+    const votePage = await fetch(`${baseUrl}/vote/${LEGACY_ROOM_ID}`, { headers: { cookie: cookieFrom(registration) } });
     const body = await votePage.text();
 
     assert.match(body, /id="protected-content" hidden/);
