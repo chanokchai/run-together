@@ -387,7 +387,7 @@ test('event dates and retries remain isolated when two rooms reuse the same requ
   }
 });
 
-test('legacy vote reset rejects another room before replaying a legacy audit request', async () => {
+test('application-wide vote reset clears each room and returns room/date patches', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'run-together-issue-36-reset-scope-'));
   const database = openDatabase(join(directory, 'fixture.sqlite'));
   try {
@@ -406,17 +406,15 @@ test('legacy vote reset rejects another room before replaying a legacy audit req
     const legacyReset = resetUserVotes(database, {
       adminUserId: admin.id, targetUserId: runner.id, requestId,
     });
-    assert.equal(legacyReset.deletedVoteCount, 1);
+    assert.equal(legacyReset.deletedVoteCount, 2);
     assert.equal(legacyReset.replayed, false);
-
-    assert.throws(() => resetUserVotes(database, {
-      roomId: otherRoom.id,
-      adminUserId: admin.id,
-      targetUserId: runner.id,
-      requestId,
-    }), (error) => error.code === 'ROOM_SCOPE_UNSUPPORTED' && error.status === 400);
+    assert.deepEqual(legacyReset.affectedRoomDates, [
+      { roomId: LEGACY_ROOM_ID, date: '2026-10-28' },
+      { roomId: otherRoom.id, date: '2026-10-28' },
+    ].sort((left, right) => left.roomId.localeCompare(right.roomId)));
     assert.equal(database.prepare('SELECT COUNT(*) AS count FROM votes WHERE room_id = ? AND user_id = ?')
-      .get(otherRoom.id, runner.id).count, 1);
+      .get(otherRoom.id, runner.id).count, 0);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM votes WHERE user_id = ?').get(runner.id).count, 0);
     assert.equal(database.prepare('SELECT COUNT(*) AS count FROM admin_action_audit WHERE request_id = ?')
       .get(requestId).count, 1);
   } finally {

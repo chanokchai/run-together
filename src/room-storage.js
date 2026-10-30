@@ -5,6 +5,7 @@ import {
   ROOM_COLOR_PALETTE,
   ROOM_ICONS,
 } from './room-contract.js';
+import { getBangkokDate } from './calendar.js';
 
 function timestamp(now) {
   const value = now instanceof Date || typeof now === 'string' ? now : now();
@@ -93,6 +94,50 @@ export function createRoom(database, {
 export function getRoom(database, { roomId } = {}) {
   if (typeof roomId !== 'string' || roomId.length === 0) throw new TypeError('roomId is required');
   return roomFromRow(database.prepare('SELECT * FROM rooms WHERE id = ?').get(roomId));
+}
+
+function summarizeRoomEvents(database, roomId, today) {
+  const events = database.prepare(`
+    SELECT event_date AS date, status
+    FROM run_events
+    WHERE room_id = ? AND event_date >= ?
+    ORDER BY event_date ASC
+  `).all(roomId, today);
+  const scheduledDates = events.filter(({ status }) => status === 'scheduled').map(({ date }) => date);
+  const proposedDates = events.filter(({ status }) => status === 'proposed').map(({ date }) => date);
+  return {
+    roomId,
+    scheduledDates,
+    proposedDates,
+    earliestDate: events[0]?.date ?? null,
+    hasUpcomingEvents: events.length > 0,
+  };
+}
+
+export function getRoomSummary(database, { roomId, now = () => new Date() } = {}) {
+  if (typeof roomId !== 'string' || roomId.length === 0) throw new TypeError('roomId is required');
+  return summarizeRoomEvents(database, roomId, getBangkokDate(now));
+}
+
+export function listRooms(database, { now = () => new Date() } = {}) {
+  const today = getBangkokDate(now);
+  return database.prepare('SELECT * FROM rooms ORDER BY display_number, title, id').all()
+    .map((row) => ({ ...roomFromRow(row), summary: summarizeRoomEvents(database, row.id, today) }))
+    .sort((left, right) => (left.summary.earliestDate ?? '9999-12-31').localeCompare(right.summary.earliestDate ?? '9999-12-31')
+      || left.displayNumber - right.displayNumber
+      || left.title.localeCompare(right.title)
+      || left.id.localeCompare(right.id));
+}
+
+export function updateRoomMetadata(database, { roomId, title, icon } = {}) {
+  if (typeof roomId !== 'string' || roomId.length === 0) throw new TypeError('roomId is required');
+  if (title === undefined && icon === undefined) throw new TypeError('room title or icon is required');
+  const current = getRoom(database, { roomId });
+  if (!current) return null;
+  const roomTitle = title === undefined ? current.title : validateRoomTitle(title);
+  const roomIcon = icon === undefined ? current.icon : validateRoomIcon(icon);
+  database.prepare('UPDATE rooms SET title = ?, icon = ? WHERE id = ?').run(roomTitle, roomIcon, roomId);
+  return getRoom(database, { roomId });
 }
 
 export function addRoomMember(database, { roomId, userId, now = () => new Date() } = {}) {

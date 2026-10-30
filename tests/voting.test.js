@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { io as connectSocket } from 'socket.io-client';
 import { createServer } from '../src/server.js';
+import { LEGACY_ROOM_ID } from '../src/room-contract.js';
 
 const ENV = { ADMIN_NAME: 'Synthetic Coach', ADMIN_PIN: '4826', PIN_PEPPER: 'synthetic-pepper' };
 const NOW = new Date('2024-02-29T04:00:00.000Z');
@@ -114,8 +115,8 @@ test('Socket.IO authenticates session cookies and emits recipient-specific patch
       const alicePatch = new Promise((resolve) => aliceSocket.once('vote:changed', resolve));
       const response = await putVote(baseUrl, aliceCookie, aliceSession.csrfToken, '2024-03-01', { selected: true });
       assert.equal(response.status, 200);
-      assert.deepEqual(await bobPatch, { date: '2024-03-01', voteCount: 1, voterNames: ['Socket Alice'], selected: false });
-      assert.deepEqual(await alicePatch, { date: '2024-03-01', voteCount: 1, voterNames: ['Socket Alice'], selected: true });
+      assert.deepEqual(await bobPatch, { date: '2024-03-01', voteCount: 1, voterNames: ['Socket Alice'], selected: false, roomId: LEGACY_ROOM_ID });
+      assert.deepEqual(await alicePatch, { date: '2024-03-01', voteCount: 1, voterNames: ['Socket Alice'], selected: true, roomId: LEGACY_ROOM_ID });
       let repeatEvents = 0;
       bobSocket.on('vote:changed', () => { repeatEvents += 1; });
       const repeated = await putVote(baseUrl, aliceCookie, aliceSession.csrfToken, '2024-03-01', { selected: true });

@@ -184,7 +184,9 @@ test('week reset broadcasts and removes its counts from the full eligible-period
         body: JSON.stringify({ confirmation: true }),
       });
       assert.equal(reset.status, 204);
-      assert.deepEqual(await resetEvent, { monday: '2026-10-05', sunday: '2026-10-11' });
+      assert.deepEqual(await resetEvent, {
+        roomId: '00000000-0000-4000-8000-000000000036', monday: '2026-10-05', sunday: '2026-10-11',
+      });
       const response = await timeline(baseUrl, memberCookie);
       const totals = await response.json();
       assert.equal(totals.days.find(({ date }) => date === '2026-10-11').voteCount, 0);

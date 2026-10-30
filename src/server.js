@@ -30,17 +30,19 @@ export function createServer({
     databaseReady: true,
     env,
     now,
-    onVoteChanged: (date) => realtime?.broadcastVoteChanged(date),
-    onRunEventChanged: (date) => realtime?.broadcastRunEventChanged(date),
+    onVoteChanged: (...args) => realtime?.broadcastVoteChanged(...args),
+    onRunEventChanged: (...args) => realtime?.broadcastRunEventChanged(...args),
     onUserSessionsRevoked: (userId) => realtime?.disconnectUser(userId),
-    onUserDeleted: (userId, affectedDates) => {
+    onUserDeleted: (userId, affectedRoomDates, transferredRoomIds) => {
       realtime?.disconnectUser(userId);
-      affectedDates.forEach((date) => realtime?.broadcastVoteChanged(date));
+      affectedRoomDates.forEach(({ roomId, date }) => realtime?.broadcastVoteChanged(roomId, date));
+      transferredRoomIds.forEach((roomId) => realtime?.broadcastRoomSummary(roomId));
     },
-    onWeekReset: (monday, sunday) => realtime?.broadcastWeekReset(monday, sunday),
+    onWeekReset: (...args) => realtime?.broadcastWeekReset(...args),
+    onRoomSummaryChanged: (roomId) => realtime?.broadcastRoomSummary(roomId),
   });
   const server = createHttpServer(app);
-  realtime = attachRealtime(server, { auth: app.auth, database });
+  realtime = attachRealtime(server, { auth: app.auth, database, now });
   server.io = realtime.io;
   server.database = database;
   return server;

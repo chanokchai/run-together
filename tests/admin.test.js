@@ -314,7 +314,7 @@ test('admin can reset only the selected open week after explicit confirmation an
       assert.equal(server.database.prepare('SELECT COUNT(*) AS count FROM votes WHERE vote_date = ?').get('2024-03-04').count, 1);
       assert.equal(server.database.prepare('SELECT COUNT(*) AS count FROM votes WHERE vote_date = ?').get('2024-02-19').count, 1);
       await new Promise((resolve) => setTimeout(resolve, 100));
-      assert.deepEqual(resetEvents, [{ monday: '2024-02-26', sunday: '2024-03-03' }]);
+      assert.deepEqual(resetEvents, [{ roomId: '00000000-0000-4000-8000-000000000036', monday: '2024-02-26', sunday: '2024-03-03' }]);
     } finally {
       observerSocket.close();
     }

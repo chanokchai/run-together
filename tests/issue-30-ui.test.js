@@ -117,7 +117,7 @@ test('vote page places a semantic compact timeline under its title and refreshes
   assert.match(dayGridStyle, /width:\s*100%/);
   assert.match(dayStyle, /min-width:\s*0/);
   assert.match(dateStyle, /overflow:\s*hidden/);
-  assert.match(appSource, /fetch\('\/api\/vote-timeline',\s*\{ cache: 'no-store' \}\)/);
+  assert.match(appSource, /fetch\(roomApiPath\('\/api\/vote-timeline', '\/vote-timeline'\),\s*\{ cache: 'no-store' \}\)/);
   assert.match(appSource, /timelineController\.patch\(result\)/);
   assert.match(appSource, /socket\.on\('vote:changed',[\s\S]*?timelineController\.patch/);
   assert.match(appSource, /socket\.on\('week:reset',[\s\S]*?loadTimeline\(\)/);
