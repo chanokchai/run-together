@@ -66,7 +66,10 @@ test('Issue 38 login and authenticated landing require room selection before vot
 
     const roomList = await fetch(`${baseUrl}/rooms`, withCookie(member.cookie));
     assert.equal(roomList.status, 200);
-    assert.match(await roomList.text(), /id="rooms-content"/);
+    const roomListHtml = await roomList.text();
+    assert.match(roomListHtml, /id="rooms-content"/);
+    assert.match(roomListHtml, /\/room-list\.js\?v=issue-38-room-list-2/);
+    assert.doesNotMatch(roomListHtml, /\/room-list\.js\?v=issue-38-room-list-1/);
 
     const bareVote = await fetch(`${baseUrl}/vote`, withCookie(member.cookie));
     assert.equal(bareVote.status, 302);

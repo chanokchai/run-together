@@ -358,7 +358,7 @@ const roomListPage = () => page({
     <p id="rooms-empty" hidden>No rooms yet. Create a room to get started. / ยังไม่มีห้อง กรุณาสร้างห้องใหม่</p>
     <div id="room-cards" class="room-cards" role="list" aria-label="Rooms"></div>
   </section>`,
-  script: `import { startRoomListPage } from '/room-list.js?v=issue-38-room-list-1'; startRoomListPage();`,
+  script: `import { startRoomListPage } from '/room-list.js?v=issue-38-room-list-2'; startRoomListPage();`,
 });
 
 const changePinPage = (returnTo = '/rooms') => page({
