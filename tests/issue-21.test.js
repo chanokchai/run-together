@@ -99,6 +99,6 @@ test('Issue 21 gives administrators ordered blue reset and manage-user actions o
     assert.match(adminBody, /id="reset-week"[^>]+class="admin-action"/);
     assert.match(adminBody, /\.admin-action\s*\{\s*background:\s*#1769aa;/);
     assert.match(adminBody, /manageUser\??\.addEventListener\('click'/);
-    assert.match(adminBody, /location\.href = '\/admin'/);
+    assert.match(adminBody, /location\.href = document\.querySelector\('#manage-users-link'\)\?\.getAttribute\('href'\) \|\| '\/admin\?returnTo='/);
   });
 });

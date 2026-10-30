@@ -75,19 +75,22 @@ function selectedIcon(form) {
   return new FormData(form).get('icon') || DEFAULT_ROOM_ICON;
 }
 
-function dateLine(parent, className, label, values) {
+function dateLine(parent, className, label) {
   const line = document.createElement('p');
   line.className = className;
   addText(line, 'strong', `${label}: `);
-  line.append(document.createTextNode(formatDates(values)));
+  const dateValues = addText(line, 'span', 'None');
+  dateValues.className = 'room-card__date-values';
+  dateValues.tabIndex = 0;
+  dateValues.setAttribute('role', 'region');
   parent.append(line);
   return line;
 }
 
-function updateDateLine(line, label, values) {
-  line.replaceChildren();
-  addText(line, 'strong', `${label}: `);
-  line.append(document.createTextNode(formatDates(values)));
+function updateDateLine(line, label, values, room) {
+  const dateValues = line.querySelector('.room-card__date-values');
+  dateValues.textContent = formatDates(values);
+  dateValues.setAttribute('aria-label', `${label} dates for Room ${String(room.displayNumber).padStart(2, '0')}: ${room.title}`);
 }
 
 async function responseBody(response) {
@@ -155,16 +158,13 @@ export function startRoomListPage() {
     const title = addText(identity, 'span', '');
     title.className = 'room-card__title';
     entry.append(identity);
-    const scheduledLine = document.createElement('p');
-    scheduledLine.className = 'room-card__dates room-card__dates--scheduled';
-    const proposedLine = document.createElement('p');
-    proposedLine.className = 'room-card__dates room-card__dates--proposed';
-    entry.append(scheduledLine, proposedLine);
+    article.append(entry);
+    const scheduledLine = dateLine(article, 'room-card__dates room-card__dates--scheduled', 'Scheduled');
+    const proposedLine = dateLine(article, 'room-card__dates room-card__dates--proposed', 'Proposed');
     entry.addEventListener('click', (event) => {
       event.preventDefault();
       void enterRoom(room.id, entry);
     });
-    article.append(entry);
     const actions = document.createElement('div');
     actions.className = 'room-card__actions';
     const edit = addText(actions, 'button', 'Edit');
@@ -187,8 +187,8 @@ export function startRoomListPage() {
     node.iconLabel.textContent = `${icon.label} icon`;
     node.title.textContent = room.title;
     node.entry.setAttribute('aria-label', `Enter ${node.number.textContent}: ${room.title}`);
-    updateDateLine(node.scheduledLine, 'Scheduled', room.summary?.scheduledDates);
-    updateDateLine(node.proposedLine, 'Proposed', room.summary?.proposedDates);
+    updateDateLine(node.scheduledLine, 'Scheduled', room.summary?.scheduledDates, room);
+    updateDateLine(node.proposedLine, 'Proposed', room.summary?.proposedDates, room);
     node.edit.hidden = !room.canEdit;
     node.edit.setAttribute('aria-label', `Edit ${room.title}`);
   }

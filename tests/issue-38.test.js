@@ -129,6 +129,14 @@ test('Issue 38 return navigation only accepts local room contexts', async () => 
     });
     assert.equal(adminPage.status, 200);
     assert.match(await adminPage.text(), new RegExp(`href="${safeReturn}" class="button"`));
+
+    const escapedAdminReturn = await fetch(`${baseUrl}/admin?returnTo=${encodeURIComponent('https://evil.example/path')}`, {
+      headers: { cookie: admin.cookie },
+    });
+    assert.equal(escapedAdminReturn.status, 200);
+    const escapedAdminHtml = await escapedAdminReturn.text();
+    assert.match(escapedAdminHtml, /id="admin-return"[^>]+href="\/rooms"/);
+    assert.doesNotMatch(escapedAdminHtml, /evil\.example/);
   });
 });
 

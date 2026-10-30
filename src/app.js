@@ -76,6 +76,7 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       button { cursor: pointer; background: #1769aa; color: white; border: 0; border-radius: .45rem; font-weight: 700; }
       a { color: #145da0; }
       a.button { display: block; box-sizing: border-box; width: 100%; min-height: 44px; padding: .55rem .7rem; border-radius: .45rem; background: #1769aa; color: white; font-weight: 700; text-align: center; text-decoration: none; }
+      a.button[hidden] { display: none; }
       a.button:focus-visible { outline: 3px solid #f5c542; outline-offset: 2px; }
       .message { min-height: 1.5rem; margin-top: 1rem; }
       .rooms-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem 1rem; }
@@ -83,17 +84,19 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       .rooms-toolbar__account { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .8rem; margin: .4rem 0 0; }
       .rooms-toolbar__account button, .rooms-toolbar__account .button { width: auto; min-width: 44px; margin: 0; }
       .room-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 12rem), 1fr)); align-items: start; gap: 1rem; margin: 1rem 0 0; padding: 0; list-style: none; }
-      .room-card { position: relative; isolation: isolate; aspect-ratio: 1; min-width: 0; overflow: hidden; border: 5px solid #dbeafe; border-radius: 1rem; background: var(--room-color); color: #fff; box-shadow: 0 .25rem .9rem #14213d30; }
+      .room-card { position: relative; display: grid; grid-template-rows: 1.55rem minmax(3.2rem, 1.2fr) minmax(2.6rem, .9fr) minmax(2.6rem, .9fr); gap: .25rem; padding: .35rem .45rem; box-sizing: border-box; isolation: isolate; aspect-ratio: 1; min-width: 0; overflow: hidden; border: 5px solid #dbeafe; border-radius: 1rem; background: var(--room-color); color: #fff; box-shadow: 0 .25rem .9rem #14213d30; }
       .room-card.is-scheduled { border-color: #15803d; box-shadow: inset 0 0 0 1px #dcfce7, 0 .25rem .9rem #14213d30; }
-      .room-card__entry { display: flex; box-sizing: border-box; width: 100%; height: 100%; min-width: 0; flex-direction: column; align-items: stretch; justify-content: space-between; gap: .35rem; padding: 2.9rem .8rem .7rem; color: #fff; text-align: center; text-decoration: none; }
+      .room-card__entry { display: grid; grid-row: 1 / span 2; grid-template-rows: 1.45rem minmax(0, 1fr); gap: .15rem; min-width: 0; min-height: 0; color: #fff; text-align: center; text-decoration: none; }
       .room-card__entry:focus-visible { outline: 4px solid #f5c542; outline-offset: -7px; border-radius: .65rem; }
-      .room-card__number { align-self: center; padding: .1rem .45rem; border-radius: 1rem; background: #14213d44; font-size: .8rem; font-weight: 800; font-variant-numeric: tabular-nums; }
-      .room-card__identity { display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; align-items: center; justify-content: center; gap: .25rem; }
-      .room-card__icon { font-size: clamp(2rem, 7vw, 3.2rem); line-height: 1; }
-      .room-card__title { max-width: 100%; font-size: clamp(1rem, 3vw, 1.45rem); font-weight: 800; line-height: 1.15; overflow-wrap: anywhere; }
-      .room-card__dates { min-width: 0; margin: 0; font-size: clamp(.73rem, 2vw, .88rem); line-height: 1.25; overflow-wrap: anywhere; }
+      .room-card__number { align-self: center; justify-self: start; padding: .1rem .45rem; border-radius: 1rem; background: #14213d44; font-size: .8rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+      .room-card__identity { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; justify-content: center; gap: .35rem; min-width: 0; min-height: 0; }
+      .room-card__icon { font-size: clamp(1.3rem, 4.5vw, 1.8rem); line-height: 1; }
+      .room-card__title { min-width: 0; max-width: 100%; font-size: clamp(.8rem, 1.8vw, .9rem); font-weight: 800; line-height: 1; overflow-wrap: anywhere; }
+      .room-card__dates { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: stretch; gap: .25rem; min-width: 0; min-height: 0; margin: 0; padding: .15rem .25rem; border-radius: .35rem; font-size: clamp(.64rem, 1.5vw, .78rem); line-height: 1.2; overflow: hidden; }
+      .room-card__dates strong { align-self: start; white-space: nowrap; }
+      .room-card__date-values { display: block; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; overflow-wrap: anywhere; overscroll-behavior: contain; scrollbar-width: thin; touch-action: pan-y; }
       .room-card__dates--scheduled { font-weight: 600; }
-      .room-card__dates--proposed { padding: .2rem .35rem; border-radius: .35rem; background: #14213d35; font-size: clamp(.8rem, 2.2vw, .98rem); font-weight: 800; }
+      .room-card__dates--proposed { background: #14213d35; font-size: clamp(.68rem, 1.7vw, .84rem); font-weight: 800; }
       .room-card__actions { position: absolute; z-index: 2; top: .35rem; right: .35rem; display: flex; justify-content: flex-end; }
       .room-card__edit { display: inline-flex; width: auto; min-width: 44px; min-height: 44px; align-items: center; justify-content: center; margin: 0; padding: .4rem .65rem; border: 2px solid #14213d; background: #fff; color: #14213d; }
       .room-card__edit[hidden] { display: none; }
@@ -146,6 +149,7 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       :is(.vote-timeline__date.is-scheduled, .vote-timeline__bar.is-scheduled, .vote-card.is-scheduled, .room-card.is-scheduled, .run-event-banner--scheduled).is-beam-running { position: relative; isolation: isolate; }
       :is(.vote-timeline__date.is-scheduled, .vote-timeline__bar.is-scheduled, .vote-card.is-scheduled, .room-card.is-scheduled, .run-event-banner--scheduled).is-beam-running::before { content: ""; position: absolute; z-index: 0; inset: 0; box-sizing: border-box; padding: var(--border-width); border-radius: inherit; background: conic-gradient(from var(--beam-angle), transparent 0 25%, var(--beam-color) 38%, #f0fdf4 var(--beam-length), var(--beam-color) 62%, transparent 75% 100%); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; filter: drop-shadow(0 0 var(--glow-blur) var(--beam-color)); clip-path: inset(0); pointer-events: none; animation: scheduled-border-beam var(--beam-speed) linear infinite; animation-delay: var(--beam-delay, 0ms); }
       :is(.vote-timeline__date, .vote-timeline__bar, .vote-card, .room-card, .run-event-banner).is-beam-running > * { position: relative; z-index: 1; }
+      .room-card.is-beam-running > .room-card__actions { position: absolute; z-index: 2; }
       @keyframes scheduled-border-beam { to { --beam-angle: 360deg; } }
       .vote-timeline__month { font-size: .42rem; line-height: 8px; }
       .vote-day { display: flex; min-width: 0; }
@@ -1168,6 +1172,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           let csrfToken = '';
           let sessionCheck = 0;
           let weekLoadSequence = 0;
+          let roomMetadataSequence = 0;
           let weekState = null;
           let eventsByDate = new Map();
           let rolloverTimer = null;
@@ -1196,9 +1201,22 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           const message = document.querySelector('#message');
           const runEvents = document.querySelector('#run-events');
           function roomApiPath(_legacyPath, scopedPath) { return roomApiPrefix + scopedPath; }
-          function guardProtectedContent() { weekLoadSequence += 1; window.clearTimeout(rolloverTimer); protectedContent.hidden = true; csrfToken = ''; displayName.textContent = ''; weekDays.replaceChildren(); runEvents.replaceChildren(); timelineDays.replaceChildren(); scheduledEffects.sync('banner', []); scheduledEffects.sync('date-card', []); scheduledEffects.sync('timeline', []); runEventHandlers.forEach(({ abort, disposeSwipe }) => { abort.abort(); disposeSwipe?.(); }); runEventHandlers.clear(); runEventElements.clear(); weekState = null; eventsByDate = new Map(); message.textContent = ''; }
+          function guardProtectedContent() { weekLoadSequence += 1; roomMetadataSequence += 1; window.clearTimeout(rolloverTimer); protectedContent.hidden = true; csrfToken = ''; displayName.textContent = ''; weekDays.replaceChildren(); runEvents.replaceChildren(); timelineDays.replaceChildren(); scheduledEffects.sync('banner', []); scheduledEffects.sync('date-card', []); scheduledEffects.sync('timeline', []); runEventHandlers.forEach(({ abort, disposeSwipe }) => { abort.abort(); disposeSwipe?.(); }); runEventHandlers.clear(); runEventElements.clear(); weekState = null; eventsByDate = new Map(); message.textContent = ''; }
           function redirectToLogin() { guardProtectedContent(); location.replace('/'); }
           function addText(parent, tag, text) { const element = document.createElement(tag); element.textContent = text; parent.append(element); return element; }
+          function applyRoomMetadata(room) { if (room?.id !== roomId || typeof room.title !== 'string') return; roomMetadataSequence += 1; roomHeading.textContent = room.title; }
+          async function refreshRoomMetadata() {
+            const sequence = ++roomMetadataSequence;
+            try {
+              const response = await fetch('/api/rooms/' + encodeURIComponent(roomId), { cache: 'no-store' });
+              const result = await response.json();
+              if (sequence !== roomMetadataSequence) return false;
+              if (response.status === 401) { redirectToLogin(); return false; }
+              if (!response.ok || result.room?.id !== roomId || typeof result.room.title !== 'string') return false;
+              roomHeading.textContent = result.room.title;
+              return true;
+            } catch { return false; }
+          }
           const timelineItemsByDate = new Map();
           const timelineController = createVoteTimelineController({
             render(rows) {
@@ -1302,6 +1320,15 @@ export function createApp({ databaseReady = false, database, env = process.env, 
             button.disabled = pendingEventDates.has(day.date);
             button.addEventListener('click', () => void submitRunEventAction(day.date, action, event));
             row.append(button);
+          }
+          function captureDayEventActionFocus(element) {
+            const button = element?.closest?.('.run-event-day-action');
+            return button ? button.dataset.date : null;
+          }
+          function restoreDayEventActionFocus(date) {
+            if (!date) return;
+            const button = weekDays.querySelector('.run-event-day-action[data-date="' + date + '"]');
+            if (button && !button.disabled) button.focus({ preventScroll: true });
           }
           function captureRunEventActionFocus(element) {
             const banner = element?.closest?.('.run-event-banner');
@@ -1473,6 +1500,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
             }
           }
           function renderWeek(state) {
+            const dayActionFocus = captureDayEventActionFocus(document.activeElement);
             weekState = state;
             eventsByDate = new Map(state.events.map((event) => [event.date, event]));
             renderRunEvents(state.events);
@@ -1560,6 +1588,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
               return row;
             });
             weekDays.replaceChildren(...rows);
+            restoreDayEventActionFocus(dayActionFocus);
             scheduledEffects.sync('date-card', scheduledCards);
             configureVoterNamesMarquee(weekDays);
           }
@@ -1646,12 +1675,12 @@ export function createApp({ databaseReady = false, database, env = process.env, 
               scheduleBangkokDayRefresh();
             }, millisecondsUntilBangkokMidnight());
           }
-          async function loadSession() { const currentCheck = ++sessionCheck; guardProtectedContent(); try { const response = await fetch('/api/session', { cache: 'no-store' }); if (currentCheck !== sessionCheck) return; if (!response.ok) { redirectToLogin(); return; } const session = await response.json(); if (currentCheck !== sessionCheck) return; csrfToken = session.csrfToken; isAdmin = session.role === 'admin'; displayName.textContent = session.displayName; protectedContent.hidden = false; await Promise.all([loadWeek(weekMonday), loadTimeline()]); scheduleBangkokDayRefresh(); } catch { if (currentCheck === sessionCheck) redirectToLogin(); } }
+          async function loadSession() { const currentCheck = ++sessionCheck; guardProtectedContent(); try { const response = await fetch('/api/session', { cache: 'no-store' }); if (currentCheck !== sessionCheck) return; if (!response.ok) { redirectToLogin(); return; } const session = await response.json(); if (currentCheck !== sessionCheck) return; csrfToken = session.csrfToken; isAdmin = session.role === 'admin'; displayName.textContent = session.displayName; protectedContent.hidden = false; await Promise.all([loadWeek(weekMonday), loadTimeline(), refreshRoomMetadata()]); scheduleBangkokDayRefresh(); } catch { if (currentCheck === sessionCheck) redirectToLogin(); } }
           previousWeek.addEventListener('click', () => loadWeek(previousWeek.dataset.monday));
           currentWeekButton.addEventListener('click', () => loadWeek(currentWeekMonday));
           nextWeek.addEventListener('click', () => { if (!nextWeek.disabled) loadWeek(nextWeek.dataset.monday); });
           resetWeek?.addEventListener('click', resetSelectedWeek);
-          manageUser?.addEventListener('click', () => { location.href = '/admin'; });
+          manageUser?.addEventListener('click', () => { location.href = document.querySelector('#manage-users-link')?.getAttribute('href') || '/admin?returnTo=' + encodeURIComponent('/vote/' + roomId); });
           document.querySelector('#logout').addEventListener('click', async () => { const response = await fetch('/api/auth/logout', { method: 'POST', headers: { 'x-csrf-token': csrfToken } }); if (response.ok) location.href = '/'; });
           const socket = window.io({ transports: ['websocket'] });
           const socketRepair = createSocketRepairController({ loadWeek: () => loadWeek(weekMonday), patchDay });
@@ -1661,12 +1690,11 @@ export function createApp({ databaseReady = false, database, env = process.env, 
             if (weekState?.days.some((day) => day.date === date)) void loadWeek(weekMonday);
             void loadTimeline();
           });
-          socket.on('rooms:summary-changed', ({ room }) => {
-            if (room?.id === roomId && typeof room.title === 'string') roomHeading.textContent = room.title;
-          });
+          socket.on('rooms:summary-state', ({ rooms }) => { if (Array.isArray(rooms)) applyRoomMetadata(rooms.find((room) => room?.id === roomId)); });
+          socket.on('rooms:summary-changed', ({ room }) => { applyRoomMetadata(room); });
           socket.on('week:reset', ({ roomId: changedRoomId, monday }) => { if (changedRoomId !== roomId) return; if (monday === weekMonday) loadWeek(weekMonday); loadTimeline(); });
           socket.on('connect', () => {
-            const repair = () => { void socketRepair.handleConnect(); void loadTimeline(); };
+            const repair = () => { void socketRepair.handleConnect(); void loadTimeline(); void refreshRoomMetadata(); };
             socket.emit('room:subscribe', { roomId }, (result) => {
               if (!result?.ok || result.roomId !== roomId) { message.textContent = 'Room access changed. Re-enter the room.'; return; }
               repair();
