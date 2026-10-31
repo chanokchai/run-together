@@ -93,6 +93,7 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       .room-page-header a.button svg { width: 1.35rem; height: 1.35rem; }
       .room-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 13rem), 1fr)); align-items: start; gap: 1rem; margin: 1rem 0 0; padding: 0; list-style: none; }
       .room-card { --room-title-size: clamp(.92rem, 2.07vw, 1.035rem); position: relative; display: grid; grid-template-columns: minmax(0, 1fr) minmax(3rem, max-content); grid-template-areas: "entry summary" "scheduled scheduled" "proposed proposed"; align-content: start; gap: .45rem .35rem; box-sizing: border-box; isolation: isolate; min-width: 0; min-height: 180px; padding: .65rem; border: 5px solid var(--room-color); border-radius: 1rem; background: transparent; color: #14213d; box-shadow: 0 .25rem .9rem #14213d30; }
+      .room-card[hidden] { display: none; }
       .room-card.is-scheduled { border-width: 5.5px; box-shadow: inset 0 0 0 1px #dcfce7, 0 .25rem .9rem #14213d30; --border-width: 5.5px; }
       .room-card__entry { grid-area: entry; display: flex; min-width: 0; min-height: 0; flex-direction: column; align-items: flex-start; gap: .12rem; color: #14213d; text-align: left; text-decoration: none; }
       .room-card__entry:focus-visible { outline: 4px solid #145da0; outline-offset: 2px; border-radius: .35rem; }

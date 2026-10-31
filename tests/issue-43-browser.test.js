@@ -260,6 +260,7 @@ test('Issue 43 room filters, metadata, icon menus, responsive cards, and board r
   const visibleIds = async () => evaluate(client, `[...document.querySelectorAll('.room-card')].filter((card) => !card.hidden).map((card) => card.dataset.roomId)`);
   await click(client, '#filter-scheduled');
   assert.deepEqual(new Set(await visibleIds()), new Set([mixed.id, scheduled.id]));
+  assert.equal(await evaluate(client, `[...document.querySelectorAll('.room-card[hidden]')].every((card) => getComputedStyle(card).display === 'none' && card.getBoundingClientRect().width === 0)`), true, 'filtered cards are not rendered or visible');
   await click(client, '#filter-proposed');
   assert.deepEqual(new Set(await visibleIds()), new Set([mixed.id, scheduled.id, proposed.id]));
   await click(client, '#filter-scheduled');
