@@ -8,6 +8,7 @@ import test from 'node:test';
 import { io as connectSocket } from 'socket.io-client';
 import { createServer } from '../src/server.js';
 import { addVote } from '../src/domain.js';
+import { LEGACY_ROOM_ID } from '../src/room-contract.js';
 
 const appSource = readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
 
@@ -72,6 +73,17 @@ function waitForSocket(socket, event = 'connect') {
   });
 }
 
+function subscribeRoom(socket, roomId) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Timed out subscribing to room ${roomId}`)), 2000);
+    socket.emit('room:subscribe', { roomId }, (result) => {
+      clearTimeout(timer);
+      if (!result?.ok || result.roomId !== roomId) reject(new Error(`Could not subscribe to room ${roomId}`));
+      else resolve(result);
+    });
+  });
+}
+
 test('admin page and APIs require an admin session and expose only safe user fields', async () => {
   await withServer(async (baseUrl) => {
     const member = await register(baseUrl, 'Normal Member');
@@ -90,7 +102,7 @@ test('admin page and APIs require an admin session and expose only safe user fie
     assert.match(pageBody, /ผู้ดูแลระบบ \/ Admin/);
     assert.match(pageBody, /Yes, reset votes/);
     assert.match(pageBody, /Yes, delete user/);
-    assert.match(pageBody, /<h1>ผู้ดูแลระบบ \/ Admin<\/h1>\s*<p>จัดการผู้ใช้ \/ Manage users<\/p>\s*<a href="\/vote" class="button">กลับไปหน้าโหวต \/ Back to vote<\/a>\s*<p id="admin-message"/s);
+    assert.match(pageBody, /<h1>ผู้ดูแลระบบ \/ Admin<\/h1>\s*<p>จัดการผู้ใช้ \/ Manage users<\/p>\s*<a id="admin-return" href="\/rooms" class="button">กลับไปหน้าโหวต \/ Back to room<\/a>\s*<p id="admin-message"/s);
 
     const users = await fetch(`${baseUrl}/api/admin/users`, { headers: { cookie: admin.cookie } });
     assert.equal(users.status, 200);
@@ -137,8 +149,8 @@ test('Issue #22 back-to-vote action is admin-only, keyboard-visible, non-mutatin
     const page = await fetch(`${baseUrl}/admin`, { headers: { cookie: admin.cookie } });
     assert.equal(page.status, 200);
     const pageBody = await page.text();
-    assert.match(pageBody, /<a href="\/vote" class="button">กลับไปหน้าโหวต \/ Back to vote<\/a>/);
-    const votePage = await fetch(`${baseUrl}/vote`, { headers: { cookie: admin.cookie } });
+    assert.match(pageBody, /<a id="admin-return" href="\/rooms" class="button">กลับไปหน้าโหวต \/ Back to room<\/a>/);
+    const votePage = await fetch(`${baseUrl}/vote/${LEGACY_ROOM_ID}`, { headers: { cookie: admin.cookie } });
     assert.equal(votePage.status, 200);
     assert.deepEqual(
       server.database.prepare('SELECT id, user_id, vote_date, created_at FROM votes ORDER BY id').all(),
@@ -202,6 +214,7 @@ test('confirmed normal-user deletion atomically removes votes and sessions, broa
     const targetSocket = connectSocket(baseUrl, { extraHeaders: { origin: baseUrl, cookie: targetCookie } });
     const observerSocket = connectSocket(baseUrl, { extraHeaders: { origin: baseUrl, cookie: observerCookie } });
     await Promise.all([waitForSocket(targetSocket), waitForSocket(observerSocket)]);
+    await subscribeRoom(observerSocket, LEGACY_ROOM_ID);
     try {
       const revoked = waitForSocket(targetSocket, 'disconnect').catch(() => []);
       const patches = [];
@@ -254,13 +267,13 @@ test('admin can reset only the selected open week after explicit confirmation an
     const memberCookie = cookieFrom(member);
     const memberSession = await sessionFor(baseUrl, memberCookie);
     const admin = await adminSession(baseUrl);
-    const adminPage = await fetch(`${baseUrl}/vote`, { headers: { cookie: admin.cookie } });
+    const adminPage = await fetch(`${baseUrl}/vote/${LEGACY_ROOM_ID}`, { headers: { cookie: admin.cookie } });
     assert.equal(adminPage.status, 200);
     const adminPageBody = await adminPage.text();
     assert.match(adminPageBody, /id="reset-week"/);
     assert.match(adminPageBody, /ISO week .*through .*This deletes all seven days and cannot be undone/);
     assert.match(adminPageBody, /state\.week\.resetEligible/);
-    const memberPage = await fetch(`${baseUrl}/vote`, { headers: { cookie: memberCookie } });
+    const memberPage = await fetch(`${baseUrl}/vote/${LEGACY_ROOM_ID}`, { headers: { cookie: memberCookie } });
     assert.equal(memberPage.status, 200);
     assert.doesNotMatch(await memberPage.text(), /id="reset-week"/);
 
@@ -271,6 +284,7 @@ test('admin can reset only the selected open week after explicit confirmation an
 
     const observerSocket = connectSocket(baseUrl, { extraHeaders: { origin: baseUrl, cookie: memberCookie } });
     await waitForSocket(observerSocket);
+    await subscribeRoom(observerSocket, LEGACY_ROOM_ID);
     try {
       const resetEvents = [];
       observerSocket.on('week:reset', (event) => resetEvents.push(event));
@@ -335,6 +349,7 @@ test('week reset rolls back every deletion and emits no realtime event when the 
     `);
     const socket = connectSocket(baseUrl, { extraHeaders: { origin: baseUrl, cookie: memberCookie } });
     await waitForSocket(socket);
+    await subscribeRoom(socket, LEGACY_ROOM_ID);
     try {
       let eventSeen = false;
       socket.on('week:reset', () => { eventSeen = true; });

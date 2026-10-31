@@ -31,6 +31,8 @@ import {
 const voteBoardScript = readFileSync(new URL('./vote-board.js', import.meta.url), 'utf8');
 const dateTimeScript = readFileSync(new URL('./date-time.js', import.meta.url), 'utf8');
 const runEventsScript = readFileSync(new URL('./run-events.js', import.meta.url), 'utf8');
+const roomContractScript = readFileSync(new URL('./room-contract.js', import.meta.url), 'utf8');
+const roomListScript = readFileSync(new URL('./room-list.js', import.meta.url), 'utf8');
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (character) => ({
@@ -40,6 +42,17 @@ function escapeHtml(value) {
     '"': '&quot;',
     "'": '&#39;',
   })[character]);
+}
+
+function safeRoomReturn(value, session, database) {
+  if (value === '/rooms') return '/rooms';
+  if (typeof value !== 'string') return '/rooms';
+  const match = /^\/vote\/(00000000-0000-4000-8000-[0-9a-f]{12}|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/.exec(value);
+  if (!match) return '/rooms';
+  const room = getRoom(database, { roomId: match[1] });
+  return room && hasRoomMember(database, { roomId: room.id, userId: session.user_id })
+    ? `/vote/${room.id}`
+    : '/rooms';
 }
 
 function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
@@ -55,6 +68,7 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       body { margin: 0; background: #f3f6fa; color: #14213d; }
       main { max-width: 34rem; margin: 0 auto; padding: 2rem 1rem; }
       .vote-page-main { max-width: 90rem; padding-inline: clamp(1rem, 4vw, 3rem); }
+      .rooms-page-main { max-width: 84rem; padding-inline: clamp(1rem, 4vw, 3rem); }
       section { background: white; border-radius: 1rem; padding: 1.5rem; box-shadow: 0 0.25rem 1rem #14213d18; }
       .vote-page-main > section { padding: clamp(1rem, 3vw, 2rem); }
       label { display: block; margin-top: 1rem; font-weight: 600; }
@@ -62,8 +76,39 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       button { cursor: pointer; background: #1769aa; color: white; border: 0; border-radius: .45rem; font-weight: 700; }
       a { color: #145da0; }
       a.button { display: block; box-sizing: border-box; width: 100%; min-height: 44px; padding: .55rem .7rem; border-radius: .45rem; background: #1769aa; color: white; font-weight: 700; text-align: center; text-decoration: none; }
+      a.button[hidden] { display: none; }
       a.button:focus-visible { outline: 3px solid #f5c542; outline-offset: 2px; }
       .message { min-height: 1.5rem; margin-top: 1rem; }
+      .rooms-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem 1rem; }
+      .rooms-toolbar h1 { margin: 0; }
+      .rooms-toolbar__account { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .8rem; margin: .4rem 0 0; }
+      .rooms-toolbar__account button, .rooms-toolbar__account .button { width: auto; min-width: 44px; margin: 0; }
+      .room-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 12rem), 1fr)); align-items: start; gap: 1rem; margin: 1rem 0 0; padding: 0; list-style: none; }
+      .room-card { position: relative; display: grid; grid-template-rows: 1.55rem minmax(3.2rem, 1.2fr) minmax(2.6rem, .9fr) minmax(2.6rem, .9fr); gap: .25rem; padding: .35rem .45rem; box-sizing: border-box; isolation: isolate; aspect-ratio: 1; min-width: 0; overflow: hidden; border: 5px solid #dbeafe; border-radius: 1rem; background: var(--room-color); color: #fff; box-shadow: 0 .25rem .9rem #14213d30; }
+      .room-card.is-scheduled { border-color: #15803d; box-shadow: inset 0 0 0 1px #dcfce7, 0 .25rem .9rem #14213d30; }
+      .room-card__entry { display: grid; grid-row: 1 / span 2; grid-template-rows: 1.45rem minmax(0, 1fr); gap: .15rem; min-width: 0; min-height: 0; color: #fff; text-align: center; text-decoration: none; }
+      .room-card__entry:focus-visible { outline: 4px solid #f5c542; outline-offset: -7px; border-radius: .65rem; }
+      .room-card__number { align-self: center; justify-self: start; padding: .1rem .45rem; border-radius: 1rem; background: #14213d44; font-size: .8rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+      .room-card__identity { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; justify-content: center; gap: .35rem; min-width: 0; min-height: 0; }
+      .room-card__icon { font-size: clamp(1.3rem, 4.5vw, 1.8rem); line-height: 1; }
+      .room-card__title { min-width: 0; max-width: 100%; font-size: clamp(.8rem, 1.8vw, .9rem); font-weight: 800; line-height: 1; overflow-wrap: anywhere; }
+      .room-card__dates { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: stretch; gap: .25rem; min-width: 0; min-height: 0; margin: 0; padding: .15rem .25rem; border-radius: .35rem; font-size: clamp(.64rem, 1.5vw, .78rem); line-height: 1.2; overflow: hidden; }
+      .room-card__dates strong { align-self: start; white-space: nowrap; }
+      .room-card__date-values { display: block; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; overflow-wrap: anywhere; overscroll-behavior: contain; scrollbar-width: thin; touch-action: pan-y; }
+      .room-card__dates--scheduled { font-weight: 600; }
+      .room-card__dates--proposed { background: #14213d35; font-size: clamp(.68rem, 1.7vw, .84rem); font-weight: 800; }
+      .room-card__actions { position: absolute; z-index: 2; top: .35rem; right: .35rem; display: flex; justify-content: flex-end; }
+      .room-card__edit { display: inline-flex; width: auto; min-width: 44px; min-height: 44px; align-items: center; justify-content: center; margin: 0; padding: .4rem .65rem; border: 2px solid #14213d; background: #fff; color: #14213d; }
+      .room-card__edit[hidden] { display: none; }
+      .room-card__edit:focus-visible, .room-icon-picker input:focus-visible { outline: 3px solid #f5c542; outline-offset: 2px; }
+      .room-icon-picker { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 8rem), 1fr)); gap: .35rem .6rem; margin: .75rem 0; padding: .65rem; border: 1px solid #94a3b8; border-radius: .5rem; }
+      .room-icon-picker label { display: flex; min-height: 44px; align-items: center; gap: .4rem; margin: 0; overflow-wrap: anywhere; }
+      .room-icon-picker input { width: 1.25rem; min-width: 1.25rem; min-height: 1.25rem; margin: 0; padding: 0; }
+      .room-edit-dialog { width: min(32rem, calc(100vw - 2rem)); }
+      .room-edit-dialog input[name="title"] { width: 100%; }
+      .room-edit-dialog .dialog-actions { grid-template-columns: 1fr 1fr; }
+      .room-edit-dialog .dialog-actions button { margin: 0; }
+      .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
       .actions { display: grid; gap: .75rem; margin-top: 1rem; }
       .admin-action { background: #1769aa; }
       .admin-user { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #d9e2ec; }
@@ -100,10 +145,11 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       .vote-timeline__date { display: flex; flex-direction: column; align-items: center; min-width: 0; width: 100%; box-sizing: border-box; overflow: hidden; color: #14213d; font-size: clamp(.54rem, 2.75vw, .62rem); line-height: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
       .vote-timeline__count.is-zero { visibility: hidden; }
       .vote-timeline__date.is-scheduled { position: relative; border-radius: .25rem; outline: 1px solid #15803d; background: #dcfce7; color: #14532d; font-weight: 700; }
-      :is(.vote-timeline__date.is-scheduled, .vote-timeline__bar.is-scheduled, .vote-card.is-scheduled, .run-event-banner--scheduled) { --beam-speed: 1.4s; --beam-length: 50%; --border-width: 5px; --glow-blur: 24px; --beam-color: #22c55e; }
-      :is(.vote-timeline__date.is-scheduled, .vote-timeline__bar.is-scheduled, .vote-card.is-scheduled, .run-event-banner--scheduled).is-beam-running { position: relative; isolation: isolate; }
-      :is(.vote-timeline__date.is-scheduled, .vote-timeline__bar.is-scheduled, .vote-card.is-scheduled, .run-event-banner--scheduled).is-beam-running::before { content: ""; position: absolute; z-index: 0; inset: 0; box-sizing: border-box; padding: var(--border-width); border-radius: inherit; background: conic-gradient(from var(--beam-angle), transparent 0 25%, var(--beam-color) 38%, #f0fdf4 var(--beam-length), var(--beam-color) 62%, transparent 75% 100%); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; filter: drop-shadow(0 0 var(--glow-blur) var(--beam-color)); clip-path: inset(0); pointer-events: none; animation: scheduled-border-beam var(--beam-speed) linear infinite; animation-delay: var(--beam-delay, 0ms); }
-      :is(.vote-timeline__date, .vote-timeline__bar, .vote-card, .run-event-banner).is-beam-running > * { position: relative; z-index: 1; }
+      :is(.vote-timeline__date.is-scheduled, .vote-timeline__bar.is-scheduled, .vote-card.is-scheduled, .room-card.is-scheduled, .run-event-banner--scheduled) { --beam-speed: 1.4s; --beam-length: 50%; --border-width: 5px; --glow-blur: 24px; --beam-color: #22c55e; }
+      :is(.vote-timeline__date.is-scheduled, .vote-timeline__bar.is-scheduled, .vote-card.is-scheduled, .room-card.is-scheduled, .run-event-banner--scheduled).is-beam-running { position: relative; isolation: isolate; }
+      :is(.vote-timeline__date.is-scheduled, .vote-timeline__bar.is-scheduled, .vote-card.is-scheduled, .room-card.is-scheduled, .run-event-banner--scheduled).is-beam-running::before { content: ""; position: absolute; z-index: 0; inset: 0; box-sizing: border-box; padding: var(--border-width); border-radius: inherit; background: conic-gradient(from var(--beam-angle), transparent 0 25%, var(--beam-color) 38%, #f0fdf4 var(--beam-length), var(--beam-color) 62%, transparent 75% 100%); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; filter: drop-shadow(0 0 var(--glow-blur) var(--beam-color)); clip-path: inset(0); pointer-events: none; animation: scheduled-border-beam var(--beam-speed) linear infinite; animation-delay: var(--beam-delay, 0ms); }
+      :is(.vote-timeline__date, .vote-timeline__bar, .vote-card, .room-card, .run-event-banner).is-beam-running > * { position: relative; z-index: 1; }
+      .room-card.is-beam-running > .room-card__actions { position: absolute; z-index: 2; }
       @keyframes scheduled-border-beam { to { --beam-angle: 360deg; } }
       .vote-timeline__month { font-size: .42rem; line-height: 8px; }
       .vote-day { display: flex; min-width: 0; }
@@ -154,11 +200,15 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       .vote-card__names-track { display: inline-flex; max-width: max-content; white-space: nowrap; animation: voter-name-loop var(--vote-marquee-duration, 0s) linear infinite; }
       .vote-card__names-copy { display: inline-flex; flex: 0 0 auto; }
       .vote-card__names-track span { flex: 0 0 auto; }
+      .vote-page-identity { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .75rem; margin: .2rem 0 .65rem; font-size: 1rem; }
+      .vote-page-identity #week-heading { font-weight: 700; }
       .vote-card.is-touch-paused .vote-card__names-track, .vote-card:hover .vote-card__names-track, .vote-card:focus-within .vote-card__names-track { animation-play-state: paused; }
       @keyframes voter-name-loop { from { transform: translateX(var(--vote-marquee-start, 100%)); } to { transform: translateX(var(--vote-marquee-end, -100%)); } }
       @media (prefers-reduced-motion: reduce) { .vote-card__names-track { animation: none; display: block; white-space: normal; overflow-wrap: anywhere; } .vote-card__names-copy--canonical { display: block; } }
       @media (max-width: 44rem) {
         .vote-page-main { padding-inline: .75rem; }
+        .rooms-page-main { padding-inline: .65rem; }
+        .room-cards { gap: .65rem; }
         .vote-page-main > section { padding: .55rem .75rem; }
         .vote-page-main h1 { margin: .2rem 0; font-size: 1.35rem; }
         .vote-page-main h2 { margin: .35rem 0; font-size: 1rem; }
@@ -252,7 +302,7 @@ const loginPage = () => page({
     const form = new FormData(event.currentTarget);
     const response = await fetch('/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: form.get('name'), pin: form.get('pin') }) });
     const result = await response.json();
-    if (response.ok) location.href = '/vote';
+    if (response.ok) location.href = '/rooms';
     else document.querySelector('#message').textContent = result.message;
   });`,
 });
@@ -276,12 +326,42 @@ const registerPage = () => page({
     const form = new FormData(event.currentTarget);
     const response = await fetch('/api/auth/register', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: form.get('name'), pin: form.get('pin'), pinConfirmation: form.get('pinConfirmation') }) });
     const result = await response.json();
-    if (response.ok) location.href = '/vote';
+    if (response.ok) location.href = '/rooms';
     else document.querySelector('#message').textContent = result.message;
   });`,
 });
 
-const changePinPage = () => page({
+const roomListPage = () => page({
+  title: 'Run Together | Rooms',
+  mainClass: 'rooms-page-main',
+  scriptSrc: '/socket.io/socket.io.js',
+  content: `<section id="rooms-content" hidden aria-labelledby="rooms-heading">
+    <header class="rooms-toolbar">
+      <h1 id="rooms-heading">Choose a room / เลือกห้อง</h1>
+      <div class="rooms-toolbar__account">
+        <span>Signed in as <strong id="rooms-display-name"></strong></span>
+        <a id="rooms-change-pin" class="button" href="/change-pin?returnTo=%2Frooms">Change PIN</a>
+        <a id="rooms-manage-users" class="button" href="/admin?returnTo=%2Frooms" hidden>Manage users</a>
+        <button id="rooms-logout" type="button" class="secondary">Logout</button>
+      </div>
+    </header>
+    <section aria-labelledby="create-room-heading">
+      <h2 id="create-room-heading">Create a room / สร้างห้อง</h2>
+      <form id="create-room-form">
+        <label for="create-room-title">Room title / ชื่อห้อง</label>
+        <input id="create-room-title" name="title" type="text" required maxlength="60" autocomplete="off" aria-describedby="rooms-message">
+        <fieldset class="room-icon-picker" id="create-icon-picker"></fieldset>
+        <button type="submit">Create room / สร้างห้อง</button>
+      </form>
+      <p id="rooms-message" class="message" role="status" aria-live="polite"></p>
+    </section>
+    <p id="rooms-empty" hidden>No rooms yet. Create a room to get started. / ยังไม่มีห้อง กรุณาสร้างห้องใหม่</p>
+    <div id="room-cards" class="room-cards" role="list" aria-label="Rooms"></div>
+  </section>`,
+  script: `import { startRoomListPage } from '/room-list.js?v=issue-38-room-list-2'; startRoomListPage();`,
+});
+
+const changePinPage = (returnTo = '/rooms') => page({
   title: 'Run Together | เปลี่ยน PIN / Change PIN',
   content: `<section id="protected-content" hidden>
     <h1>เปลี่ยน PIN / Change PIN</h1>
@@ -293,7 +373,7 @@ const changePinPage = () => page({
       <button>Change PIN</button>
     </form>
     <p id="message" class="message" role="status"></p>
-    <a id="return-to-vote" href="/vote">กลับไปหน้าโหวต / Return to vote</a>
+    <a id="return-to-vote" href="${escapeHtml(returnTo)}">กลับไปหน้าโหวต / Return to room</a>
   </section>`,
   script: `
     const protectedContent = document.querySelector('#protected-content');
@@ -351,12 +431,12 @@ const changePinPage = () => page({
   `,
 });
 
-const adminPage = () => page({
+const adminPage = (returnTo = '/rooms') => page({
   title: 'Run Together | ผู้ดูแลระบบ / Admin',
   content: `<section id="admin-content">
     <h1>ผู้ดูแลระบบ / Admin</h1>
     <p>จัดการผู้ใช้ / Manage users</p>
-    <a href="/vote" class="button">กลับไปหน้าโหวต / Back to vote</a>
+    <a id="admin-return" href="${escapeHtml(returnTo)}" class="button">กลับไปหน้าโหวต / Back to room</a>
     <p id="admin-message" class="message" role="status"></p>
     <p>Time zone: Asia/Bangkok</p>
     <div id="admin-users" aria-live="polite"></div>
@@ -468,7 +548,7 @@ const adminPage = () => page({
     async function loadUsers() {
       const response = await fetch('/api/admin/users', { cache: 'no-store' });
       if (response.status === 401) { location.replace('/'); return; }
-      if (response.status === 403) { location.replace('/vote'); return; }
+      if (response.status === 403) { location.replace(${JSON.stringify(returnTo)}); return; }
       if (!response.ok) { showError(await response.json()); return; }
       renderUsers((await response.json()).users);
     }
@@ -476,7 +556,7 @@ const adminPage = () => page({
       const response = await fetch('/api/session', { cache: 'no-store' });
       if (!response.ok) { location.replace('/'); return; }
       const session = await response.json();
-      if (session.role !== 'admin') { location.replace('/vote'); return; }
+      if (session.role !== 'admin') { location.replace(${JSON.stringify(returnTo)}); return; }
       csrfToken = session.csrfToken; await loadUsers();
     }
     loadSession();
@@ -531,7 +611,9 @@ export function createApp({ databaseReady = false, database, env = process.env, 
     });
   });
 
-  app.get('/', (_request, response) => {
+  app.get('/', (request, response) => {
+    const session = auth?.findSession(request, response);
+    if (session) return response.redirect('/rooms');
     response.type('html').send(loginPage());
   });
 
@@ -543,7 +625,17 @@ export function createApp({ databaseReady = false, database, env = process.env, 
 
   app.get('/run-events.js', (_request, response) => response.type('application/javascript').send(runEventsScript));
 
+  app.get('/room-contract.js', (_request, response) => response.type('application/javascript').send(roomContractScript));
+
+  app.get('/room-list.js', (_request, response) => response.type('application/javascript').send(roomListScript));
+
   if (auth) {
+    app.get('/rooms', (request, response) => {
+      response.setHeader('Cache-Control', 'no-store');
+      if (!auth.requireSession(request, response)) return;
+      response.type('html').send(roomListPage());
+    });
+
     app.post('/api/auth/register', async (request, response) => {
       try {
         auth.assertSameOrigin(request);
@@ -576,7 +668,8 @@ export function createApp({ databaseReady = false, database, env = process.env, 
       response.setHeader('Cache-Control', 'no-store');
       const session = auth.requireSession(request, response);
       if (!session) return;
-      response.json({ rooms: listRooms(database, { now }) });
+      response.json({ rooms: listRooms(database, { now })
+        .map((room) => ({ ...room, canEdit: room.ownerUserId === session.user_id })) });
     });
 
     app.post('/api/rooms', (request, response) => {
@@ -829,14 +922,14 @@ export function createApp({ databaseReady = false, database, env = process.env, 
       const session = auth.requireAdmin(request, response);
       if (!session) return;
       response.setHeader('Cache-Control', 'no-store');
-      response.type('html').send(adminPage());
+      response.type('html').send(adminPage(safeRoomReturn(request.query.returnTo, session, database)));
     });
 
     app.get('/change-pin', (request, response) => {
       response.setHeader('Cache-Control', 'no-store');
       const session = auth.requireSession(request, response);
       if (!session) return;
-      response.type('html').send(changePinPage());
+      response.type('html').send(changePinPage(safeRoomReturn(request.query.returnTo, session, database)));
     });
 
     app.get('/api/admin/users', (request, response) => {
@@ -1024,6 +1117,10 @@ export function createApp({ databaseReady = false, database, env = process.env, 
       response.setHeader('Cache-Control', 'no-store');
       const session = auth.requireSession(request, response);
       if (!session) return;
+      if (!request.params.roomId) {
+        response.redirect('/rooms');
+        return;
+      }
       const room = request.params.roomId
         ? getRoom(database, { roomId: request.params.roomId })
         : getRoom(database, { roomId: LEGACY_ROOM_ID });
@@ -1031,30 +1128,31 @@ export function createApp({ databaseReady = false, database, env = process.env, 
         sendError(response, new AuthError(404, 'ROOM_NOT_FOUND', 'The room was not found.'));
         return;
       }
-      if (request.params.roomId && !hasRoomMember(database, { roomId: room.id, userId: session.user_id })) {
+      if (!hasRoomMember(database, { roomId: room.id, userId: session.user_id })) {
         sendError(response, new AuthError(403, 'ROOM_MEMBERSHIP_REQUIRED', 'Enter this room before opening its board.'));
         return;
       }
       const displayName = escapeHtml(session.name);
       const currentWeek = getCurrentWeekMonday(now);
       const canManageRoom = session.role === 'admin' || room.ownerUserId === session.user_id;
-      const roomApiPrefix = room.id === LEGACY_ROOM_ID ? '' : `/api/rooms/${encodeURIComponent(room.id)}`;
+      const roomApiPrefix = `/api/rooms/${encodeURIComponent(room.id)}`;
       const roomControls = `${canManageRoom ? '<button id="reset-week" type="button" class="admin-action" hidden>Reset votes</button>' : ''}${session.role === 'admin' ? '<button id="manage-user" type="button" class="admin-action">manage user</button>' : ''}`;
       const resetControl = roomControls ? `<div class="actions">${roomControls}</div>` : '';
       response.type('html').send(page({
-        title: 'Run Together | Vote',
+        title: `Run Together | ${escapeHtml(room.title)}`,
         mainClass: 'vote-page-main',
         scriptSrc: '/socket.io/socket.io.js',
         content: `<section id="protected-content" hidden data-room-id="${room.id}">
-          <h1>Run Together</h1>
+          <h1 id="room-heading">${escapeHtml(room.title)}</h1>
           <section id="vote-timeline" class="vote-timeline" aria-labelledby="vote-timeline-heading">
             <h2 id="vote-timeline-heading">Vote timeline</h2>
             <p id="vote-timeline-range" class="vote-timeline__range" role="status">Loading vote totals…</p>
             <ol id="vote-timeline-days" class="vote-timeline__days" aria-label="Daily vote totals in chronological order"></ol>
           </section>
-          <p>ยินดีต้อนรับ / Welcome, <strong id="display-name">${displayName}</strong></p>
-          <h2 id="week-heading">สัปดาห์ / Week</h2>
-          <p id="week-range"></p>
+          <div id="vote-page-identity" class="vote-page-identity" aria-label="Signed-in user and selected week">
+            <span><strong id="display-name">${displayName}</strong></span>
+            <span id="week-heading">Week</span>
+          </div>
           <p id="message" class="message" role="status"></p>
           <ol id="run-events" class="run-event-list" aria-label="Run events"></ol>
           <ol id="week-days" class="vote-board" aria-label="Seven-day voting board / กระดานเลือกวันทั้งเจ็ด"></ol>
@@ -1064,7 +1162,9 @@ export function createApp({ databaseReady = false, database, env = process.env, 
             <button id="next-week" type="button" aria-label="Next week">&gt;&gt;</button>
           </nav>
           ${resetControl}
-          <a id="change-pin" class="button" href="/change-pin">เปลี่ยน PIN / Change PIN</a>
+          <a id="back-to-rooms" class="button" href="/rooms">Return to rooms / กลับไปหน้าห้อง</a>
+          <a id="change-pin" class="button" href="/change-pin?returnTo=${encodeURIComponent(`/vote/${room.id}`)}">เปลี่ยน PIN / Change PIN</a>
+          ${session.role === 'admin' ? `<a id="manage-users-link" class="button" href="/admin?returnTo=${encodeURIComponent(`/vote/${room.id}`)}">Manage users</a>` : ''}
           <div class="actions"><button id="logout" type="button" class="secondary">Logout</button></div>
         </section>`,
         script: `import { applyVoteCardPresentation, colorForDay, configureVoterNamesMarquee, createScheduledEffectController, createSocketRepairController, createVoterNamesRegion as buildVoterNamesRegion, createVoteTimelineController, formatDisplayDate, patchVoteDay } from '/vote-board.js?v=issue-34-beam-3';
@@ -1072,6 +1172,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           let csrfToken = '';
           let sessionCheck = 0;
           let weekLoadSequence = 0;
+          let roomMetadataSequence = 0;
           let weekState = null;
           let eventsByDate = new Map();
           let rolloverTimer = null;
@@ -1088,7 +1189,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           const protectedContent = document.querySelector('#protected-content');
           const displayName = document.querySelector('#display-name');
           const weekHeading = document.querySelector('#week-heading');
-          const weekRange = document.querySelector('#week-range');
+          const roomHeading = document.querySelector('#room-heading');
           const weekDays = document.querySelector('#week-days');
           const timelineDays = document.querySelector('#vote-timeline-days');
           const timelineRange = document.querySelector('#vote-timeline-range');
@@ -1099,10 +1200,23 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           const manageUser = document.querySelector('#manage-user');
           const message = document.querySelector('#message');
           const runEvents = document.querySelector('#run-events');
-          function roomApiPath(legacyPath, scopedPath) { return roomApiPrefix ? roomApiPrefix + scopedPath : legacyPath; }
-          function guardProtectedContent() { weekLoadSequence += 1; window.clearTimeout(rolloverTimer); protectedContent.hidden = true; csrfToken = ''; displayName.textContent = ''; weekDays.replaceChildren(); runEvents.replaceChildren(); timelineDays.replaceChildren(); scheduledEffects.sync('banner', []); scheduledEffects.sync('date-card', []); scheduledEffects.sync('timeline', []); runEventHandlers.forEach(({ abort, disposeSwipe }) => { abort.abort(); disposeSwipe?.(); }); runEventHandlers.clear(); runEventElements.clear(); weekState = null; eventsByDate = new Map(); message.textContent = ''; }
+          function roomApiPath(_legacyPath, scopedPath) { return roomApiPrefix + scopedPath; }
+          function guardProtectedContent() { weekLoadSequence += 1; roomMetadataSequence += 1; window.clearTimeout(rolloverTimer); protectedContent.hidden = true; csrfToken = ''; displayName.textContent = ''; weekDays.replaceChildren(); runEvents.replaceChildren(); timelineDays.replaceChildren(); scheduledEffects.sync('banner', []); scheduledEffects.sync('date-card', []); scheduledEffects.sync('timeline', []); runEventHandlers.forEach(({ abort, disposeSwipe }) => { abort.abort(); disposeSwipe?.(); }); runEventHandlers.clear(); runEventElements.clear(); weekState = null; eventsByDate = new Map(); message.textContent = ''; }
           function redirectToLogin() { guardProtectedContent(); location.replace('/'); }
           function addText(parent, tag, text) { const element = document.createElement(tag); element.textContent = text; parent.append(element); return element; }
+          function applyRoomMetadata(room) { if (room?.id !== roomId || typeof room.title !== 'string') return; roomMetadataSequence += 1; roomHeading.textContent = room.title; }
+          async function refreshRoomMetadata() {
+            const sequence = ++roomMetadataSequence;
+            try {
+              const response = await fetch('/api/rooms/' + encodeURIComponent(roomId), { cache: 'no-store' });
+              const result = await response.json();
+              if (sequence !== roomMetadataSequence) return false;
+              if (response.status === 401) { redirectToLogin(); return false; }
+              if (!response.ok || result.room?.id !== roomId || typeof result.room.title !== 'string') return false;
+              roomHeading.textContent = result.room.title;
+              return true;
+            } catch { return false; }
+          }
           const timelineItemsByDate = new Map();
           const timelineController = createVoteTimelineController({
             render(rows) {
@@ -1206,6 +1320,15 @@ export function createApp({ databaseReady = false, database, env = process.env, 
             button.disabled = pendingEventDates.has(day.date);
             button.addEventListener('click', () => void submitRunEventAction(day.date, action, event));
             row.append(button);
+          }
+          function captureDayEventActionFocus(element) {
+            const button = element?.closest?.('.run-event-day-action');
+            return button ? button.dataset.date : null;
+          }
+          function restoreDayEventActionFocus(date) {
+            if (!date) return;
+            const button = weekDays.querySelector('.run-event-day-action[data-date="' + date + '"]');
+            if (button && !button.disabled) button.focus({ preventScroll: true });
           }
           function captureRunEventActionFocus(element) {
             const banner = element?.closest?.('.run-event-banner');
@@ -1377,12 +1500,12 @@ export function createApp({ databaseReady = false, database, env = process.env, 
             }
           }
           function renderWeek(state) {
+            const dayActionFocus = captureDayEventActionFocus(document.activeElement);
             weekState = state;
             eventsByDate = new Map(state.events.map((event) => [event.date, event]));
             renderRunEvents(state.events);
             weekMonday = state.week.monday;
-            weekHeading.textContent = 'สัปดาห์ที่ ' + state.week.isoWeek + ' / ISO week ' + state.week.isoWeek + ' (' + state.week.isoWeekYear + ')';
-            weekRange.textContent = state.week.monday + ' – ' + state.week.sunday;
+            weekHeading.textContent = 'Week ' + state.week.isoWeek + ' (' + state.week.isoWeekYear + ')';
             previousWeek.disabled = false;
             previousWeek.dataset.monday = state.navigation.previousMonday;
             currentWeekButton.disabled = state.week.monday === currentWeekMonday;
@@ -1465,6 +1588,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
               return row;
             });
             weekDays.replaceChildren(...rows);
+            restoreDayEventActionFocus(dayActionFocus);
             scheduledEffects.sync('date-card', scheduledCards);
             configureVoterNamesMarquee(weekDays);
           }
@@ -1536,7 +1660,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
               if (sequence !== weekLoadSequence) return false;
               if (response.status === 401) { redirectToLogin(); return false; }
               if (!response.ok) { message.textContent = state.message; return false; }
-              if (roomApiPrefix && state.roomId !== roomId) return false;
+              if (state.roomId !== roomId) return false;
               renderWeek(state);
               return true;
             } catch {
@@ -1551,12 +1675,12 @@ export function createApp({ databaseReady = false, database, env = process.env, 
               scheduleBangkokDayRefresh();
             }, millisecondsUntilBangkokMidnight());
           }
-          async function loadSession() { const currentCheck = ++sessionCheck; guardProtectedContent(); try { const response = await fetch('/api/session', { cache: 'no-store' }); if (currentCheck !== sessionCheck) return; if (!response.ok) { redirectToLogin(); return; } const session = await response.json(); if (currentCheck !== sessionCheck) return; csrfToken = session.csrfToken; isAdmin = session.role === 'admin'; displayName.textContent = session.displayName; protectedContent.hidden = false; await Promise.all([loadWeek(weekMonday), loadTimeline()]); scheduleBangkokDayRefresh(); } catch { if (currentCheck === sessionCheck) redirectToLogin(); } }
+          async function loadSession() { const currentCheck = ++sessionCheck; guardProtectedContent(); try { const response = await fetch('/api/session', { cache: 'no-store' }); if (currentCheck !== sessionCheck) return; if (!response.ok) { redirectToLogin(); return; } const session = await response.json(); if (currentCheck !== sessionCheck) return; csrfToken = session.csrfToken; isAdmin = session.role === 'admin'; displayName.textContent = session.displayName; protectedContent.hidden = false; await Promise.all([loadWeek(weekMonday), loadTimeline(), refreshRoomMetadata()]); scheduleBangkokDayRefresh(); } catch { if (currentCheck === sessionCheck) redirectToLogin(); } }
           previousWeek.addEventListener('click', () => loadWeek(previousWeek.dataset.monday));
           currentWeekButton.addEventListener('click', () => loadWeek(currentWeekMonday));
           nextWeek.addEventListener('click', () => { if (!nextWeek.disabled) loadWeek(nextWeek.dataset.monday); });
           resetWeek?.addEventListener('click', resetSelectedWeek);
-          manageUser?.addEventListener('click', () => { location.href = '/admin'; });
+          manageUser?.addEventListener('click', () => { location.href = document.querySelector('#manage-users-link')?.getAttribute('href') || '/admin?returnTo=' + encodeURIComponent('/vote/' + roomId); });
           document.querySelector('#logout').addEventListener('click', async () => { const response = await fetch('/api/auth/logout', { method: 'POST', headers: { 'x-csrf-token': csrfToken } }); if (response.ok) location.href = '/'; });
           const socket = window.io({ transports: ['websocket'] });
           const socketRepair = createSocketRepairController({ loadWeek: () => loadWeek(weekMonday), patchDay });
@@ -1566,10 +1690,11 @@ export function createApp({ databaseReady = false, database, env = process.env, 
             if (weekState?.days.some((day) => day.date === date)) void loadWeek(weekMonday);
             void loadTimeline();
           });
+          socket.on('rooms:summary-state', ({ rooms }) => { if (Array.isArray(rooms)) applyRoomMetadata(rooms.find((room) => room?.id === roomId)); });
+          socket.on('rooms:summary-changed', ({ room }) => { applyRoomMetadata(room); });
           socket.on('week:reset', ({ roomId: changedRoomId, monday }) => { if (changedRoomId !== roomId) return; if (monday === weekMonday) loadWeek(weekMonday); loadTimeline(); });
           socket.on('connect', () => {
-            const repair = () => { void socketRepair.handleConnect(); void loadTimeline(); };
-            if (!roomApiPrefix) { repair(); return; }
+            const repair = () => { void socketRepair.handleConnect(); void loadTimeline(); void refreshRoomMetadata(); };
             socket.emit('room:subscribe', { roomId }, (result) => {
               if (!result?.ok || result.roomId !== roomId) { message.textContent = 'Room access changed. Re-enter the room.'; return; }
               repair();

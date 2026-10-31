@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { createServer } from '../src/server.js';
 import { addVote } from '../src/domain.js';
+import { LEGACY_ROOM_ID } from '../src/room-contract.js';
 
 const ENV = {
   ADMIN_NAME: 'Synthetic Coach',
@@ -119,7 +120,7 @@ test('week API rejects malformed, non-Monday, and too-far requests safely', asyn
 test('vote page exposes the three-button one-row navigator bound to the injected current week', async () => {
   await withServer(async (baseUrl) => {
     const registration = await register(baseUrl, 'Navigator Runner');
-    const response = await fetch(`${baseUrl}/vote`, { headers: { cookie: cookieFrom(registration) } });
+    const response = await fetch(`${baseUrl}/vote/${LEGACY_ROOM_ID}`, { headers: { cookie: cookieFrom(registration) } });
     const body = await response.text();
     assert.equal(response.status, 200);
     assert.match(body, /id="protected-content" hidden/);

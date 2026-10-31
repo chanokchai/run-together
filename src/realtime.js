@@ -51,10 +51,6 @@ export function attachRealtime(server, { auth, database, now = () => new Date() 
 
   io.on('connection', (socket) => {
     socket.join(SUMMARY_CHANNEL);
-    if (hasRoomMember(database, { roomId: LEGACY_ROOM_ID, userId: socket.data.userId })) {
-      socket.join(boardChannel(LEGACY_ROOM_ID));
-      socket.data.roomIds.add(LEGACY_ROOM_ID);
-    }
     socket.on('rooms:refresh', (acknowledge = () => {}) => {
       acknowledge(roomSummaryState(database, now));
     });

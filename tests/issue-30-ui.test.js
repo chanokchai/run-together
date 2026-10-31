@@ -101,10 +101,12 @@ test('vote page places a semantic compact timeline under its title and refreshes
   const pageStart = appSource.indexOf('content: `<section id="protected-content"');
   const pageEnd = appSource.indexOf('script: `import {', pageStart);
   const pageMarkup = appSource.slice(pageStart, pageEnd);
-  const title = pageMarkup.indexOf('<h1>Run Together</h1>');
+  const title = pageMarkup.indexOf('id="room-heading"');
   const timeline = pageMarkup.indexOf('<section id="vote-timeline"');
-  const welcome = pageMarkup.indexOf('id="display-name"');
-  assert.ok(title >= 0 && timeline > title && welcome > timeline);
+  const identity = pageMarkup.indexOf('id="vote-page-identity"');
+  assert.ok(title >= 0 && timeline > title && identity > timeline);
+  assert.match(pageMarkup, /id="week-heading"/);
+  assert.doesNotMatch(pageMarkup, /id="week-range"|\bWelcome\b/);
   assert.match(pageMarkup, /id="vote-timeline-heading"/);
   assert.match(pageMarkup, /id="vote-timeline-days"/);
   const timelineStyle = appSource.match(/\.vote-timeline\s*\{([^}]*)\}/)?.[1] ?? '';

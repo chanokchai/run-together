@@ -9,6 +9,7 @@ import { once } from 'node:events';
 import test from 'node:test';
 import { createServer } from '../src/server.js';
 import { setRunEventStatus } from '../src/domain.js';
+import { LEGACY_ROOM_ID } from '../src/room-contract.js';
 import { removeProfileWithRetry } from './helpers/chromium-profile-cleanup.js';
 import { chromiumReadinessTimeoutMs, readDevToolsPort, spawnChromium, stopChromium } from './helpers/chromium-startup.js';
 
@@ -292,7 +293,7 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
   const [cookieName, cookieValue] = runner.cookie.split('=', 2);
   await client.send('Network.setCookie', { url: baseUrl, name: cookieName, value: cookieValue, path: '/' });
   await client.send('Emulation.setDeviceMetricsOverride', { width: 320, height: 844, deviceScaleFactor: 1, mobile: true });
-  await client.send('Page.navigate', { url: `${baseUrl}/vote` });
+  await client.send('Page.navigate', { url: `${baseUrl}/vote/${LEGACY_ROOM_ID}` });
 
   let pageReady = false;
   for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -345,10 +346,10 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
   assert.ok(regular.banners.every(({ left, right }) => left >= 0 && right <= 390), 'keeps every event banner within the viewport');
 
   await evaluate(client, `document.querySelector('#previous-week').click()`);
-  assert.equal(await waitFor(client, `document.querySelector('#week-range').textContent === '2024-02-19 – 2024-02-25'`), true, 'week navigation loads the selected earlier week');
+  assert.equal(await waitFor(client, `document.querySelector('#week-heading').textContent === 'Week 8 (2024)'`), true, 'week navigation loads the selected earlier week');
   assert.equal(await evaluate(client, `document.querySelectorAll('.run-event-banner').length`), 0, 'does not show events from another week');
   await evaluate(client, `document.querySelector('#current-week').click()`);
-  assert.equal(await waitFor(client, `document.querySelector('#week-range').textContent === '2024-02-26 – 2024-03-03'`), true, 'returns to the current selected week');
+  assert.equal(await waitFor(client, `document.querySelector('#week-heading').textContent === 'Week 9 (2024)'`), true, 'returns to the current selected week');
   assert.equal(await waitFor(client, `document.querySelectorAll('.run-event-banner').length === 2`), true, 'authoritatively restores the current week event banners');
 
   await client.send('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0 });
@@ -397,7 +398,7 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
 
   const [adminCookieName, adminCookieValue] = admin.cookie.split('=', 2);
   await client.send('Network.setCookie', { url: baseUrl, name: adminCookieName, value: adminCookieValue, path: '/' });
-  await client.send('Page.navigate', { url: `${baseUrl}/vote` });
+  await client.send('Page.navigate', { url: `${baseUrl}/vote/${LEGACY_ROOM_ID}` });
   assert.equal(await waitFor(client, `document.querySelector('#protected-content') && !document.querySelector('#protected-content').hidden && document.querySelectorAll('#week-days .vote-card').length === 7`), true, 'loads the board as the authenticated administrator');
   assert.equal(await evaluate(client, `document.querySelectorAll('.run-event-actions').length`), 2, 'renders explicit banner controls for an administrator');
   await clickSelector(client, '.run-event-banner[data-date="2024-03-01"] .run-event-banner__summary');
@@ -432,7 +433,7 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
     requestId: '00000000-0000-4000-8000-000000000091',
     now,
   });
-  await evaluate(client, `window.issue32MutationResponses = []; window.issue32OriginalFetch = window.fetch; window.fetch = async (...args) => { const response = await window.issue32OriginalFetch(...args); if (String(args[0]).includes('/api/admin/events/')) window.issue32MutationResponses.push({ status: response.status, body: await response.clone().json() }); return response; };`);
+  await evaluate(client, `window.issue32MutationResponses = []; window.issue32OriginalFetch = window.fetch; window.fetch = async (...args) => { const response = await window.issue32OriginalFetch(...args); if (String(args[0]).includes('/admin/events/')) window.issue32MutationResponses.push({ status: response.status, body: await response.clone().json() }); return response; };`);
   await clickSelector(client, '.run-event-banner[data-date="2024-03-01"] button[data-run-event-status="scheduled"]');
   const staleActionReloaded = await waitFor(client, `window.issue32MutationResponses.length === 1 && document.querySelector('.run-event-banner[data-date="2024-03-01"] .run-event-banner__status')?.textContent === 'Proposed'`);
   if (!staleActionReloaded) t.diagnostic(JSON.stringify(await evaluate(client, `({ responses: window.issue32MutationResponses, status: document.querySelector('.run-event-banner[data-date="2024-03-01"] .run-event-banner__status')?.textContent, message: document.querySelector('#message').textContent, banner: document.querySelector('.run-event-banner[data-date="2024-03-01"]')?.outerHTML })`)));
@@ -440,7 +441,7 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
   assert.equal(await evaluate(client, `window.issue32MutationResponses[0].status`), 409, 'the stale action receives a real HTTP conflict');
   assert.match(await evaluate(client, `document.querySelector('#message').textContent`), /This event has changed/, 'the stale-event error remains visible and announced after the authoritative reload');
 
-  await evaluate(client, `window.fetch = async (input, init) => { if (String(input).includes('/api/admin/events/') && init?.method === 'PUT') throw new TypeError('controlled transport failure'); return window.issue32OriginalFetch(input, init); };`);
+  await evaluate(client, `window.fetch = async (input, init) => { if (String(input).includes('/admin/events/') && init?.method === 'PUT') throw new TypeError('controlled transport failure'); return window.issue32OriginalFetch(input, init); };`);
   await clickSelector(client, '.run-event-banner[data-date="2024-03-01"] button[data-run-event-status="proposed"]');
   assert.equal(await waitFor(client, `document.querySelector('.run-event-banner[data-date="2024-03-01"] .run-event-banner__status')?.textContent === 'Proposed' && document.querySelector('#message').textContent.includes('Could not update')`), true, 'a network failure leaves a visible accessible error after authoritative refresh without showing success');
   await evaluate(client, `window.fetch = window.issue32OriginalFetch;`);
@@ -452,7 +453,7 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
   assert.deepEqual(await evaluate(client, `(() => { const cue = document.querySelector('.run-event-banner[data-date="2024-03-01"] .run-event-banner__swipe-cue'); return { text: cue?.textContent, destructive: cue?.dataset.destructive }; })()`), { text: 'Swipe left to delete', destructive: 'true' }, 'announces the destructive admin action before it can commit');
   await cancelSwipe(client);
   assert.equal(await evaluate(client, `document.querySelector('.run-event-banner[data-date="2024-03-01"] .run-event-banner__status')?.textContent`), 'Scheduled', 'cancelling the deletion preview preserves the event');
-  await evaluate(client, `window.issue32AdminMutations = []; window.fetch = (...args) => { if (String(args[0]).includes('/api/admin/events/')) window.issue32AdminMutations.push(args[1]?.method ?? 'GET'); return window.issue32OriginalFetch(...args); };`);
+  await evaluate(client, `window.issue32AdminMutations = []; window.fetch = (...args) => { if (String(args[0]).includes('/admin/events/')) window.issue32AdminMutations.push(args[1]?.method ?? 'GET'); return window.issue32OriginalFetch(...args); };`);
   await swipe(client, '.run-event-banner[data-date="2024-03-01"]', -84);
   assert.equal(await waitFor(client, `document.querySelector('.run-event-banner[data-date="2024-03-01"]') === null`), true, 'admin left swipe permanently deletes a scheduled event');
   assert.deepEqual(await evaluate(client, 'window.issue32AdminMutations'), ['DELETE'], 'a completed banner swipe does not also synthesize an admin tap action');
@@ -479,7 +480,7 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
   await client2.send('Network.enable');
   await client2.send('Network.setCookie', { url: baseUrl, name: cookieName, value: cookieValue, path: '/' });
   await client2.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
-  await client2.send('Page.navigate', { url: `${baseUrl}/vote` });
+  await client2.send('Page.navigate', { url: `${baseUrl}/vote/${LEGACY_ROOM_ID}` });
   assert.equal(await waitFor(client2, `document.querySelector('#protected-content') && !document.querySelector('#protected-content').hidden && document.querySelector('.run-event-banner[data-date="2024-03-03"]')`), true, 'second authenticated client loads the proposed event');
   const watchScheduledEffects = `(() => {
     window.issue34Starts = { banner: 0, date: 0, card: 0, bar: 0 };
@@ -601,10 +602,10 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
   await evaluate(client2, 'window.scrollTo(0, 0)');
   for (let navigation = 0; navigation < 3; navigation += 1) {
     await evaluate(client2, "document.querySelector('#next-week').click()");
-    assert.equal(await waitFor(client2, `document.querySelector('#week-range').textContent === '2024-03-04 – 2024-03-10'`), true, `Next week completes before synchronization sample ${navigation + 1}`);
+    assert.equal(await waitFor(client2, `document.querySelector('#week-heading').textContent === 'Week 10 (2024)'`), true, `Next week completes before synchronization sample ${navigation + 1}`);
     await delay(90 + navigation * 110);
     await evaluate(client2, "document.querySelector('#current-week').click()");
-    assert.equal(await waitFor(client2, `document.querySelector('#week-range').textContent === '2024-02-26 – 2024-03-03'`), true, `Now completes before synchronization sample ${navigation + 1}`);
+    assert.equal(await waitFor(client2, `document.querySelector('#week-heading').textContent === 'Week 9 (2024)'`), true, `Now completes before synchronization sample ${navigation + 1}`);
     assert.equal(await waitFor(client2, `[...document.querySelectorAll('.run-event-banner[data-date="2024-03-03"], #week-days .vote-card[data-date="2024-03-03"], .vote-timeline__date[datetime="2024-03-03"], .vote-timeline__bar[data-date="2024-03-03"]')].every((element) => element.classList.contains('is-beam-running'))`), true, `all scheduled targets are visible after mixed retained/replacement cycle ${navigation + 1}`);
     assertSynchronizedBeamPhase(await sampleScheduledBeamPhase(client2, '2024-03-03'), `week navigation cycle ${navigation + 1}`);
   }
@@ -713,8 +714,8 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
   assert.equal(allZeroGraph.accessibleCounts, true, 'all-zero graph still announces true counts accessibly');
   await evaluate(client2, `document.querySelector('#previous-week').focus()`);
   await pressEnter(client2);
-  assert.equal(await waitFor(client2, `document.querySelector('#week-range').textContent === '2024-02-19 – 2024-02-25'`), true, 'keyboard activation of Previous week retains its existing navigation behavior');
+  assert.equal(await waitFor(client2, `document.querySelector('#week-heading').textContent === 'Week 8 (2024)'`), true, 'keyboard activation of Previous week retains its existing navigation behavior');
   await evaluate(client2, `document.querySelector('#current-week').focus()`);
   await pressEnter(client2);
-  assert.equal(await waitFor(client2, `document.querySelector('#week-range').textContent === '2024-02-26 – 2024-03-03'`), true, 'keyboard activation of Now returns to the current week');
+  assert.equal(await waitFor(client2, `document.querySelector('#week-heading').textContent === 'Week 9 (2024)'`), true, 'keyboard activation of Now returns to the current week');
 });

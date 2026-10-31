@@ -4,6 +4,7 @@ import { once } from 'node:events';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { LEGACY_ROOM_ID } from '../src/room-contract.js';
 import { createServer } from '../src/server.js';
 
 const ENV = {
@@ -52,12 +53,12 @@ test('Issue 21 moves PIN change behind a protected dedicated page', async () => 
   await withServer(async (baseUrl) => {
     const registration = await register(baseUrl, 'Issue 21 Member');
     const cookie = cookieFrom(registration);
-    const votePage = await fetch(`${baseUrl}/vote`, { headers: { cookie } });
+    const votePage = await fetch(`${baseUrl}/vote/${LEGACY_ROOM_ID}`, { headers: { cookie } });
     assert.equal(votePage.status, 200);
     const voteBody = await votePage.text();
     assert.doesNotMatch(voteBody, /id="pin-form"/);
     assert.doesNotMatch(voteBody, /name="currentPin"/);
-    assert.match(voteBody, /id="change-pin"[^>]+href="\/change-pin"/);
+    assert.ok(voteBody.includes(`/change-pin?returnTo=%2Fvote%2F${LEGACY_ROOM_ID}`));
 
     const changePinPage = await fetch(`${baseUrl}/change-pin`, { headers: { cookie } });
     assert.equal(changePinPage.status, 200);
@@ -66,7 +67,7 @@ test('Issue 21 moves PIN change behind a protected dedicated page', async () => 
     assert.match(changePinBody, /name="currentPin"/);
     assert.match(changePinBody, /name="newPin"/);
     assert.match(changePinBody, /name="newPinConfirmation"/);
-    assert.match(changePinBody, /id="return-to-vote"[^>]+href="\/vote"/);
+    assert.match(changePinBody, /id="return-to-vote"[^>]+href="\/rooms"/);
     assert.match(changePinBody, /\/api\/account\/pin/);
     assert.match(changePinBody, /pageshow/);
 
@@ -79,12 +80,12 @@ test('Issue 21 moves PIN change behind a protected dedicated page', async () => 
 test('Issue 21 gives administrators ordered blue reset and manage-user actions only', async () => {
   await withServer(async (baseUrl) => {
     const member = await register(baseUrl, 'Issue 21 Member');
-    const memberPage = await fetch(`${baseUrl}/vote`, { headers: { cookie: cookieFrom(member) } });
+    const memberPage = await fetch(`${baseUrl}/vote/${LEGACY_ROOM_ID}`, { headers: { cookie: cookieFrom(member) } });
     const memberBody = await memberPage.text();
     assert.doesNotMatch(memberBody, /id="manage-user"/);
 
     const admin = await login(baseUrl, ENV.ADMIN_NAME, ENV.ADMIN_PIN);
-    const adminPage = await fetch(`${baseUrl}/vote`, { headers: { cookie: cookieFrom(admin) } });
+    const adminPage = await fetch(`${baseUrl}/vote/${LEGACY_ROOM_ID}`, { headers: { cookie: cookieFrom(admin) } });
     assert.equal(adminPage.status, 200);
     const adminBody = await adminPage.text();
     const resetIndex = adminBody.indexOf('id="reset-week"');
@@ -98,6 +99,6 @@ test('Issue 21 gives administrators ordered blue reset and manage-user actions o
     assert.match(adminBody, /id="reset-week"[^>]+class="admin-action"/);
     assert.match(adminBody, /\.admin-action\s*\{\s*background:\s*#1769aa;/);
     assert.match(adminBody, /manageUser\??\.addEventListener\('click'/);
-    assert.match(adminBody, /location\.href = '\/admin'/);
+    assert.match(adminBody, /location\.href = document\.querySelector\('#manage-users-link'\)\?\.getAttribute\('href'\) \|\| '\/admin\?returnTo='/);
   });
 });

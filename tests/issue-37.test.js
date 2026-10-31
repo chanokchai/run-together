@@ -7,7 +7,7 @@ import test from 'node:test';
 import { io as connectSocket } from 'socket.io-client';
 import { openDatabase } from '../src/database.js';
 import { createServer } from '../src/server.js';
-import { ROOM_COLOR_PALETTE } from '../src/room-contract.js';
+import { LEGACY_ROOM_ID, ROOM_COLOR_PALETTE } from '../src/room-contract.js';
 
 const ENV = { ADMIN_NAME: 'Issue 37 Admin', ADMIN_PIN: '4826', PIN_PEPPER: 'synthetic-pepper' };
 const NOW = new Date('2026-10-27T04:00:00.000Z');
@@ -667,6 +667,9 @@ test('Issue 37 page routes bind a board tab to its room and reject non-member ac
     assert.match(page, new RegExp(`data-room-id="${roomId}"`));
     assert.match(page, new RegExp(`const roomId = '${roomId}'`));
     assert.match(page, /\/api\/rooms\//);
-    assert.equal((await fetch(`${baseUrl}/vote`, { headers: { cookie: member.cookie } })).status, 200);
+    const bareVote = await fetch(`${baseUrl}/vote`, { headers: { cookie: member.cookie }, redirect: 'manual' });
+    assert.equal(bareVote.status, 302);
+    assert.equal(bareVote.headers.get('location'), '/rooms');
+    assert.equal((await fetch(`${baseUrl}/vote/${LEGACY_ROOM_ID}`, { headers: { cookie: member.cookie } })).status, 200);
   });
 });

@@ -44,7 +44,7 @@ async function sessionFor(baseUrl, cookie) {
 }
 
 async function putVote(baseUrl, cookie, csrfToken, date, body) {
-  return fetch(`${baseUrl}/api/votes/${date}`, {
+  return fetch(`${baseUrl}/api/rooms/${LEGACY_ROOM_ID}/votes/${date}`, {
     method: 'PUT',
     headers: { cookie, 'content-type': 'application/json', origin: baseUrl, 'x-csrf-token': csrfToken },
     body: JSON.stringify(body),
@@ -56,6 +56,17 @@ function waitForSocket(socket, event = 'connect') {
     const timer = setTimeout(() => reject(new Error(`Timed out waiting for ${event}`)), 2000);
     socket.once(event, (...args) => { clearTimeout(timer); resolve(args); });
     socket.once('connect_error', (error) => { clearTimeout(timer); reject(error); });
+  });
+}
+
+function subscribeToRoom(socket, roomId) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Timed out subscribing to room ${roomId}`)), 2000);
+    socket.emit('room:subscribe', { roomId }, (result) => {
+      clearTimeout(timer);
+      if (!result?.ok || result.roomId !== roomId) reject(new Error(`Could not subscribe to room ${roomId}`));
+      else resolve(result);
+    });
   });
 }
 
@@ -78,7 +89,7 @@ test('PUT /api/votes validates CSRF/body/date, is idempotent, and returns only a
       assert.equal(response.status, 400);
       assert.equal((await response.json()).code, 'INVALID_VOTE_REQUEST');
     }
-    const missingCsrf = await fetch(`${baseUrl}/api/votes/2024-03-01`, {
+    const missingCsrf = await fetch(`${baseUrl}/api/rooms/${LEGACY_ROOM_ID}/votes/2024-03-01`, {
       method: 'PUT', headers: { cookie, 'content-type': 'application/json', origin: baseUrl }, body: JSON.stringify({ selected: true }),
     });
     assert.equal(missingCsrf.status, 403);
@@ -89,8 +100,8 @@ test('PUT /api/votes validates CSRF/body/date, is idempotent, and returns only a
     assert.deepEqual(duplicateResults.map((response) => response.status), [200, 200]);
     assert.equal(server.database.prepare('SELECT COUNT(*) AS count FROM votes').get().count, 1);
     const patch = await duplicateResults[0].json();
-    assert.deepEqual(Object.keys(patch).sort(), ['date', 'selected', 'voteCount', 'voterNames']);
-    assert.deepEqual(patch, { date: '2024-03-01', voteCount: 1, voterNames: ['Atomic Runner'], selected: true });
+    assert.deepEqual(Object.keys(patch).sort(), ['date', 'roomId', 'selected', 'voteCount', 'voterNames']);
+    assert.deepEqual(patch, { date: '2024-03-01', roomId: LEGACY_ROOM_ID, voteCount: 1, voterNames: ['Atomic Runner'], selected: true });
     for (const date of ['2024-02-28', '2024-03-21', 'not-a-date']) {
       const response = await putVote(baseUrl, cookie, session.csrfToken, date, { selected: true });
       assert.equal(response.status, 400);
@@ -110,6 +121,7 @@ test('Socket.IO authenticates session cookies and emits recipient-specific patch
     const aliceSocket = connectSocket(baseUrl, { extraHeaders: { origin: baseUrl, cookie: aliceCookie } });
     const bobSocket = connectSocket(baseUrl, { extraHeaders: { origin: baseUrl, cookie: bobCookie } });
     await Promise.all([waitForSocket(aliceSocket), waitForSocket(bobSocket)]);
+    await Promise.all([subscribeToRoom(aliceSocket, LEGACY_ROOM_ID), subscribeToRoom(bobSocket, LEGACY_ROOM_ID)]);
     try {
       const bobPatch = new Promise((resolve) => bobSocket.once('vote:changed', resolve));
       const alicePatch = new Promise((resolve) => aliceSocket.once('vote:changed', resolve));
@@ -152,6 +164,7 @@ test('Socket.IO rejects expired sessions and does not broadcast or persist rolle
     const freshSession = await sessionFor(baseUrl, freshCookie);
     const observer = connectSocket(baseUrl, { extraHeaders: { origin: baseUrl, cookie: freshCookie } });
     await waitForSocket(observer);
+    await subscribeToRoom(observer, LEGACY_ROOM_ID);
     let eventSeen = false;
     observer.on('vote:changed', () => { eventSeen = true; });
     server.database.exec(`

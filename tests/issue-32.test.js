@@ -80,7 +80,8 @@ async function adminSessionFor(baseUrl) {
 }
 
 function eventRequest(baseUrl, path, { method, cookie, csrfToken, body } = {}) {
-  return fetch(`${baseUrl}${path}`, {
+  const scopedPath = path.startsWith('/api/') ? `/api/rooms/${LEGACY_ROOM_ID}${path.slice(4)}` : path;
+  return fetch(`${baseUrl}${scopedPath}`, {
     method,
     headers: {
       ...(cookie ? { cookie } : {}),
@@ -436,8 +437,17 @@ test('connected clients receive committed shared event state and recover date-sp
       socket.once('connect', () => { clearTimeout(timer); resolve(); });
       socket.once('connect_error', (error) => { clearTimeout(timer); reject(error); });
     });
+    const subscribeToRoom = (socket, roomId) => new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`Timed out subscribing to room ${roomId}`)), 2000);
+      socket.emit('room:subscribe', { roomId }, (result) => {
+        clearTimeout(timer);
+        if (!result?.ok || result.roomId !== roomId) reject(new Error(`Could not subscribe to room ${roomId}`));
+        else resolve(result);
+      });
+    });
     try {
       await Promise.all(sockets.map(waitForConnect));
+      await Promise.all(sockets.map((socket) => subscribeToRoom(socket, LEGACY_ROOM_ID)));
       const aliceProposal = new Promise((resolve) => sockets[0].once('event:changed', resolve));
       const bobProposal = new Promise((resolve) => sockets[1].once('event:changed', resolve));
       const competing = await Promise.all([alice, bob].map((member, index) => eventRequest(baseUrl, '/api/events/2024-03-01', {
