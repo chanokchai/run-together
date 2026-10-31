@@ -197,6 +197,10 @@ test('Issue 43 room filters, metadata, icon menus, responsive cards, and board r
     defaultIcon: document.querySelector('#create-room-form .room-icon-picker select')?.value,
     visibleCards: [...document.querySelectorAll('.room-card')].filter((card) => !card.hidden).length,
     statuses: ['.room-card__dates--scheduled', '.room-card__dates--proposed'].map((selector) => document.querySelector('.room-card[data-room-id="${noDates.id}"] ' + selector)?.hidden),
+    emptyDateLinesHidden: ['.room-card__dates--scheduled', '.room-card__dates--proposed'].map((selector) => {
+      const line = document.querySelector('.room-card[data-room-id="${noDates.id}"] ' + selector);
+      return { hidden: line.hidden, display: getComputedStyle(line).display, width: line.getBoundingClientRect().width };
+    }),
   }))()`);
   assert.deepEqual(initial.filters.map(({ label, checked }) => [label, checked]), [['My voted', false], ['Scheduled', false], ['Proposed', false]]);
   assert.ok(initial.choices.includes('running') && initial.choices.includes('dinner') && initial.choices.includes('music'));
@@ -204,6 +208,7 @@ test('Issue 43 room filters, metadata, icon menus, responsive cards, and board r
   assert.equal(initial.defaultIcon, 'running');
   assert.equal(initial.visibleCards, 6, 'includes the pre-existing legacy room alongside five created rooms');
   assert.deepEqual(initial.statuses, [true, true]);
+  assert.equal(initial.emptyDateLinesHidden.every((line) => line.hidden && line.display === 'none' && line.width === 0), true, 'empty scheduled and proposed date lines are not rendered');
 
   const roomCardState = await evaluate(client, `(() => {
     const card = document.querySelector('.room-card[data-room-id="${mixed.id}"]');

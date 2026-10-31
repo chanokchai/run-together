@@ -106,6 +106,7 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       .room-card__summary { grid-area: summary; display: flex; min-width: 0; flex-direction: column; align-items: flex-end; gap: .4rem; text-align: right; }
       .room-card__voter-count { max-width: 100%; font-size: clamp(.72rem, 1.5vw, .86rem); font-weight: 700; line-height: 1.2; overflow-wrap: anywhere; }
       .room-card__dates { display: grid; grid-area: auto; grid-template-columns: max-content minmax(0, 1fr); align-items: start; gap: .3rem; min-width: 0; margin: 0; padding: .12rem 0; color: #14213d; font-size: clamp(.736rem, 1.725vw, .897rem); line-height: 1.25; }
+      .room-card__dates[hidden] { display: none; }
       .room-card__dates--scheduled { grid-area: scheduled; font-weight: 600; }
       .room-card__dates--proposed { grid-area: proposed; font-size: clamp(.782rem, 1.955vw, .966rem); font-weight: 700; }
       .room-card__dates strong { align-self: start; white-space: nowrap; }
