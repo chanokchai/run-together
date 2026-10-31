@@ -198,8 +198,33 @@ function createProposedGlowController({ createObserver, createMotionQuery, now }
     const bounds = element.getBoundingClientRect?.();
     if (!bounds || bounds.width <= 0 || bounds.height <= 0 || !view) return false;
     const style = view.getComputedStyle?.(element);
-    return bounds.right > 0 && bounds.bottom > 0 && bounds.left < view.innerWidth
-      && bounds.top < view.innerHeight && style?.visibility !== 'hidden';
+    if (style?.visibility === 'hidden') return false;
+    const intersection = {
+      left: Math.max(bounds.left, 0),
+      top: Math.max(bounds.top, 0),
+      right: Math.min(bounds.right, view.innerWidth),
+      bottom: Math.min(bounds.bottom, view.innerHeight),
+    };
+    for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
+      const ancestorStyle = view.getComputedStyle?.(ancestor);
+      if (!ancestorStyle) continue;
+      const clipX = ['auto', 'clip', 'hidden', 'overlay', 'scroll'].includes(ancestorStyle.overflowX);
+      const clipY = ['auto', 'clip', 'hidden', 'overlay', 'scroll'].includes(ancestorStyle.overflowY);
+      if (!clipX && !clipY) continue;
+      const ancestorBounds = ancestor.getBoundingClientRect();
+      const left = ancestorBounds.left + ancestor.clientLeft;
+      const top = ancestorBounds.top + ancestor.clientTop;
+      if (clipX) {
+        intersection.left = Math.max(intersection.left, left);
+        intersection.right = Math.min(intersection.right, left + ancestor.clientWidth);
+      }
+      if (clipY) {
+        intersection.top = Math.max(intersection.top, top);
+        intersection.bottom = Math.min(intersection.bottom, top + ancestor.clientHeight);
+      }
+      if (intersection.right <= intersection.left || intersection.bottom <= intersection.top) return false;
+    }
+    return intersection.right > intersection.left && intersection.bottom > intersection.top;
   }
 
   function stop(element) {
@@ -218,16 +243,19 @@ function createProposedGlowController({ createObserver, createMotionQuery, now }
     }
   }
 
-  function updateVisibility(element, timestamp = clock()) {
+  function updateVisibility(element, timestamp = clock(), entry = null) {
     const state = byElement.get(element);
     if (!state) return;
-    state.inViewport = isVisible(element);
+    const intersection = entry?.intersectionRect;
+    const observerVisible = !entry || Boolean(entry.isIntersecting
+      && intersection?.width > 0 && intersection?.height > 0);
+    state.inViewport = observerVisible && isVisible(element);
     apply(state, timestamp);
   }
 
   const observerCallback = (entries) => {
     const timestamp = clock();
-    entries.forEach(({ target }) => updateVisibility(target, timestamp));
+    entries.forEach((entry) => updateVisibility(entry.target, timestamp, entry));
   };
   const Observer = globalThis.IntersectionObserver ?? view?.IntersectionObserver;
   const observer = createObserver ? createObserver(observerCallback)
@@ -247,6 +275,7 @@ function createProposedGlowController({ createObserver, createMotionQuery, now }
 
   function untrack(key, state) {
     stop(state.element);
+    state.element.classList.remove('is-proposed-date-glowing');
     observer?.unobserve(state.element);
     byElement.delete(state.element);
     states.delete(key);

@@ -276,7 +276,7 @@ test('Issue 38 room-list cards stay readable, scrollable, editable, keyed, and s
     if (layout.titleDatesOverlap) t.diagnostic(JSON.stringify(layout));
     assert.ok(layout.card.height >= 180, 'keeps the consistent minimum card height on desktop');
     assert.ok(layout.card.height > layout.card.width, 'lets long room text and date lists grow the card instead of clipping');
-    assert.equal(layout.actionPosition, 'absolute', 'keeps the Edit action absolutely positioned');
+    assert.equal(layout.actionPosition, 'static', 'keeps the Edit action in normal card layout flow');
     assert.equal(layout.numberActionsOverlap, false, 'separates the room number and Edit action');
     assert.equal(layout.numberIconOverlap, false, 'separates the room number and icon');
     assert.equal(layout.iconTitleOverlap, false, 'separates the icon and full title');
@@ -366,7 +366,7 @@ test('Issue 38 room-list cards stay readable, scrollable, editable, keyed, and s
     })()`);
     assert.equal(await waitFor(client, `['${stressCard.id}', '${twoDates.id}'].every((id) => document.querySelector('.room-card[data-room-id="' + id + '"]').classList.contains('is-beam-running'))`), true, 'runs the shared scheduled-card effect on two visible cards');
     const activeBeamState = await evaluate(client, `(${JSON.stringify(beamState)}).map(({ id }) => { const card = document.querySelector('.room-card[data-room-id="' + id + '"]'); const style = getComputedStyle(card, '::before'); return { angle: parseFloat(style.getPropertyValue('--beam-angle')), duration: style.animationDuration, animation: style.animationName, speed: getComputedStyle(card).getPropertyValue('--beam-speed').trim(), blur: getComputedStyle(card).getPropertyValue('--glow-blur').trim(), actionPosition: getComputedStyle(card.querySelector('.room-card__actions')).position, editInside: (() => { const a=card.getBoundingClientRect(), b=card.querySelector('.room-card__edit').getBoundingClientRect(); return b.top>=a.top && b.bottom<=a.bottom && b.right<=a.right; })() }; })`);
-    assert.ok(activeBeamState.every(({ animation, duration, speed, blur, actionPosition, editInside }) => animation === 'scheduled-border-beam' && duration === '1.4s' && speed === '1.4s' && blur === '24px' && actionPosition === 'absolute' && editInside), 'preserves exact shared beam timing/glow and visible Edit placement during animation');
+    assert.ok(activeBeamState.every(({ animation, duration, speed, blur, actionPosition, editInside }) => animation === 'scheduled-border-beam' && duration === '1.4s' && speed === '1.4s' && blur === '24px' && actionPosition === 'static' && editInside), 'preserves exact shared beam timing/glow and visible in-flow Edit placement during animation');
     const angleDifference = Math.abs(activeBeamState[0].angle - activeBeamState[1].angle);
     assert.ok(Number.isFinite(angleDifference) && Math.min(angleDifference, 360 - angleDifference) < 10, 'keeps visible scheduled cards in the same animation phase');
     assert.equal(await evaluate(client, `!document.querySelector('.room-card[data-room-id="${proposalOnly.id}"]').classList.contains('is-scheduled') && !document.querySelector('.room-card[data-room-id="${proposalOnly.id}"]').classList.contains('is-beam-running')`), true, 'proposed-only rooms never get scheduled-card effects');
@@ -390,7 +390,7 @@ test('Issue 38 room-list cards stay readable, scrollable, editable, keyed, and s
     await client.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
     assert.equal(await waitFor(client, `!document.querySelector('.room-card[data-room-id="${stressCard.id}"]').classList.contains('is-beam-running')`), true, 'uses a static room-list effect for reduced-motion users');
     const reducedMotionEdit = await evaluate(client, `(() => { const card = document.querySelector('.room-card[data-room-id="${stressCard.id}"]'); const box = card.getBoundingClientRect(); const edit = card.querySelector('.room-card__edit'); const button = edit.getBoundingClientRect(); return { scheduled: card.classList.contains('is-scheduled'), running: card.classList.contains('is-beam-running'), actionPosition: getComputedStyle(card.querySelector('.room-card__actions')).position, inside: button.top >= box.top && button.bottom <= box.bottom && button.right <= box.right }; })()`);
-    assert.deepEqual(reducedMotionEdit, { scheduled: true, running: false, actionPosition: 'absolute', inside: true }, 'keeps the owner Edit action visible in the static reduced-motion state');
+    assert.deepEqual(reducedMotionEdit, { scheduled: true, running: false, actionPosition: 'static', inside: true }, 'keeps the owner Edit action in normal flow in the static reduced-motion state');
     await clickSelector(client, `.room-card[data-room-id="${stressCard.id}"] .room-card__edit`);
     assert.equal(await waitFor(client, 'document.querySelector(\'.room-edit-dialog\')?.open'), true, 'pointer Edit remains usable with reduced motion enabled');
     await evaluate(client, 'document.querySelector(\'.room-edit-dialog\').close()');

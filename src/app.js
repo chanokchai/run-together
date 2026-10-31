@@ -116,7 +116,7 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       .room-card__date-value.is-proposed-date-glowing { color: #6b21a8; text-shadow: 0 0 2px #c084fc, 0 0 5px #a855f7; }
       .room-card__date-value.is-proposed-glow-running { animation: proposed-date-glow 2.8s ease-in-out infinite; animation-delay: var(--proposed-glow-delay, 0ms); }
       @keyframes proposed-date-glow { 0%, 100% { text-shadow: 0 0 2px #c084fc, 0 0 5px #a855f7; } 50% { text-shadow: 0 0 3px #d8b4fe, 0 0 8px #a855f7, 0 0 13px #7e22ce; } }
-      .room-card__actions { position: absolute; right: .55rem; bottom: .55rem; z-index: 2; display: flex; width: auto; justify-content: flex-end; }
+      .room-card__actions { display: flex; width: auto; justify-content: flex-end; }
       .room-card__edit { display: inline-flex; width: auto; min-width: 44px; min-height: 44px; align-items: center; justify-content: center; margin: 0; padding: .35rem .55rem; border: 2px solid #14213d; background: #fff; color: #14213d; }
       .room-card__edit[hidden] { display: none; }
       .room-card__edit:focus-visible, .room-icon-picker select:focus-visible { outline: 3px solid #145da0; outline-offset: 2px; }
@@ -172,7 +172,7 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       :is(.vote-timeline__date.is-scheduled, .vote-timeline__bar.is-scheduled, .vote-card.is-scheduled, .room-card.is-scheduled, .run-event-banner--scheduled).is-beam-running { position: relative; isolation: isolate; }
       :is(.vote-timeline__date.is-scheduled, .vote-timeline__bar.is-scheduled, .vote-card.is-scheduled, .room-card.is-scheduled, .run-event-banner--scheduled).is-beam-running::before { content: ""; position: absolute; z-index: 0; inset: 0; box-sizing: border-box; padding: var(--border-width); border-radius: inherit; background: conic-gradient(from var(--beam-angle), transparent 0 25%, var(--beam-color) 38%, #f0fdf4 var(--beam-length), var(--beam-color) 62%, transparent 75% 100%); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; filter: drop-shadow(0 0 var(--glow-blur) var(--beam-color)); clip-path: inset(0); pointer-events: none; animation: scheduled-border-beam var(--beam-speed) linear infinite; animation-delay: var(--beam-delay, 0ms); }
       :is(.vote-timeline__date, .vote-timeline__bar, .vote-card, .room-card, .run-event-banner).is-beam-running > * { position: relative; z-index: 1; }
-      .room-card.is-beam-running > .room-card__actions { position: absolute; z-index: 2; }
+
       .room-card.is-scheduled { --border-width: 5.5px; }
       @keyframes scheduled-border-beam { to { --beam-angle: 360deg; } }
       .vote-timeline__month { font-size: .42rem; line-height: 8px; }
@@ -394,7 +394,7 @@ const roomListPage = () => page({
     <p id="rooms-no-matches" hidden>No rooms match these filters. / ไม่มีห้องที่ตรงกับตัวกรอง</p>
     <div id="room-cards" class="room-cards" role="list" aria-label="Rooms"></div>
   </section>`,
-  script: `import { startRoomListPage } from '/room-list.js?v=issue-43-room-list-1'; startRoomListPage();`,
+  script: `import { startRoomListPage } from '/room-list.js?v=issue-43-room-list-2'; startRoomListPage();`,
 });
 
 const changePinPage = (returnTo = '/rooms') => page({

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { request } from 'node:http';
 import { once } from 'node:events';
 import { tmpdir } from 'node:os';
@@ -86,13 +86,15 @@ async function waitFor(client, expression, timeoutMs = 8000) {
 
 async function createFixture() {
   const directory = await mkdtemp(join(process.env.TMPDIR || tmpdir(), 'run-together-issue-43-browser-'));
-  const server = createServer({ databasePath: join(directory, 'preview.sqlite'), env: ENV, now: () => NOW });
+  let currentNow = NOW;
+  const server = createServer({ databasePath: join(directory, 'preview.sqlite'), env: ENV, now: () => currentNow });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   return {
     directory,
     server,
     baseUrl: `http://127.0.0.1:${server.address().port}`,
+    setNow(value) { currentNow = new Date(value); },
     async close() {
       await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
       server.database.close();
@@ -184,7 +186,25 @@ test('Issue 43 room filters, metadata, icon menus, responsive cards, and board r
   const target = await createTarget(port);
   client = createCdpClient(target.webSocketDebuggerUrl);
   await openPage(client, `${fixture.baseUrl}/rooms`);
-  await client.send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => { const NativeDate = Date; const fixedNow = ${NOW.getTime()}; class FixtureDate extends NativeDate { constructor(...args) { super(...(args.length ? args : [fixedNow])); } static now() { return fixedNow; } } window.Date = FixtureDate; })();` });
+  await client.send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => {
+    const NativeDate = Date;
+    let fixedNow = ${NOW.getTime()};
+    class FixtureDate extends NativeDate {
+      constructor(...args) { super(...(args.length ? args : [fixedNow])); }
+      static now() { return fixedNow; }
+    }
+    window.Date = FixtureDate;
+    window.__setIssue43Now = (value) => { fixedNow = value; };
+    const nativeSetTimeout = window.setTimeout.bind(window);
+    let captured = false;
+    window.setTimeout = (callback, milliseconds, ...args) => {
+      if (!captured && Number(milliseconds) > 60000) {
+        captured = true;
+        window.__fireRoomDayRollover = () => callback(...args);
+      }
+      return nativeSetTimeout(callback, milliseconds, ...args);
+    };
+  })();` });
   const [cookieName, cookieValue] = owner.cookie.split('=', 2);
   await client.send('Network.setCookie', { url: fixture.baseUrl, name: cookieName, value: cookieValue, path: '/' });
   await client.send('Emulation.setDeviceMetricsOverride', { width: 320, height: 844, deviceScaleFactor: 2, mobile: true });
@@ -278,6 +298,10 @@ test('Issue 43 room filters, metadata, icon menus, responsive cards, and board r
   assert.deepEqual(await visibleIds(), []);
   const noMatch = await evaluate(client, `({ message: document.querySelector('#rooms-no-matches')?.hidden, filters: !document.querySelector('#room-filters').hidden, create: !document.querySelector('#create-room-form button[type=submit]').disabled, empty: document.querySelector('#rooms-empty').hidden })`);
   assert.deepEqual(noMatch, { message: false, filters: true, create: true, empty: true });
+  await click(client, '#filter-proposed');
+  assert.deepEqual(new Set(await visibleIds()), new Set([proposed.id]), 'all three filters require My voted and either selected status');
+  assert.equal(await evaluate(client, 'document.querySelector("#rooms-no-matches").hidden'), true, 'hides the no-match message when all three selected filters match');
+  await click(client, '#filter-proposed');
   await click(client, '#filter-my-voted');
   await click(client, '#filter-scheduled');
   assert.equal((await visibleIds()).length, 6, 'clearing the filters restores every room');
@@ -342,21 +366,200 @@ test('Issue 43 room filters, metadata, icon menus, responsive cards, and board r
   assert.equal(colorAndIcon.icon, '🍽️');
   assert.equal(colorAndIcon.color, roomCardState.storedColor, 'changing an icon preserves the saved room color');
 
+  let tomorrowProposalEvent;
+  for (const date of ['2026-10-28', '2026-10-29', '2026-10-30', '2026-10-31', '2026-11-01', '2026-11-02', '2026-11-03', '2026-11-04', '2026-11-05', '2026-11-06', '2026-11-07', '2026-11-08']) {
+    const event = seedEvent(fixture.server.database, { roomId: proposed.id, userId: ownerId, date });
+    if (date === '2026-10-28') tomorrowProposalEvent = event;
+  }
+  const longRoom = await updateRoom(fixture.baseUrl, owner, proposed.id, {
+    title: 'W'.repeat(30), venue: 'W'.repeat(30), time: '18:45',
+  });
+  assert.equal(longRoom.response.status, 200);
+  assert.equal(await waitFor(client, `document.querySelector('.room-card[data-room-id="${proposed.id}"] .room-card__venue')?.textContent === '${'W'.repeat(30)}'`), true);
+  await evaluate(client, `(() => {
+    const card = document.querySelector('.room-card[data-room-id="${proposed.id}"]');
+    window.__issue43KeyedCard = card;
+    window.__issue43KeyedDates = new Map([...card.querySelectorAll('.room-card__dates--proposed time')].map((date) => [date.dateTime, date]));
+    window.__issue43InitialOrder = [...document.querySelectorAll('.room-card')].map((item) => item.dataset.roomId);
+  })()`);
+  const unrelatedUpdate = await updateRoom(fixture.baseUrl, owner, proposed.id, { venue: 'V'.repeat(30) });
+  assert.equal(unrelatedUpdate.response.status, 200);
+  assert.equal(await waitFor(client, `document.querySelector('.room-card[data-room-id="${proposed.id}"] .room-card__venue')?.textContent === '${'V'.repeat(30)}'`), true);
+  assert.equal(await evaluate(client, `(() => {
+    const card = document.querySelector('.room-card[data-room-id="${proposed.id}"]');
+    return card === window.__issue43KeyedCard && [...window.__issue43KeyedDates].every(([date, node]) => card.querySelector('time[datetime="' + date + '"]') === node);
+  })()`), true, 'unrelated metadata refresh preserves the room card and date-value nodes');
+
+  for (const [roomId, kind] of [[proposed.id, 'proposed-only'], [mixed.id, 'mixed'], [scheduled.id, 'scheduled-only']]) {
+    const card = `.room-card[data-room-id="${roomId}"]`;
+    await evaluate(client, `document.querySelector(${JSON.stringify(card)}).scrollIntoView({ block: 'center' })`);
+    const layout = await evaluate(client, `(() => {
+      const card = document.querySelector(${JSON.stringify(card)});
+      const button = card.querySelector('.room-card__edit');
+      const buttonRect = button.getBoundingClientRect();
+      const textNodes = [...card.querySelectorAll('.room-card__number,.room-card__owner,.room-card__title,.room-card__venue,.room-card__time,.room-card__voter-count,.room-card__dates:not([hidden]) strong,.room-card__date-value')];
+      const collisions = [];
+      const buttonHits = [];
+      for (const element of textNodes) {
+        const range = document.createRange();
+        range.selectNodeContents(element);
+        for (const rect of range.getClientRects()) {
+          if (!rect.width || !rect.height) continue;
+          const overlaps = rect.left < buttonRect.right && rect.right > buttonRect.left && rect.top < buttonRect.bottom && rect.bottom > buttonRect.top;
+          if (overlaps) collisions.push({ text: element.textContent, className: element.className, rect: rect.toJSON() });
+          const x = Math.max(rect.left + 0.5, Math.min(rect.right - 0.5, (rect.left + rect.right) / 2));
+          const y = Math.max(rect.top + 0.5, Math.min(rect.bottom - 0.5, (rect.top + rect.bottom) / 2));
+          if (document.elementFromPoint(x, y)?.closest('.room-card__edit')) buttonHits.push({ text: element.textContent, x, y });
+        }
+      }
+      return {
+        kind: ${JSON.stringify(kind)},
+        collisions,
+        buttonHits,
+        actionPosition: getComputedStyle(card.querySelector('.room-card__actions')).position,
+        edit: buttonRect.toJSON(),
+        card: card.getBoundingClientRect().toJSON(),
+      };
+    })()`);
+    assert.deepEqual(layout.collisions, [], `${kind} Edit must not geometrically cover any rendered text`);
+    assert.deepEqual(layout.buttonHits, [], `${kind} text hit tests must not resolve to Edit`);
+    assert.equal(layout.actionPosition, 'static', `${kind} owner actions reserve normal layout space`);
+    assert.ok(layout.edit.width >= 44 && layout.edit.height >= 44, `${kind} Edit keeps a 44px touch target`);
+  }
+
+  await evaluate(client, `document.querySelector('.room-card[data-room-id="${proposed.id}"]').scrollIntoView({ block: 'center' })`);
+  await writeFile('outputs/issue-43-corrected-long-card-320.png', Buffer.from((await client.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false })).data, 'base64'));
+
   await client.send('Emulation.setDeviceMetricsOverride', { width: 160, height: 844, deviceScaleFactor: 1, mobile: true });
   const zoomLayout = await evaluate(client, `(() => ({ width: innerWidth, pageWidth: document.documentElement.scrollWidth, cards: [...document.querySelectorAll('.room-card')].filter((card) => !card.hidden).map((card) => card.getBoundingClientRect().width) }))()`);
   assert.ok(zoomLayout.pageWidth <= zoomLayout.width, '200% zoom-sized viewport has no page-level horizontal overflow');
   assert.ok(zoomLayout.cards.every((width) => width > 0));
+  const zoomCardLayout = await evaluate(client, `(() => {
+    const card = document.querySelector('.room-card[data-room-id="${proposed.id}"]');
+    const button = card.querySelector('.room-card__edit').getBoundingClientRect();
+    const range = document.createRange();
+    const collisions = [...card.querySelectorAll('.room-card__title,.room-card__owner,.room-card__venue,.room-card__time,.room-card__date-value')].flatMap((element) => {
+      range.selectNodeContents(element);
+      return [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0 && rect.left < button.right && rect.right > button.left && rect.top < button.bottom && rect.bottom > button.top).map((rect) => ({ text: element.textContent, rect: rect.toJSON() }));
+    });
+    return { width: innerWidth, pageWidth: document.documentElement.scrollWidth, collisions, edit: button.toJSON() };
+  })()`);
+  assert.deepEqual(zoomCardLayout.collisions, [], 'long proposed-only text does not overlap Edit at the 200%-zoom-sized viewport');
+  assert.ok(zoomCardLayout.edit.width >= 44 && zoomCardLayout.edit.height >= 44);
+  await writeFile('outputs/issue-43-corrected-long-card-160px.png', Buffer.from((await client.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false })).data, 'base64'));
 
+  await client.send('Emulation.setDeviceMetricsOverride', { width: 640, height: 844, deviceScaleFactor: 1, mobile: false });
+  await evaluate(client, `document.querySelector('.room-card[data-room-id="${proposed.id}"]').scrollIntoView({ block: 'center' })`);
+  const desktopZoomLayout = await evaluate(client, `(() => {
+    const card = document.querySelector('.room-card[data-room-id="${proposed.id}"]');
+    const button = card.querySelector('.room-card__edit').getBoundingClientRect();
+    const range = document.createRange();
+    const collisions = [...card.querySelectorAll('.room-card__title,.room-card__owner,.room-card__venue,.room-card__time,.room-card__date-value')].flatMap((element) => {
+      range.selectNodeContents(element);
+      return [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0 && rect.left < button.right && rect.right > button.left && rect.top < button.bottom && rect.bottom > button.top).map((rect) => ({ text: element.textContent, rect: rect.toJSON() }));
+    });
+    return { width: innerWidth, pageWidth: document.documentElement.scrollWidth, collisions, edit: button.toJSON() };
+  })()`);
+  assert.equal(desktopZoomLayout.width, 640, 'models a 1280 CSS-pixel desktop viewport at 200% browser zoom');
+  assert.ok(desktopZoomLayout.pageWidth <= desktopZoomLayout.width);
+  assert.deepEqual(desktopZoomLayout.collisions, [], 'long proposed-only text does not overlap Edit at 200% zoom');
+  assert.ok(desktopZoomLayout.edit.width >= 44 && desktopZoomLayout.edit.height >= 44);
+  await writeFile('outputs/issue-43-corrected-long-card-200-percent.png', Buffer.from((await client.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false })).data, 'base64'));
+
+  await client.send('Emulation.setDeviceMetricsOverride', { width: 320, height: 844, deviceScaleFactor: 2, mobile: true });
   const todayProposal = `.room-card[data-room-id="${proposed.id}"] .room-card__date-value`;
-  await evaluate(client, `document.querySelector(${JSON.stringify(todayProposal)}).scrollIntoView({ block: 'center' })`);
-  assert.equal(await waitFor(client, `document.querySelector(${JSON.stringify(todayProposal)}).classList.contains('is-proposed-glow-running')`), true, 'starts the shared pulse when an upcoming proposal enters view');
+  await evaluate(client, `(() => { const date = document.querySelector(${JSON.stringify(todayProposal)}); date.parentElement.scrollTop = 0; date.closest('.room-card').scrollIntoView({ block: 'center' }); date.scrollIntoView({ block: 'nearest', inline: 'nearest' }); })()`);
+  const startsGlow = await waitFor(client, `document.querySelector(${JSON.stringify(todayProposal)}).classList.contains('is-proposed-glow-running')`);
+  assert.equal(startsGlow, true, `starts the shared pulse when an upcoming proposal enters view: ${JSON.stringify(await evaluate(client, `(() => { const date = document.querySelector(${JSON.stringify(todayProposal)}); const region = date.parentElement; return { date: date.getBoundingClientRect().toJSON(), region: region.getBoundingClientRect().toJSON(), scrollTop: region.scrollTop, running: date.classList.contains('is-proposed-glow-running'), visibility: getComputedStyle(date).visibility, overflowX: getComputedStyle(region).overflowX, overflowY: getComputedStyle(region).overflowY }; })()`))}`);
   await client.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
   assert.equal(await waitFor(client, `!document.querySelector(${JSON.stringify(todayProposal)}).classList.contains('is-proposed-glow-running')`), true, 'stops the proposed-date pulse for reduced motion');
   const reducedGlow = await evaluate(client, `(() => { const date = document.querySelector(${JSON.stringify(todayProposal)}); const style = getComputedStyle(date); return { animation: style.animationName, shadow: style.textShadow }; })()`);
   assert.equal(reducedGlow.animation, 'none');
   assert.notEqual(reducedGlow.shadow, 'none', 'reduced motion keeps the static readable highlight');
+  const reducedMotionLayout = await evaluate(client, `(() => {
+    const card = document.querySelector('.room-card[data-room-id="${proposed.id}"]');
+    const button = card.querySelector('.room-card__edit');
+    const box = button.getBoundingClientRect();
+    const range = document.createRange();
+    const collisions = [...card.querySelectorAll('.room-card__title,.room-card__owner,.room-card__venue,.room-card__time,.room-card__date-value')].flatMap((element) => {
+      range.selectNodeContents(element);
+      return [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0 && rect.left < box.right && rect.right > box.left && rect.top < box.bottom && rect.bottom > box.top).map((rect) => ({ text: element.textContent, rect: rect.toJSON() }));
+    });
+    return { collisions, actionPosition: getComputedStyle(card.querySelector('.room-card__actions')).position, editHeight: box.height };
+  })()`);
+  assert.deepEqual(reducedMotionLayout.collisions, [], 'reduced-motion proposed-only card text does not overlap Edit');
+  assert.equal(reducedMotionLayout.actionPosition, 'static');
+  assert.ok(reducedMotionLayout.editHeight >= 44);
   await client.send('Emulation.setEmulatedMedia', { features: [] });
   assert.equal(await waitFor(client, `document.querySelector(${JSON.stringify(todayProposal)}).classList.contains('is-proposed-glow-running')`), true, 'restores the pulse when motion is allowed again');
+
+  const clippedGlow = await evaluate(client, `(() => {
+    const today = document.querySelector('.room-card[data-room-id="${proposed.id}"] time[datetime="2026-10-27"]');
+    const region = today.parentElement;
+    region.scrollTop = region.scrollHeight;
+    region.dispatchEvent(new Event('scroll'));
+    const dateRect = today.getBoundingClientRect();
+    const regionRect = region.getBoundingClientRect();
+    return { scrollTop: region.scrollTop, clipped: dateRect.bottom <= regionRect.top || dateRect.top >= regionRect.bottom, running: today.classList.contains('is-proposed-glow-running') };
+  })()`);
+  assert.equal(clippedGlow.clipped, true, 'the qualifying date is fully outside its own scrollable region');
+  assert.equal(await waitFor(client, `!document.querySelector('.room-card[data-room-id="${proposed.id}"] time[datetime="2026-10-27"]').classList.contains('is-proposed-glow-running')`), true, 'pauses the pulse when ancestor clipping hides the qualifying date');
+  const resumedGlow = await evaluate(client, `(() => {
+    const today = document.querySelector('.room-card[data-room-id="${proposed.id}"] time[datetime="2026-10-27"]');
+    const tomorrow = document.querySelector('.room-card[data-room-id="${proposed.id}"] time[datetime="2026-10-28"]');
+    const region = today.parentElement;
+    region.scrollTop = 0;
+    region.dispatchEvent(new Event('scroll'));
+    const delay = today.style.getPropertyValue('--proposed-glow-delay');
+    const tomorrowDelay = tomorrow.style.getPropertyValue('--proposed-glow-delay');
+    const expected = -Math.floor(((document.timeline.currentTime % 2800) + 2800) % 2800);
+    return { running: today.classList.contains('is-proposed-glow-running'), tomorrowRunning: tomorrow.classList.contains('is-proposed-glow-running'), delay, tomorrowDelay, expected };
+  })()`);
+  assert.equal(resumedGlow.running, true, 'restarts the date pulse when it returns to the visible region');
+  assert.equal(resumedGlow.tomorrowRunning, true, 'today and tomorrow dates resume together');
+  assert.equal(resumedGlow.delay, resumedGlow.tomorrowDelay, 're-entry retains the shared page-wide pulse phase');
+  assert.ok(Math.abs(Number.parseFloat(resumedGlow.delay) - resumedGlow.expected) < 100, 're-entry aligns with the current shared animation phase');
+
+  fixture.setNow('2026-10-27T17:00:00.000Z');
+  await evaluate(client, `window.__setIssue43Now(Date.parse('2026-10-27T17:00:00.000Z'))`);
+  assert.equal(await evaluate(client, 'typeof window.__fireRoomDayRollover === "function"'), true, 'captures the scheduled Bangkok-midnight refresh');
+  await evaluate(client, 'window.__fireRoomDayRollover()');
+  assert.equal(await waitFor(client, `!document.querySelector('.room-card[data-room-id="${proposed.id}"] time[datetime="2026-10-27"]')`), true, 'removes yesterday from the upcoming proposed dates at Bangkok midnight');
+  const midnightState = await evaluate(client, `(() => {
+    const card = document.querySelector('.room-card[data-room-id="${proposed.id}"]');
+    const tomorrow = card.querySelector('.room-card__dates--proposed time[datetime="2026-10-28"]');
+    const order = [...document.querySelectorAll('.room-card')].map((item) => item.dataset.roomId);
+    return {
+      cardRetained: card === window.__issue43KeyedCard,
+      yesterdayDetached: !window.__issue43KeyedDates.get('2026-10-27').isConnected,
+      todayRetained: tomorrow === window.__issue43KeyedDates.get('2026-10-28'),
+      todayGlows: tomorrow?.classList.contains('is-proposed-date-glowing'),
+      orderChanged: JSON.stringify(order) !== JSON.stringify(window.__issue43InitialOrder),
+      movedBehindMixed: order.indexOf('${proposed.id}') > order.indexOf('${mixed.id}'),
+    };
+  })()`);
+  assert.equal(midnightState.cardRetained, true, 'keeps the keyed card during date rollover and resort');
+  assert.equal(midnightState.yesterdayDetached, true, 'drops the expired date node at Bangkok midnight');
+  assert.equal(midnightState.todayRetained, true, 'preserves the existing keyed node for tomorrow as it becomes today');
+  assert.equal(midnightState.todayGlows, true, 'the date that becomes today remains highlighted and pulsing');
+  assert.equal(midnightState.orderChanged, true, 'resorts cards when their earliest upcoming date changes');
+  assert.equal(midnightState.movedBehindMixed, true, 'keeps date order after the room list is reordered');
+
+  const scheduleTomorrow = await fetch(`${fixture.baseUrl}/api/rooms/${proposed.id}/admin/events/2026-10-28`, {
+    method: 'PUT', headers: headers(fixture.baseUrl, owner),
+    body: JSON.stringify({ eventId: tomorrowProposalEvent.eventId, revision: tomorrowProposalEvent.revision, status: 'scheduled', requestId: randomUUID() }),
+  });
+  assert.equal(scheduleTomorrow.status, 200);
+  const scheduledTomorrow = await scheduleTomorrow.json();
+  assert.equal(await waitFor(client, `Boolean(document.querySelector('.room-card[data-room-id="${proposed.id}"] .room-card__dates--scheduled time[datetime="2026-10-28"]') && !document.querySelector('.room-card[data-room-id="${proposed.id}"] .room-card__dates--proposed time[datetime="2026-10-28"]'))`), true, 'moves a scheduled value out of Proposed');
+  assert.equal(await evaluate(client, `!window.__issue43KeyedDates.get('2026-10-28').classList.contains('is-proposed-date-glowing') && !document.querySelector('.room-card[data-room-id="${proposed.id}"] .room-card__dates--scheduled time[datetime="2026-10-28"]').classList.contains('is-proposed-date-glowing')`), true, 'stops the proposed glow when the event is scheduled');
+
+  const deleteTomorrow = await fetch(`${fixture.baseUrl}/api/rooms/${proposed.id}/admin/events/2026-10-28`, {
+    method: 'DELETE', headers: headers(fixture.baseUrl, owner),
+    body: JSON.stringify({ eventId: scheduledTomorrow.event.eventId, revision: scheduledTomorrow.event.revision, requestId: randomUUID() }),
+  });
+  assert.equal(deleteTomorrow.status, 200);
+  assert.equal(await waitFor(client, `!document.querySelector('.room-card[data-room-id="${proposed.id}"] .room-card__dates--scheduled time[datetime="2026-10-28"]') && !document.querySelector('.room-card[data-room-id="${proposed.id}"]').classList.contains('is-scheduled')`), true, 'removes the scheduled date and its card status after deletion');
 
   await client.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
   await client.send('Page.navigate', { url: `${fixture.baseUrl}/vote/${mixed.id}` });
