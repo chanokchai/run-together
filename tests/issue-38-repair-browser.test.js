@@ -274,7 +274,8 @@ test('Issue 38 room-list cards stay readable, scrollable, editable, keyed, and s
       };
     })()`);
     if (layout.titleDatesOverlap) t.diagnostic(JSON.stringify(layout));
-    assert.ok(Math.abs(layout.card.width - layout.card.height) <= 1, 'preserves square cards on desktop');
+    assert.ok(layout.card.height >= 180, 'keeps the consistent minimum card height on desktop');
+    assert.ok(layout.card.height > layout.card.width, 'lets long room text and date lists grow the card instead of clipping');
     assert.equal(layout.actionPosition, 'absolute', 'keeps the Edit action absolutely positioned');
     assert.equal(layout.numberActionsOverlap, false, 'separates the room number and Edit action');
     assert.equal(layout.numberIconOverlap, false, 'separates the room number and icon');
@@ -297,7 +298,7 @@ test('Issue 38 room-list cards stay readable, scrollable, editable, keyed, and s
     assert.equal(layout.scheduledLabel.height > 0 && layout.proposedLabel.height > 0, true, 'keeps both date labels visible');
     assert.ok(layout.number.top >= layout.card.top && layout.title.bottom <= layout.card.bottom
       && layout.scheduledLine.bottom <= layout.card.bottom && layout.proposedLine.bottom <= layout.card.bottom,
-    'keeps identity and both date regions within the square card');
+    'keeps identity and both date regions within the variable-height card');
 
     const reachableDates = await evaluate(client, `(() => {
       return [
@@ -306,17 +307,15 @@ test('Issue 38 room-list cards stay readable, scrollable, editable, keyed, and s
       ].map(([selector, token]) => {
         const region = document.querySelector('.room-card[data-room-id="${stressCard.id}"] ' + selector);
         region.scrollTop = region.scrollHeight;
-        const text = region.firstChild;
-        const start = text.textContent.lastIndexOf(token);
+        const text = [...region.querySelectorAll('time')].find((date) => date.textContent === token);
         const range = document.createRange();
-        range.setStart(text, start);
-        range.setEnd(text, start + token.length);
+        range.selectNodeContents(text);
         const value = range.getBoundingClientRect();
         const box = region.getBoundingClientRect();
-        return { token, scrollTop: region.scrollTop, visible: value.top >= box.top && value.bottom <= box.bottom && value.left >= box.left && value.right <= box.right };
+        return { token, scrollTop: region.scrollTop, scrollLeft: region.scrollLeft, value: value.toJSON(), box: box.toJSON(), visible: value.top >= box.top && value.bottom <= box.bottom && value.left >= box.left && value.right <= box.right };
       });
     })()`);
-    assert.ok(reachableDates.every(({ scrollTop, visible }) => scrollTop > 0 && visible), 'scrolling reaches the latest stored Scheduled and Proposed dates outside the current week');
+    assert.ok(reachableDates.every(({ scrollTop, visible }) => scrollTop > 0 && visible), `scrolling reaches the latest stored Scheduled and Proposed dates outside the current week: ${JSON.stringify(reachableDates)}`);
 
     await clickSelector(client, `.room-card[data-room-id="${stressCard.id}"] .room-card__edit`);
     assert.equal(await waitFor(client, 'document.querySelector(\'.room-edit-dialog\')?.open'), true, 'an owner can open Edit with a real pointer while the scheduled effect runs');
@@ -330,21 +329,22 @@ test('Issue 38 room-list cards stay readable, scrollable, editable, keyed, and s
       const card = document.querySelector('.room-card[data-room-id="${stressCard.id}"]');
       const original = card.style.getPropertyValue('--room-color');
       const colors = ${JSON.stringify(ROOM_COLOR_PALETTE)};
-      const rendered = colors.map((color) => { card.style.setProperty('--room-color', color); return { color: getComputedStyle(card).getPropertyValue('--room-color').trim(), square: Math.abs(card.getBoundingClientRect().width - card.getBoundingClientRect().height) <= 1 }; });
+      const rendered = colors.map((color) => { card.style.setProperty('--room-color', color); const box = card.getBoundingClientRect(); return { color: getComputedStyle(card).getPropertyValue('--room-color').trim(), width: box.width, height: box.height }; });
       card.style.setProperty('--room-color', original);
       return rendered;
     })()`);
     assert.deepEqual(paletteCheck.map(({ color }) => color), [...ROOM_COLOR_PALETTE], 'renders the repaired card against every supported palette color');
-    assert.ok(paletteCheck.every(({ square }) => square), 'keeps square geometry for every palette color');
+    assert.ok(paletteCheck.every(({ width, height }) => width === layout.card.width && height === layout.card.height), 'keeps content-driven geometry unchanged for every palette color');
 
     await evaluate(client, `(() => { const values = document.querySelector('.room-card[data-room-id="${stressCard.id}"] .room-card__dates--proposed .room-card__date-values'); values.scrollTop = 0; values.focus(); })()`);
     await pressKey(client, 'ArrowDown', 'ArrowDown', 40);
     assert.equal(await waitFor(client, `document.querySelector('.room-card[data-room-id="${stressCard.id}"] .room-card__dates--proposed .room-card__date-values').scrollTop > 0`), true, 'keyboard users can scroll the full proposed-date value region');
     await client.send('Emulation.setDeviceMetricsOverride', { width: 320, height: 844, deviceScaleFactor: 1, mobile: true });
     await evaluate(client, `(() => { const card = document.querySelector('.room-card[data-room-id="${stressCard.id}"]'); card.scrollIntoView({ block: 'center' }); const value = card.querySelector('.room-card__dates--scheduled .room-card__date-values'); value.style.height = '18px'; value.style.maxHeight = '18px'; value.scrollTop = 0; })()`);
-    const mobileCard = await evaluate(client, `(() => { const card = document.querySelector('.room-card[data-room-id="${stressCard.id}"]'); const box = card.getBoundingClientRect(); const value = card.querySelector('.room-card__dates--scheduled .room-card__date-values'); const area = value.getBoundingClientRect(); const title = card.querySelector('.room-card__title'); const identity = card.querySelector('.room-card__identity').getBoundingClientRect(); const range = document.createRange(); range.selectNodeContents(title); const textRects = [...range.getClientRects()].map((rect) => rect.toJSON()); value.scrollTop = 0; return { width: innerWidth, card: box.toJSON(), area: area.toJSON(), pageWidth: document.documentElement.scrollWidth, identity: identity.toJSON(), textRects, titleContentVisible: textRects.length > 0 && textRects.every((rect) => rect.top >= identity.top && rect.bottom <= identity.bottom) }; })()`);
+    const mobileCard = await evaluate(client, `(() => { const card = document.querySelector('.room-card[data-room-id="${stressCard.id}"]'); const box = card.getBoundingClientRect(); const value = card.querySelector('.room-card__dates--scheduled .room-card__date-values'); const area = value.getBoundingClientRect(); const title = card.querySelector('.room-card__title'); const identity = card.querySelector('.room-card__identity').getBoundingClientRect(); const range = document.createRange(); range.selectNodeContents(title); const textRects = [...range.getClientRects()].map((rect) => rect.toJSON()); value.scrollTop = 0; return { width: innerWidth, card: box.toJSON(), area: area.toJSON(), pageWidth: document.documentElement.scrollWidth, identity: identity.toJSON(), textRects, titleContentVisible: textRects.length > 0 && textRects.every((rect) => rect.top >= box.top && rect.bottom <= box.bottom) }; })()`);
     if (!mobileCard.titleContentVisible) t.diagnostic(JSON.stringify(mobileCard));
-    assert.ok(Math.abs(mobileCard.card.width - mobileCard.card.height) <= 1, 'preserves square cards at a 320px mobile viewport');
+    assert.ok(mobileCard.card.height >= 180, 'keeps the consistent minimum card height at a 320px mobile viewport');
+    assert.ok(mobileCard.card.height > 180, 'lets long text expand beyond the minimum card height at a 320px mobile viewport');
     assert.ok(mobileCard.pageWidth <= 320, 'prevents horizontal overflow at 320px');
     assert.equal(mobileCard.titleContentVisible, true, 'keeps every line of the full 30-code-point title visible at 320px');
     await client.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
@@ -379,8 +379,10 @@ test('Issue 38 room-list cards stay readable, scrollable, editable, keyed, and s
     await evaluate(client, 'document.querySelector(\'.room-edit-dialog\').close()');
 
     await client.send('Emulation.setDeviceMetricsOverride', { width: 320, height: 844, deviceScaleFactor: 1, mobile: true });
-    await evaluate(client, 'window.scrollTo(0, document.documentElement.scrollHeight)');
-    assert.equal(await waitFor(client, `['${stressCard.id}', '${twoDates.id}'].every((id) => !document.querySelector('.room-card[data-room-id="' + id + '"]').classList.contains('is-beam-running'))`), true, 'pauses room-list beams when their scheduled cards are offscreen');
+    await evaluate(client, `(() => { document.body.style.paddingBottom = '1000px'; const cards = ['${stressCard.id}', '${twoDates.id}'].map((id) => document.querySelector('.room-card[data-room-id="' + id + '"]')); window.scrollTo(0, Math.max(...cards.map((card) => card.getBoundingClientRect().bottom + scrollY)) + 1); })()`);
+    const pausedOffscreenBeams = await waitFor(client, `['${stressCard.id}', '${twoDates.id}'].every((id) => !document.querySelector('.room-card[data-room-id="' + id + '"]').classList.contains('is-beam-running'))`);
+    const pauseState = await evaluate(client, `({ scrollY, maxScroll: document.documentElement.scrollHeight - innerHeight, cards: ['${stressCard.id}', '${twoDates.id}'].map((id) => { const card=document.querySelector('.room-card[data-room-id="' + id + '"]'); const box=card.getBoundingClientRect(); return { top:box.top, bottom:box.bottom, running:card.classList.contains('is-beam-running') }; }) })`);
+    assert.equal(pausedOffscreenBeams, true, `pauses room-list beams when their scheduled cards are offscreen: ${JSON.stringify(pauseState)}`);
     const offscreenCards = await evaluate(client, `['${stressCard.id}', '${twoDates.id}'].map((id) => { const box = document.querySelector('.room-card[data-room-id="' + id + '"]').getBoundingClientRect(); return box.bottom <= 0 || box.top >= innerHeight; })`);
     assert.ok(offscreenCards.every(Boolean), 'moves both scheduled cards outside the mobile viewport before checking pause behavior');
     await evaluate(client, `document.querySelector('.room-card[data-room-id="${stressCard.id}"]').scrollIntoView({ block: 'center' })`);
@@ -476,7 +478,7 @@ test('Issue 38 room-list cards stay readable, scrollable, editable, keyed, and s
     fixture.setNow('2026-10-29T05:00:00.000Z');
     assert.equal(await waitFor(client, 'typeof window.__fireRoomDayRollover === "function"'), true, 'installs a deterministic hook for the room-list Bangkok day rollover');
     await evaluate(client, 'window.__fireRoomDayRollover()');
-    assert.equal(await waitFor(client, `document.querySelector('.room-card[data-room-id="${pastOnly.id}"] .room-card__dates--scheduled .room-card__date-values').textContent === 'None' && !document.querySelector('.room-card[data-room-id="${pastOnly.id}"]').classList.contains('is-scheduled')`), true, 'Bangkok day rollover refresh removes past-only scheduled dates and their effect');
+    assert.equal(await waitFor(client, `document.querySelector('.room-card[data-room-id="${pastOnly.id}"] .room-card__dates--scheduled').hidden && !document.querySelector('.room-card[data-room-id="${pastOnly.id}"]').classList.contains('is-scheduled')`), true, 'Bangkok day rollover refresh hides past-only scheduled dates and their effect');
     assert.equal(await evaluate(client, `!document.querySelector('.room-card[data-room-id="${pastOnly.id}"]').classList.contains('is-beam-running')`), true, 'past-only rooms do not retain scheduled animation effects after Bangkok midnight');
   } finally {
     memberClient?.close();

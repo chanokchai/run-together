@@ -291,6 +291,52 @@ const MIGRATIONS = [
       }
     },
   },
+  {
+    version: 8,
+    name: 'room_venue_and_time',
+    statements: [
+      "ALTER TABLE rooms ADD COLUMN venue TEXT NOT NULL DEFAULT '' CHECK (length(trim(venue)) <= 30)",
+      "ALTER TABLE rooms ADD COLUMN time TEXT NOT NULL DEFAULT '' CHECK (time = '' OR (time GLOB '[0-2][0-9]:[0-5][0-9]' AND CAST(substr(time, 1, 2) AS INTEGER) BETWEEN 0 AND 23))",
+    ],
+  },
+  {
+    version: 9,
+    name: 'expand_room_icon_choices',
+    foreignKeysOff: true,
+    apply(database) {
+      const colors = ROOM_COLOR_PALETTE.map((color) => `'${color}'`).join(', ');
+      const icons = ROOM_ICONS.map((icon) => `'${icon}'`).join(', ');
+      database.exec('DROP TRIGGER join_new_users_to_legacy_room');
+      database.exec(`
+        CREATE TABLE rooms_issue_43_migration (
+          id TEXT PRIMARY KEY,
+          display_number INTEGER NOT NULL CHECK (display_number BETWEEN 1 AND 99),
+          title TEXT NOT NULL CHECK (length(trim(title)) BETWEEN 1 AND 30),
+          color TEXT NOT NULL CHECK (color IN (${colors})),
+          icon TEXT NOT NULL CHECK (icon IN (${icons})),
+          owner_user_id INTEGER REFERENCES users(id) ON DELETE RESTRICT,
+          created_at TEXT NOT NULL,
+          venue TEXT NOT NULL DEFAULT '' CHECK (length(trim(venue)) <= 30),
+          time TEXT NOT NULL DEFAULT '' CHECK (time = '' OR (time GLOB '[0-2][0-9]:[0-5][0-9]' AND CAST(substr(time, 1, 2) AS INTEGER) BETWEEN 0 AND 23))
+        );
+        INSERT INTO rooms_issue_43_migration
+          (id, display_number, title, color, icon, owner_user_id, created_at, venue, time)
+        SELECT id, display_number, title, color, icon, owner_user_id, created_at, venue, time FROM rooms;
+        DROP TABLE rooms;
+        ALTER TABLE rooms_issue_43_migration RENAME TO rooms;
+        CREATE TRIGGER join_new_users_to_legacy_room
+        AFTER INSERT ON users
+        BEGIN
+          UPDATE rooms SET owner_user_id = NEW.id
+          WHERE id = '${LEGACY_ROOM_ID}' AND owner_user_id IS NULL AND NEW.role = 'admin';
+          INSERT OR IGNORE INTO room_memberships (room_id, user_id, joined_at)
+          SELECT id, NEW.id, NEW.created_at FROM rooms;
+        END;
+      `);
+      const violations = database.pragma('foreign_key_check');
+      if (violations.length) throw new Error('room icon migration would violate existing foreign keys');
+    },
+  },
 ];
 
 export function openDatabase(databasePath) {
@@ -322,7 +368,15 @@ export function migrate(database, { throughVersion = Infinity } = {}) {
       else for (const statement of migration.statements) database.exec(statement);
       insertMigration.run(migration.version, migration.name, appliedAt);
     });
-    applyMigration();
+    if (migration.foreignKeysOff) {
+      if (database.inTransaction) throw new Error(`migration ${migration.name} requires an outer transaction boundary`);
+      database.pragma('foreign_keys = OFF');
+      try {
+        applyMigration();
+      } finally {
+        database.pragma('foreign_keys = ON');
+      }
+    } else applyMigration();
   }
   return database;
 }

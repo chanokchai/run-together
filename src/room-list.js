@@ -1,6 +1,7 @@
-import { DEFAULT_ROOM_ICON, ROOM_ICONS } from './room-contract.js';
+import { DEFAULT_ROOM_ICON, ROOM_ICONS } from './room-contract.js?v=issue-43-icons-1';
 import { createScheduledEffectController } from './vote-board.js';
 import { millisecondsUntilBangkokMidnight } from './run-events.js';
+import { addDays, getBangkokDate } from './calendar.js?v=issue-43-calendar-1';
 
 const ICONS = Object.freeze({
   running: { glyph: '🏃', label: 'Running' },
@@ -12,6 +13,16 @@ const ICONS = Object.freeze({
   cycling: { glyph: '🚴', label: 'Cycling' },
   swimming: { glyph: '🏊', label: 'Swimming' },
   hiking: { glyph: '🥾', label: 'Hiking' },
+  dinner: { glyph: '🍽️', label: 'Dinner' },
+  office: { glyph: '🏢', label: 'Office' },
+  meeting: { glyph: '🤝', label: 'Meeting' },
+  coffee: { glyph: '☕', label: 'Coffee' },
+  birthday: { glyph: '🎂', label: 'Birthday' },
+  study: { glyph: '📚', label: 'Study' },
+  shopping: { glyph: '🛍️', label: 'Shopping' },
+  travel: { glyph: '✈️', label: 'Travel' },
+  cinema: { glyph: '🎬', label: 'Cinema' },
+  music: { glyph: '🎵', label: 'Music' },
 });
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -34,7 +45,7 @@ function formatRoomDate(value) {
 function formatDates(values) {
   return Array.isArray(values) && values.length
     ? values.map(formatRoomDate).filter(Boolean).join(', ')
-    : 'None';
+    : '';
 }
 
 function titleError(value) {
@@ -45,27 +56,43 @@ function titleError(value) {
   return '';
 }
 
+function venueError(value) {
+  if (typeof value !== 'string') return 'Venue must be text. / สถานที่ต้องเป็นข้อความ';
+  if (Array.from(value.trim()).length > 30) return 'Venue must be 30 characters or fewer. / สถานที่ต้องไม่เกิน 30 ตัวอักษร';
+  return '';
+}
+
+function timeError(value) {
+  if (typeof value !== 'string' || (value !== '' && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value))) {
+    return 'Time must use valid 24-hour HH:mm format. / กรุณาระบุเวลาแบบ 24 ชั่วโมง HH:mm';
+  }
+  return '';
+}
+
 function createIconPicker(form, pickerId, selectedIcon) {
   const picker = document.createElement('fieldset');
   picker.className = 'room-icon-picker';
   picker.id = pickerId;
   addText(picker, 'legend', 'Choose a sports or event icon / เลือกไอคอนกีฬา');
+  const label = document.createElement('label');
+  label.className = 'room-icon-picker__label';
+  label.htmlFor = `${pickerId}-select`;
+  addText(label, 'span', 'Room icon / ไอคอนห้อง');
+  const select = document.createElement('select');
+  select.className = 'room-icon-picker__select';
+  select.id = `${pickerId}-select`;
+  select.name = 'icon';
+  select.setAttribute('aria-label', 'Room icon / ไอคอนห้อง');
   ROOM_ICONS.forEach((icon) => {
     const option = ICONS[icon];
     if (!option) return;
-    const label = document.createElement('label');
-    const input = document.createElement('input');
-    input.type = 'radio';
-    input.name = 'icon';
-    input.value = icon;
-    input.checked = icon === selectedIcon;
-    input.defaultChecked = icon === selectedIcon;
-    label.append(input);
-    const glyph = addText(label, 'span', option.glyph);
-    glyph.setAttribute('aria-hidden', 'true');
-    addText(label, 'span', option.label);
-    picker.append(label);
+    const choice = addText(select, 'option', `${option.glyph} ${option.label}`);
+    choice.value = icon;
+    choice.selected = icon === selectedIcon;
+    choice.defaultSelected = icon === selectedIcon;
   });
+  label.append(select);
+  picker.append(label);
   form.querySelector('.room-icon-picker')?.replaceWith(picker);
   if (!form.querySelector('.room-icon-picker')) form.append(picker);
   return picker;
@@ -75,22 +102,74 @@ function selectedIcon(form) {
   return new FormData(form).get('icon') || DEFAULT_ROOM_ICON;
 }
 
+function appendMetadataInput(form, { id, name, labelText, time = false }) {
+  const label = document.createElement('label');
+  label.htmlFor = id;
+  label.textContent = labelText;
+  const input = document.createElement('input');
+  input.id = id;
+  input.name = name;
+  input.type = 'text';
+  input.autocomplete = 'off';
+  input.maxLength = time ? 5 : 60;
+  if (time) {
+    input.inputMode = 'numeric';
+    input.pattern = '(?:[01]\\d|2[0-3]):[0-5]\\d';
+    input.placeholder = 'HH:mm';
+    input.setAttribute('aria-describedby', `${id}-format`);
+    const hint = document.createElement('span');
+    hint.id = `${id}-format`;
+    hint.className = 'visually-hidden';
+    hint.textContent = 'Use a valid 24-hour time in HH:mm format.';
+    form.append(hint);
+  }
+  label.append(input);
+  form.append(label);
+  return input;
+}
+
 function dateLine(parent, className, label) {
   const line = document.createElement('p');
   line.className = className;
   addText(line, 'strong', `${label}: `);
-  const dateValues = addText(line, 'span', 'None');
+  const dateValues = document.createElement('span');
   dateValues.className = 'room-card__date-values';
   dateValues.tabIndex = 0;
   dateValues.setAttribute('role', 'region');
+  line.append(dateValues);
   parent.append(line);
-  return line;
+  return { line, dateValues, nodes: new Map(), label };
 }
 
-function updateDateLine(line, label, values, room) {
-  const dateValues = line.querySelector('.room-card__date-values');
-  dateValues.textContent = formatDates(values);
-  dateValues.setAttribute('aria-label', `${label} dates for Room ${String(room.displayNumber).padStart(2, '0')}: ${room.title}`);
+function updateDateLine(state, values, room, { today, tomorrow, glow = false } = {}) {
+  const dates = (Array.isArray(values) ? values : []).filter((date) => formatRoomDate(date));
+  state.line.hidden = dates.length === 0;
+  const formattedDates = formatDates(dates);
+  state.dateValues.setAttribute('aria-label', `${state.label} dates for Room ${String(room.displayNumber).padStart(2, '0')}: ${room.title}${formattedDates ? `: ${formattedDates}` : ''}`);
+  const activeDates = new Set(dates);
+  state.nodes.forEach((node, date) => {
+    if (activeDates.has(date)) return;
+    node.remove();
+    state.nodes.delete(date);
+  });
+  const ordered = dates.map((date) => {
+    let node = state.nodes.get(date);
+    if (!node) {
+      node = document.createElement('time');
+      node.className = 'room-card__date-value';
+      state.nodes.set(date, node);
+    }
+    node.dateTime = date;
+    node.textContent = formatRoomDate(date);
+    node.classList.toggle('is-proposed-date-glowing', glow && (date === today || date === tomorrow));
+    return node;
+  });
+  ordered.forEach((node, index) => {
+    if (state.dateValues.children[index] !== node) {
+      state.dateValues.insertBefore(node, state.dateValues.children[index] ?? null);
+    }
+  });
+  return ordered;
 }
 
 async function responseBody(response) {
@@ -101,12 +180,133 @@ async function responseBody(response) {
   }
 }
 
+function createProposedGlowController({ createObserver, createMotionQuery, now } = {}) {
+  const states = new Map();
+  const byElement = new Map();
+  const scopeKeys = new Map();
+  const view = globalThis.window;
+  const cycleMs = 2800;
+  const motion = (createMotionQuery ?? ((query) => globalThis.matchMedia?.(query)))('(prefers-reduced-motion: reduce)');
+  const clock = now ?? (() => globalThis.document?.timeline?.currentTime ?? globalThis.performance?.now?.() ?? Date.now());
+
+  function phaseDelay(timestamp = clock()) {
+    const elapsed = ((timestamp % cycleMs) + cycleMs) % cycleMs;
+    return `-${Math.floor(elapsed)}ms`;
+  }
+
+  function isVisible(element) {
+    const bounds = element.getBoundingClientRect?.();
+    if (!bounds || bounds.width <= 0 || bounds.height <= 0 || !view) return false;
+    const style = view.getComputedStyle?.(element);
+    return bounds.right > 0 && bounds.bottom > 0 && bounds.left < view.innerWidth
+      && bounds.top < view.innerHeight && style?.visibility !== 'hidden';
+  }
+
+  function stop(element) {
+    element.classList.remove('is-proposed-glow-running');
+    element.style.removeProperty('--proposed-glow-delay');
+  }
+
+  function apply(state, timestamp = clock()) {
+    if (!state.inViewport || motion?.matches) {
+      stop(state.element);
+      return;
+    }
+    if (!state.element.classList.contains('is-proposed-glow-running')) {
+      state.element.style.setProperty('--proposed-glow-delay', phaseDelay(timestamp));
+      state.element.classList.add('is-proposed-glow-running');
+    }
+  }
+
+  function updateVisibility(element, timestamp = clock()) {
+    const state = byElement.get(element);
+    if (!state) return;
+    state.inViewport = isVisible(element);
+    apply(state, timestamp);
+  }
+
+  const observerCallback = (entries) => {
+    const timestamp = clock();
+    entries.forEach(({ target }) => updateVisibility(target, timestamp));
+  };
+  const Observer = globalThis.IntersectionObserver ?? view?.IntersectionObserver;
+  const observer = createObserver ? createObserver(observerCallback)
+    : Observer ? new Observer(observerCallback) : null;
+  const refreshVisibility = () => {
+    const timestamp = clock();
+    states.forEach((state) => {
+      state.inViewport = isVisible(state.element);
+      apply(state, timestamp);
+    });
+  };
+  const motionChanged = refreshVisibility;
+  motion?.addEventListener?.('change', motionChanged);
+  if (!motion?.addEventListener) motion?.addListener?.(motionChanged);
+  view?.addEventListener?.('scroll', refreshVisibility, { passive: true, capture: true });
+  view?.addEventListener?.('resize', refreshVisibility);
+
+  function untrack(key, state) {
+    stop(state.element);
+    observer?.unobserve(state.element);
+    byElement.delete(state.element);
+    states.delete(key);
+  }
+
+  return {
+    sync(scope, items) {
+      const currentKeys = new Set();
+      const timestamp = clock();
+      (Array.isArray(items) ? items : []).forEach((item) => {
+        if (!item?.element || item.key === undefined || item.key === null) return;
+        const key = `${scope}:${item.key}`;
+        currentKeys.add(key);
+        let state = states.get(key);
+        if (!state) {
+          state = { element: item.element, inViewport: false };
+          states.set(key, state);
+          byElement.set(state.element, state);
+          observer?.observe(state.element);
+        } else if (state.element !== item.element) {
+          stop(state.element);
+          observer?.unobserve(state.element);
+          byElement.delete(state.element);
+          state.element = item.element;
+          state.inViewport = false;
+          byElement.set(state.element, state);
+          observer?.observe(state.element);
+        }
+        state.inViewport = isVisible(state.element);
+        apply(state, timestamp);
+      });
+      const previousKeys = scopeKeys.get(scope) ?? new Set();
+      previousKeys.forEach((key) => {
+        if (!currentKeys.has(key)) {
+          const state = states.get(key);
+          if (state) untrack(key, state);
+        }
+      });
+      scopeKeys.set(scope, currentKeys);
+    },
+    dispose() {
+      states.forEach((state, key) => untrack(key, state));
+      scopeKeys.clear();
+      observer?.disconnect();
+      motion?.removeEventListener?.('change', motionChanged);
+      if (!motion?.removeEventListener) motion?.removeListener?.(motionChanged);
+      view?.removeEventListener?.('scroll', refreshVisibility, { capture: true });
+      view?.removeEventListener?.('resize', refreshVisibility);
+    },
+  };
+}
+
 export function startRoomListPage() {
   const content = document.querySelector('#rooms-content');
   const cards = document.querySelector('#room-cards');
   const createForm = document.querySelector('#create-room-form');
   const message = document.querySelector('#rooms-message');
   const emptyState = document.querySelector('#rooms-empty');
+  const noMatches = document.querySelector('#rooms-no-matches');
+  const filters = [...document.querySelectorAll('#room-filters input[type="checkbox"]')];
   const displayName = document.querySelector('#rooms-display-name');
   const manageUsers = document.querySelector('#rooms-manage-users');
   const changePin = document.querySelector('#rooms-change-pin');
@@ -116,6 +316,8 @@ export function startRoomListPage() {
   createIconPicker(createForm, 'create-icon-picker', DEFAULT_ROOM_ICON);
   const cardNodes = new Map();
   const scheduledEffects = createScheduledEffectController();
+  const proposedGlow = createProposedGlowController();
+  let currentRooms = [];
   let csrfToken = '';
   let sessionCheck = 0;
   let refreshSequence = 0;
@@ -135,6 +337,7 @@ export function startRoomListPage() {
     cards.replaceChildren();
     cardNodes.clear();
     scheduledEffects.sync('room-card', []);
+    proposedGlow.sync('room-list', []);
     announce('');
     location.replace('/');
   }
@@ -148,16 +351,23 @@ export function startRoomListPage() {
     entry.href = `/vote/${encodeURIComponent(room.id)}`;
     const number = addText(entry, 'span', `Room ${String(room.displayNumber).padStart(2, '0')}`);
     number.className = 'room-card__number';
+    const owner = addText(entry, 'span', '');
+    owner.className = 'room-card__owner';
     const identity = document.createElement('span');
     identity.className = 'room-card__identity';
     const icon = addText(identity, 'span', '');
     icon.className = 'room-card__icon';
     icon.setAttribute('aria-hidden', 'true');
     const iconLabel = addText(identity, 'span', '');
-    iconLabel.className = 'visually-hidden';
+    iconLabel.className = 'room-card__icon-label visually-hidden';
     const title = addText(identity, 'span', '');
     title.className = 'room-card__title';
-    entry.append(identity);
+    identity.append(iconLabel, icon, title);
+    const venue = addText(entry, 'span', '');
+    venue.className = 'room-card__venue';
+    const time = addText(entry, 'span', '');
+    time.className = 'room-card__time';
+    entry.append(identity, venue, time);
     article.append(entry);
     const scheduledLine = dateLine(article, 'room-card__dates room-card__dates--scheduled', 'Scheduled');
     const proposedLine = dateLine(article, 'room-card__dates room-card__dates--proposed', 'Proposed');
@@ -165,6 +375,10 @@ export function startRoomListPage() {
       event.preventDefault();
       void enterRoom(room.id, entry);
     });
+    const summary = document.createElement('div');
+    summary.className = 'room-card__summary';
+    const voterCount = addText(summary, 'span', '0 voters');
+    voterCount.className = 'room-card__voter-count';
     const actions = document.createElement('div');
     actions.className = 'room-card__actions';
     const edit = addText(actions, 'button', 'Edit');
@@ -172,28 +386,43 @@ export function startRoomListPage() {
     edit.className = 'room-card__edit';
     let node;
     edit.addEventListener('click', () => showEditDialog(node.room));
-    article.append(actions);
-    node = { article, entry, number, icon, iconLabel, title, scheduledLine, proposedLine, edit, room };
+    summary.append(voterCount, actions);
+    article.append(summary);
+    node = {
+      article, entry, number, owner, icon, iconLabel, title, venue, time, voterCount,
+      scheduledLine, proposedLine, edit, room,
+    };
     return node;
   }
 
   function updateCard(node, room) {
     const icon = ICONS[room.icon] ?? ICONS[DEFAULT_ROOM_ICON];
+    const today = getBangkokDate();
+    const tomorrow = addDays(today, 1);
     node.room = room;
     node.article.style.setProperty('--room-color', room.color);
     node.article.classList.toggle('is-scheduled', Boolean(room.summary?.scheduledDates?.length));
     node.number.textContent = `Room ${String(room.displayNumber).padStart(2, '0')}`;
+    node.owner.textContent = room.ownerDisplayName || 'Room owner';
     node.icon.textContent = icon.glyph;
     node.iconLabel.textContent = `${icon.label} icon`;
     node.title.textContent = room.title;
+    node.venue.textContent = room.venue ?? '';
+    node.venue.hidden = !room.venue;
+    node.time.textContent = room.time ?? '';
+    node.time.hidden = !room.time;
+    const count = Number.isSafeInteger(room.voterCount) && room.voterCount >= 0 ? room.voterCount : 0;
+    node.voterCount.textContent = `${count} ${count === 1 ? 'voter' : 'voters'}`;
+    node.voterCount.setAttribute('aria-label', `${count} distinct voters with saved votes today or later in ${node.number.textContent}: ${room.title}`);
     node.entry.setAttribute('aria-label', `Enter ${node.number.textContent}: ${room.title}`);
-    updateDateLine(node.scheduledLine, 'Scheduled', room.summary?.scheduledDates, room);
-    updateDateLine(node.proposedLine, 'Proposed', room.summary?.proposedDates, room);
+    updateDateLine(node.scheduledLine, room.summary?.scheduledDates, room);
+    updateDateLine(node.proposedLine, room.summary?.proposedDates, room, { today, tomorrow, glow: true });
     node.edit.hidden = !room.canEdit;
     node.edit.setAttribute('aria-label', `Edit ${room.title}`);
   }
 
   function renderRooms(rooms) {
+    currentRooms = rooms;
     const liveIds = new Set(rooms.map(({ id }) => id));
     cardNodes.forEach((node, roomId) => {
       if (!liveIds.has(roomId)) {
@@ -201,6 +430,13 @@ export function startRoomListPage() {
         cardNodes.delete(roomId);
       }
     });
+    const myOnly = document.querySelector('#filter-my-voted')?.checked ?? false;
+    const scheduledOnly = document.querySelector('#filter-scheduled')?.checked ?? false;
+    const proposedOnly = document.querySelector('#filter-proposed')?.checked ?? false;
+    const hasStatusFilter = scheduledOnly || proposedOnly;
+    let visibleCount = 0;
+    const scheduled = [];
+    const glowDates = [];
     rooms.forEach((room, index) => {
       let node = cardNodes.get(room.id);
       if (!node) {
@@ -208,14 +444,30 @@ export function startRoomListPage() {
         cardNodes.set(room.id, node);
       }
       updateCard(node, room);
+      const matchesMy = !myOnly || room.myVoted === true;
+      const matchesStatus = !hasStatusFilter
+        || (scheduledOnly && Boolean(room.summary?.scheduledDates?.length))
+        || (proposedOnly && Boolean(room.summary?.proposedDates?.length));
+      node.article.hidden = !(matchesMy && matchesStatus);
+      if (!node.article.hidden) visibleCount += 1;
       const current = cards.children[index];
       if (current !== node.article) cards.insertBefore(node.article, current ?? null);
+      if (room.summary?.scheduledDates?.length) {
+        scheduled.push({ key: room.id, element: node.article, scheduled: true });
+      }
+      node.proposedLine.nodes.forEach((element, date) => {
+        if (element.classList.contains('is-proposed-date-glowing')) {
+          glowDates.push({ key: `${room.id}:${date}`, element });
+        }
+      });
     });
     emptyState.hidden = rooms.length > 0;
-    const scheduled = rooms.filter(({ summary }) => summary?.scheduledDates?.length)
-      .map((room) => ({ key: room.id, element: cardNodes.get(room.id).article, scheduled: true }));
+    if (noMatches) noMatches.hidden = rooms.length === 0 || visibleCount > 0;
     scheduledEffects.sync('room-card', scheduled);
+    proposedGlow.sync('room-list', glowDates);
   }
+
+  filters.forEach((filter) => filter.addEventListener('change', () => renderRooms(currentRooms)));
 
   async function refreshRooms() {
     const sequence = ++refreshSequence;
@@ -318,6 +570,12 @@ export function startRoomListPage() {
       input.autocomplete = 'off';
       label.append(input);
       form.append(label);
+      appendMetadataInput(form, {
+        id: 'room-edit-venue', name: 'venue', labelText: 'Venue / สถานที่ (optional)',
+      });
+      appendMetadataInput(form, {
+        id: 'room-edit-time', name: 'time', labelText: 'Time in Bangkok / เวลา (HH:mm)', time: true,
+      });
       const picker = document.createElement('fieldset');
       picker.className = 'room-icon-picker';
       form.append(picker);
@@ -345,7 +603,11 @@ export function startRoomListPage() {
     const form = editDialog.querySelector('#room-edit-form');
     form.dataset.roomId = room.id;
     form.dataset.originalTitle = room.title;
+    form.dataset.originalVenue = room.venue ?? '';
+    form.dataset.originalTime = room.time ?? '';
     form.elements.title.value = room.title;
+    form.elements.venue.value = room.venue ?? '';
+    form.elements.time.value = room.time ?? '';
     createIconPicker(form, 'edit-icon-picker', room.icon);
     editDialog.querySelector('#room-edit-error').textContent = '';
     editDialog.showModal();
@@ -355,15 +617,20 @@ export function startRoomListPage() {
 
   async function submitRoomEdit(form, dialog) {
     const title = form.elements.title.value;
-    const error = titleError(title);
     const errorRegion = form.querySelector('#room-edit-error');
-    if (error) {
-      errorRegion.textContent = error;
-      form.elements.title.focus();
+    const validations = [
+      [form.elements.title, titleError(title)],
+      [form.elements.venue, venueError(form.elements.venue.value)],
+      [form.elements.time, timeError(form.elements.time.value)],
+    ];
+    const invalid = validations.find(([, error]) => error);
+    if (invalid) {
+      errorRegion.textContent = invalid[1];
+      invalid[0].focus();
       return;
     }
     const roomId = form.dataset.roomId;
-    const body = { icon: selectedIcon(form) };
+    const body = { icon: selectedIcon(form), venue: form.elements.venue.value, time: form.elements.time.value };
     if (title.trim() !== form.dataset.originalTitle) body.title = title;
     const save = form.querySelector('button[type="submit"]');
     save.disabled = true;
@@ -395,11 +662,15 @@ export function startRoomListPage() {
   createForm.addEventListener('submit', async (event) => {
     event.preventDefault();
     const title = createForm.elements.title.value;
-    const error = titleError(title);
-    const titleInput = createForm.elements.title;
-    if (error) {
-      announce(error);
-      titleInput.focus();
+    const validations = [
+      [createForm.elements.title, titleError(title)],
+      [createForm.elements.venue, venueError(createForm.elements.venue.value)],
+      [createForm.elements.time, timeError(createForm.elements.time.value)],
+    ];
+    const invalid = validations.find(([, error]) => error);
+    if (invalid) {
+      announce(invalid[1]);
+      invalid[0].focus();
       return;
     }
     const submit = createForm.querySelector('button[type="submit"]');
@@ -412,7 +683,12 @@ export function startRoomListPage() {
       const response = await fetch('/api/rooms', {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-csrf-token': csrfToken },
-        body: JSON.stringify({ title, icon: selectedIcon(createForm) }),
+        body: JSON.stringify({
+          title,
+          icon: selectedIcon(createForm),
+          venue: createForm.elements.venue.value,
+          time: createForm.elements.time.value,
+        }),
       });
       if (response.status === 401) {
         redirectToLogin();

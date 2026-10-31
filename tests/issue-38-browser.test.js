@@ -150,8 +150,8 @@ test('Issue 38 room cards, editing, safe titles and explicit board navigation wo
     cards: document.querySelectorAll('.room-card').length,
     formVisible: !document.querySelector('#create-room-form').hidden,
     emptyMessage: document.querySelector('#rooms-empty').textContent,
-    iconOptions: document.querySelectorAll('#create-icon-picker input[type="radio"]').length,
-    selectedIcon: document.querySelector('#create-icon-picker input:checked')?.value,
+    iconOptions: document.querySelectorAll('#create-room-form select[name="icon"] option').length,
+    selectedIcon: document.querySelector('#create-room-form select[name="icon"]')?.value,
   })`);
   assert.ok(emptyView.scrollWidth <= emptyView.width, 'keeps the room list layout inside a 320px viewport');
   assert.equal(emptyView.formVisible, true, 'keeps room creation available when the list has no user-created rooms');
@@ -166,7 +166,7 @@ test('Issue 38 room cards, editing, safe titles and explicit board navigation wo
   await evaluate(client, `(() => {
     const form = document.querySelector('#create-room-form');
     form.elements.title.value = ${JSON.stringify(maliciousTitle)};
-    form.querySelector('input[name="icon"][value="football"]').checked = true;
+    form.querySelector('select[name="icon"]').value = 'football';
     form.requestSubmit();
     return true;
   })()`);
@@ -180,8 +180,8 @@ test('Issue 38 room cards, editing, safe titles and explicit board navigation wo
       hasInjectedImage: Boolean(card.querySelector('img')),
       iconLabel: card.querySelector('.room-card__icon').textContent,
       number: card.querySelector('.room-card__number').textContent,
-      scheduled: card.querySelector('.room-card__dates--scheduled').textContent,
-      proposed: card.querySelector('.room-card__dates--proposed').textContent,
+      scheduledHidden: card.querySelector('.room-card__dates--scheduled').hidden,
+      proposedHidden: card.querySelector('.room-card__dates--proposed').hidden,
       editVisible: !card.querySelector('.room-card__edit').hidden,
       color: card.style.getPropertyValue('--room-color'),
       width: box.width,
@@ -194,17 +194,17 @@ test('Issue 38 room cards, editing, safe titles and explicit board navigation wo
   assert.equal(createdCard.hasInjectedImage, false, 'does not interpret a room title as markup');
   assert.equal(createdCard.iconLabel, '⚽');
   assert.match(createdCard.number, /Room 0\d/);
-  assert.match(createdCard.scheduled, /Scheduled: None/);
-  assert.match(createdCard.proposed, /Proposed: None/);
+  assert.equal(createdCard.scheduledHidden, true, 'hides an empty Scheduled date line');
+  assert.equal(createdCard.proposedHidden, true, 'hides an empty Proposed date line');
   assert.equal(createdCard.editVisible, true, 'shows the edit control to the room owner');
   assert.ok(createdCard.color);
-  assert.ok(Math.abs(createdCard.width - createdCard.height) <= 1, 'renders a square responsive card');
+  assert.ok(createdCard.height >= 180, 'keeps a consistent 180px minimum card height');
   assert.equal(createdCard.href, `/vote/${createdCard.id}`);
 
   await client.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
   const desktopLayout = await evaluate(client, `({ width: innerWidth, scrollWidth: document.documentElement.scrollWidth, card: document.querySelector('.room-card[data-room-id="${createdCard.id}"]').getBoundingClientRect().toJSON() })`);
   assert.ok(desktopLayout.scrollWidth <= desktopLayout.width, 'keeps the desktop room page within the viewport width');
-  assert.ok(Math.abs(desktopLayout.card.width - desktopLayout.card.height) <= 1, 'keeps room cards square at desktop widths');
+  assert.ok(desktopLayout.card.height >= 180, 'keeps the minimum card height at desktop widths');
   await client.send('Emulation.setDeviceMetricsOverride', { width: 320, height: 844, deviceScaleFactor: 1, mobile: true });
 
   await evaluate(client, `(() => {
@@ -212,7 +212,7 @@ test('Issue 38 room cards, editing, safe titles and explicit board navigation wo
     card.querySelector('.room-card__edit').click();
     const dialog = document.querySelector('.room-edit-dialog');
     dialog.querySelector('input[name="title"]').value = 'Edited <b>Room</b>';
-    dialog.querySelector('input[name="icon"][value="tennis"]').checked = true;
+    dialog.querySelector('select[name="icon"]').value = 'tennis';
     dialog.querySelector('form').requestSubmit();
   })()`);
   assert.equal(await waitFor(client, `document.querySelector('.room-card[data-room-id="${createdCard.id}"] .room-card__title')?.textContent === 'Edited <b>Room</b>'`), true, 'updates the owned card after editing its title and icon');
@@ -275,7 +275,7 @@ test('Issue 38 room cards, editing, safe titles and explicit board navigation wo
   });
   assert.equal(deleteEvent.status, 200);
   assert.equal(await waitFor(client, `!document.querySelector('.room-card[data-room-id="${createdCard.id}"]').classList.contains('is-scheduled') && !document.querySelector('.room-card[data-room-id="${createdCard.id}"]').classList.contains('is-beam-running')`), true, 'removes the scheduled effect after the event is deleted');
-  assert.equal(await evaluate(client, `document.querySelector('.room-card[data-room-id="${createdCard.id}"] .room-card__dates--scheduled').textContent.trim()`), 'Scheduled: None');
+  assert.equal(await evaluate(client, `document.querySelector('.room-card[data-room-id="${createdCard.id}"] .room-card__dates--scheduled').hidden`), true, 'hides Scheduled after its last date is deleted');
 
   await evaluate(client, `document.querySelector('.room-card[data-room-id="${createdCard.id}"] .room-card__entry').click()`);
   assert.equal(await waitFor(client, `location.pathname === '/vote/${createdCard.id}' && document.querySelector('#room-heading')?.textContent === 'Edited <b>Room</b>'`), true, 'records room entry and opens its explicitly selected board');
