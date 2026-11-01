@@ -37,6 +37,18 @@ function startupDetails(browser) {
   return details.length ? `; ${details.join('; ')}` : '';
 }
 
+function parseDevToolsPort(contents) {
+  if (typeof contents !== 'string') return null;
+  const lines = contents.split(/\r?\n/);
+  if (lines.at(-1) === '') lines.pop();
+  if (lines.length !== 2 || !/^[1-9]\d{0,4}$/.test(lines[0])) return null;
+
+  const port = Number(lines[0]);
+  if (!Number.isInteger(port) || port > 65535) return null;
+  if (!/^\/devtools\/browser\/[A-Za-z0-9._~-]+$/.test(lines[1])) return null;
+  return port;
+}
+
 export function spawnChromium(executable, args) {
   const browser = spawn(executable, args, { stdio: ['ignore', 'ignore', 'pipe'] });
   browser.spawnError = null;
@@ -89,8 +101,8 @@ export async function readDevToolsPort(userDataDirectory, browser, {
     }
 
     try {
-      const [port] = (await read(activePortFile, 'utf8')).split('\n');
-      return Number(port);
+      const port = parseDevToolsPort(await read(activePortFile, 'utf8'));
+      if (port !== null) return port;
     } catch (error) {
       if (error.code !== 'ENOENT') throw error;
     }

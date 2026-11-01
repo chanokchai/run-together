@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { request } from 'node:http';
 import { once } from 'node:events';
+import { performance } from 'node:perf_hooks';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -170,6 +171,7 @@ test('Issue 43 room filters, metadata, icon menus, responsive cards, and board r
   setVote(fixture.server.database, { roomId: votedOnly.id, userId: ownerId, voteDate: '2026-10-31', body: { selected: true }, now: () => NOW });
 
   const profile = await mkdtemp(join(process.env.TMPDIR || tmpdir(), 'run-together-issue-43-chrome-'));
+  const startupStartedAt = performance.now();
   const browser = spawnChromium(chromePath, [
     '--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--no-first-run',
     '--no-default-browser-check', '--disable-background-networking', '--remote-debugging-port=0',
@@ -183,6 +185,8 @@ test('Issue 43 room filters, metadata, icon menus, responsive cards, and board r
     await fixture.close();
   });
   const port = await readDevToolsPort(profile, browser, { timeoutMs: chromiumReadinessTimeoutMs });
+  const readinessMs = performance.now() - startupStartedAt;
+  t.diagnostic(`Chromium launch-to-DevTools readiness ${readinessMs.toFixed(1)}ms; executable: ${browser.spawnfile}; state: ${browser.exitCode === null && browser.signalCode === null ? 'running' : 'exited'}; exitCode: ${browser.exitCode}; signalCode: ${browser.signalCode}; deadline: ${chromiumReadinessTimeoutMs}ms.`);
   const target = await createTarget(port);
   client = createCdpClient(target.webSocketDebuggerUrl);
   await openPage(client, `${fixture.baseUrl}/rooms`);
@@ -428,7 +432,7 @@ test('Issue 43 room filters, metadata, icon menus, responsive cards, and board r
   }
 
   await evaluate(client, `document.querySelector('.room-card[data-room-id="${proposed.id}"]').scrollIntoView({ block: 'center' })`);
-  await writeFile('outputs/issue-43-corrected-long-card-320.png', Buffer.from((await client.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false })).data, 'base64'));
+  await writeFile(join(fixture.directory, 'issue-43-corrected-long-card-320.png'), Buffer.from((await client.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false })).data, 'base64'));
 
   await client.send('Emulation.setDeviceMetricsOverride', { width: 160, height: 844, deviceScaleFactor: 1, mobile: true });
   const zoomLayout = await evaluate(client, `(() => ({ width: innerWidth, pageWidth: document.documentElement.scrollWidth, cards: [...document.querySelectorAll('.room-card')].filter((card) => !card.hidden).map((card) => card.getBoundingClientRect().width) }))()`);
@@ -446,7 +450,7 @@ test('Issue 43 room filters, metadata, icon menus, responsive cards, and board r
   })()`);
   assert.deepEqual(zoomCardLayout.collisions, [], 'long proposed-only text does not overlap Edit at the 200%-zoom-sized viewport');
   assert.ok(zoomCardLayout.edit.width >= 44 && zoomCardLayout.edit.height >= 44);
-  await writeFile('outputs/issue-43-corrected-long-card-160px.png', Buffer.from((await client.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false })).data, 'base64'));
+  await writeFile(join(fixture.directory, 'issue-43-corrected-long-card-160px.png'), Buffer.from((await client.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false })).data, 'base64'));
 
   await client.send('Emulation.setDeviceMetricsOverride', { width: 640, height: 844, deviceScaleFactor: 1, mobile: false });
   await evaluate(client, `document.querySelector('.room-card[data-room-id="${proposed.id}"]').scrollIntoView({ block: 'center' })`);
@@ -464,7 +468,7 @@ test('Issue 43 room filters, metadata, icon menus, responsive cards, and board r
   assert.ok(desktopZoomLayout.pageWidth <= desktopZoomLayout.width);
   assert.deepEqual(desktopZoomLayout.collisions, [], 'long proposed-only text does not overlap Edit at 200% zoom');
   assert.ok(desktopZoomLayout.edit.width >= 44 && desktopZoomLayout.edit.height >= 44);
-  await writeFile('outputs/issue-43-corrected-long-card-200-percent.png', Buffer.from((await client.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false })).data, 'base64'));
+  await writeFile(join(fixture.directory, 'issue-43-corrected-long-card-200-percent.png'), Buffer.from((await client.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false })).data, 'base64'));
 
   await client.send('Emulation.setDeviceMetricsOverride', { width: 320, height: 844, deviceScaleFactor: 2, mobile: true });
   const todayProposal = `.room-card[data-room-id="${proposed.id}"] .room-card__date-value`;
