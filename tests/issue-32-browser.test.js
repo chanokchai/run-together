@@ -401,8 +401,18 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
   await client.send('Page.navigate', { url: `${baseUrl}/vote/${LEGACY_ROOM_ID}` });
   assert.equal(await waitFor(client, `document.querySelector('#protected-content') && !document.querySelector('#protected-content').hidden && document.querySelectorAll('#week-days .vote-card').length === 7`), true, 'loads the board as the authenticated administrator');
   assert.equal(await evaluate(client, `document.querySelectorAll('.run-event-actions').length`), 2, 'renders explicit banner controls for an administrator');
+  await evaluate(client, `(() => { const priorFetch = window.fetch; window.issue32AdminTapResponses = []; window.fetch = async (...args) => { const response = await priorFetch(...args); const url = new URL(typeof args[0] === 'string' ? args[0] : args[0].url, location.href); if (url.pathname.includes('/admin/events/')) window.issue32AdminTapResponses.push({ method: args[1]?.method ?? 'GET', path: url.pathname, status: response.status, body: await response.clone().json() }); return response; }; })()`);
   await clickSelector(client, '.run-event-banner[data-date="2024-03-01"] .run-event-banner__summary');
-  assert.equal(await waitFor(client, `document.querySelector('.run-event-banner[data-date="2024-03-01"] .run-event-banner__status')?.textContent === 'Scheduled'`), true, 'admin tap on the banner body schedules a proposed run');
+  const adminTapScheduled = await waitFor(client, `document.querySelector('.run-event-banner[data-date="2024-03-01"] .run-event-banner__status')?.textContent === 'Scheduled'`);
+  if (!adminTapScheduled) {
+    t.diagnostic(`Admin banner tap failed to reach Scheduled: ${JSON.stringify(await evaluate(client, `({ url: location.href, status: document.querySelector('.run-event-banner[data-date="2024-03-01"] .run-event-banner__status')?.textContent, actions: [...document.querySelectorAll('.run-event-banner[data-date="2024-03-01"] .run-event-actions button')].map((button) => ({ label: button.textContent, disabled: button.disabled })), message: document.querySelector('#message')?.textContent, responses: window.issue32AdminTapResponses })`))}; database=${JSON.stringify(server.database.prepare('SELECT status, revision FROM run_events WHERE event_date = ?').get('2024-03-01'))}`);
+  }
+  assert.equal(adminTapScheduled, true, 'admin tap on the banner body schedules a proposed run');
+  const adminTapResponses = await evaluate(client, 'window.issue32AdminTapResponses');
+  assert.deepEqual(adminTapResponses.map(({ method, path, status, body }) => ({ method, path, status, eventStatus: body.event?.status })), [
+    { method: 'PUT', path: `/api/rooms/${LEGACY_ROOM_ID}/admin/events/2024-03-01`, status: 200, eventStatus: 'scheduled' },
+  ], 'the successful banner-body tap produced one authoritative room-scoped scheduling response');
+  t.diagnostic(`Observed banner scheduling response: ${JSON.stringify(adminTapResponses.map(({ method, path, status, body }) => ({ method, path, status, eventStatus: body.event?.status })))}`);
   await clickSelector(client, '.run-event-banner[data-date="2024-03-01"] .run-event-banner__summary');
   assert.equal(await waitFor(client, `document.querySelector('.run-event-banner[data-date="2024-03-01"] .run-event-banner__status')?.textContent === 'Proposed'`), true, 'admin tap on the banner body reverts a scheduled run');
   await evaluate(client, `document.querySelector('.run-event-banner[data-date="2024-03-01"] button[data-run-event-status="proposed"]')?.focus()`);
@@ -511,15 +521,44 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
     ['2024-03-03:Scheduled', '2024-03-01:Proposed'],
   ], 'a later scheduled event precedes an earlier proposed event on both clients');
   const eventBeforeLiveRevert = server.database.prepare('SELECT id, revision FROM run_events WHERE event_date = ?').get('2024-03-03');
+  await evaluate(client, `(() => {
+    const priorFetch = window.fetch;
+    window.__issue32HoldNextTimeline = true;
+    window.__issue32HeldTimeline = null;
+    window.fetch = async (...args) => {
+      const response = await priorFetch(...args);
+      const input = args[0];
+      const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+      if (window.__issue32HoldNextTimeline && url.pathname.endsWith('/vote-timeline')) {
+        window.__issue32HoldNextTimeline = false;
+        window.__issue32HeldTimeline = { status: response.status, body: await response.clone().json() };
+        await new Promise((resolve) => { window.__issue32ReleaseTimeline = resolve; });
+      }
+      return response;
+    };
+  })()`);
   const liveRevert = await fetch(`${baseUrl}/api/admin/events/2024-03-03`, {
     method: 'PUT',
     headers: { cookie: admin.cookie, origin: baseUrl, 'content-type': 'application/json', 'x-csrf-token': admin.csrfToken },
     body: JSON.stringify({ eventId: eventBeforeLiveRevert.id, revision: eventBeforeLiveRevert.revision, status: 'proposed', requestId: '00000000-0000-4000-8000-000000000146' }),
   });
   assert.equal(liveRevert.status, 200, 'admin reverts the event while both clients are connected');
+  const splitPresentationReached = await waitFor(client, `window.__issue32HeldTimeline && document.querySelector('.run-event-banner[data-date="2024-03-03"] .run-event-banner__status')?.textContent === 'Proposed' && !document.querySelector('#week-days .vote-card[data-date="2024-03-03"]').classList.contains('is-scheduled') && document.querySelector('.vote-timeline__bar[data-date="2024-03-03"]').classList.contains('is-scheduled')`);
+  assert.equal(splitPresentationReached, true, 'diagnostic holds a genuine timeline response after the banner and week card refresh');
+  const splitPresentation = await evaluate(client, `({ responseStatus: window.__issue32HeldTimeline.status, responseScheduled: window.__issue32HeldTimeline.body.scheduledDates.includes('2024-03-03'), banner: document.querySelector('.run-event-banner[data-date="2024-03-03"] .run-event-banner__status').textContent, cardScheduled: document.querySelector('#week-days .vote-card[data-date="2024-03-03"]').classList.contains('is-scheduled'), graphScheduled: document.querySelector('.vote-timeline__bar[data-date="2024-03-03"]').classList.contains('is-scheduled') })`);
+  assert.deepEqual(splitPresentation, { responseStatus: 200, responseScheduled: false, banner: 'Proposed', cardScheduled: false, graphScheduled: true },
+    'the server has returned the reverted timeline state, but its independent browser callback is still pending');
+  t.diagnostic(`Observed controlled split presentation while the genuine reverted timeline callback was held: ${JSON.stringify(splitPresentation)}`);
+  await evaluate(client, 'window.__issue32ReleaseTimeline()');
   for (const page of [client, client2]) {
     assert.equal(await waitFor(page, `document.querySelector('.run-event-banner[data-date="2024-03-03"] .run-event-banner__status')?.textContent === 'Proposed'`), true, 'both clients remove the live scheduled status');
-    assert.equal(await evaluate(page, `!document.querySelector('#week-days .vote-card[data-date="2024-03-03"]').classList.contains('is-scheduled') && !document.querySelector('.vote-timeline__bar[data-date="2024-03-03"]').classList.contains('is-scheduled')`), true, 'live reversion removes the card and gold graph styling');
+    const revertedCardAndGraph = `document.querySelector('.run-event-banner[data-date="2024-03-03"] .run-event-banner__status')?.textContent === 'Proposed' && !document.querySelector('#week-days .vote-card[data-date="2024-03-03"]').classList.contains('is-scheduled') && !document.querySelector('.vote-timeline__bar[data-date="2024-03-03"]').classList.contains('is-scheduled')`;
+    const presentationWasReadyWithBanner = await evaluate(page, `!document.querySelector('#week-days .vote-card[data-date="2024-03-03"]').classList.contains('is-scheduled') && !document.querySelector('.vote-timeline__bar[data-date="2024-03-03"]').classList.contains('is-scheduled')`);
+    const presentationSettled = presentationWasReadyWithBanner || await waitFor(page, revertedCardAndGraph);
+    if (!presentationWasReadyWithBanner) {
+      t.diagnostic(`Live reversion presentation settled asynchronously on ${page === client ? 'client 1' : 'client 2'}: ${JSON.stringify(await evaluate(page, `({ banner: document.querySelector('.run-event-banner[data-date="2024-03-03"] .run-event-banner__status')?.textContent, cardClasses: document.querySelector('#week-days .vote-card[data-date="2024-03-03"]')?.className, barClasses: document.querySelector('.vote-timeline__bar[data-date="2024-03-03"]')?.className })`))}`);
+    }
+    assert.equal(presentationSettled, true, 'live reversion removes the scheduled card and gold graph styling after both browser representations refresh');
   }
   const revertedOrder = await evaluate(client2, `[...document.querySelectorAll('.run-event-banner')].map((banner) => banner.dataset.date)`);
   assert.deepEqual(revertedOrder, ['2024-03-01', '2024-03-03'], 'proposed banners return to ascending date order');

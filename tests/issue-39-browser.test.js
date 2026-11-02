@@ -44,8 +44,13 @@ function createCdpClient(url) {
   const socket = new WebSocket(url);
   let nextId = 0;
   const pending = new Map();
+  const eventListeners = new Map();
   socket.addEventListener('message', ({ data }) => {
     const message = JSON.parse(data);
+    if (message.method) {
+      eventListeners.get(message.method)?.forEach((listener) => listener(message.params));
+      return;
+    }
     if (!message.id) return;
     const state = pending.get(message.id);
     if (!state) return;
@@ -63,7 +68,27 @@ function createCdpClient(url) {
       const id = ++nextId;
       const result = new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
       socket.send(JSON.stringify({ id, method, params }));
-      return result;
+      let timer;
+      try {
+        return await Promise.race([result, new Promise((_, reject) => {
+          timer = setTimeout(() => {
+            pending.delete(id);
+            reject(new Error(`Timed out waiting for CDP command ${method}`));
+          }, 12_000);
+        })]);
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+    onEvent(method, listener) {
+      const listeners = eventListeners.get(method) ?? new Set();
+      listeners.add(listener);
+      eventListeners.set(method, listeners);
+    },
+    offEvent(method, listener) {
+      const listeners = eventListeners.get(method);
+      listeners?.delete(listener);
+      if (listeners?.size === 0) eventListeners.delete(method);
     },
     close() { socket.close(); },
   };
@@ -75,6 +100,17 @@ async function evaluate(client, expression) {
   return result.result.value;
 }
 
+async function clickSelector(client, selector) {
+  const point = await evaluate(client, `(() => {
+    const target = document.querySelector(${JSON.stringify(selector)});
+    target.scrollIntoView({ block: 'center' });
+    const box = target.getBoundingClientRect();
+    return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+  })()`);
+  await client.send('Input.dispatchMouseEvent', { type: 'mousePressed', button: 'left', clickCount: 1, ...point });
+  await client.send('Input.dispatchMouseEvent', { type: 'mouseReleased', button: 'left', clickCount: 1, ...point });
+}
+
 async function waitFor(client, expression, timeoutMs = 8000) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
@@ -82,6 +118,51 @@ async function waitFor(client, expression, timeoutMs = 8000) {
     await delay(50);
   }
   return false;
+}
+
+function waitForCdpEvent(client, method, timeoutMs = 5000) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      client.offEvent(method, listener);
+      reject(new Error(`Timed out waiting for CDP event ${method}`));
+    }, timeoutMs);
+    const listener = (params) => {
+      clearTimeout(timer);
+      client.offEvent(method, listener);
+      resolve(params);
+    };
+    client.onEvent(method, listener);
+  });
+}
+
+function waitForCdpEvents(client, method, count, matches, timeoutMs = 8000) {
+  return new Promise((resolve, reject) => {
+    const events = [];
+    let timer;
+    const cleanup = () => {
+      clearTimeout(timer);
+      client.offEvent(method, listener);
+    };
+    const listener = (params) => {
+      if (!matches(params)) return;
+      events.push(params);
+      if (events.length === count) {
+        cleanup();
+        resolve(events);
+      }
+    };
+    timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(`Timed out waiting for ${count} matching CDP ${method} events; received ${events.length}`));
+    }, timeoutMs);
+    client.onEvent(method, listener);
+  });
+}
+
+async function readPausedJson(client, event) {
+  const result = await client.send('Fetch.getResponseBody', { requestId: event.requestId });
+  const text = result.base64Encoded ? Buffer.from(result.body, 'base64').toString('utf8') : result.body;
+  return JSON.parse(text);
 }
 
 function fetchGateScript() {
@@ -314,15 +395,9 @@ test('Issue 39 real Chromium deletion controls are accessible, cancel safely, up
   const ownerScreenshot = await saveScreenshot(ownerList, `${screenshotBase}-owner-list.png`);
   t.diagnostic(`Owner room-list screenshot: ${ownerScreenshot}`);
 
-  await evaluate(ownerList, `(() => { window.__issue39ConfirmMessages = []; window.confirm = (message) => { window.__issue39ConfirmMessages.push(message); return false; }; const button = document.querySelector('.room-card[data-room-id="${ownerRoom.id}"] .room-card__delete'); button.focus(); return document.activeElement === button; })()`);
+  await evaluate(ownerList, `(() => { const button = document.querySelector('.room-card[data-room-id="${ownerRoom.id}"] .room-card__delete'); button.focus(); return document.activeElement === button; })()`);
   assert.equal(await evaluate(ownerList, `document.activeElement?.getAttribute('aria-label') === 'Delete Room deletion browser check'`), true,
     'the delete button receives keyboard focus');
-  await ownerList.send('Input.dispatchKeyEvent', { type: 'keyDown', key: ' ', code: 'Space', text: ' ', unmodifiedText: ' ', windowsVirtualKeyCode: 32 });
-  await ownerList.send('Input.dispatchKeyEvent', { type: 'keyUp', key: ' ', code: 'Space', windowsVirtualKeyCode: 32 });
-  assert.equal(await waitFor(ownerList, 'window.__issue39ConfirmMessages.length === 1'), true, 'Space activates the delete button and the named confirmation');
-  const confirmationText = await evaluate(ownerList, 'window.__issue39ConfirmMessages[0]');
-  assert.equal(confirmationText, 'Permanently delete “Room deletion browser check”? Its votes, proposals, schedules, and memberships will be permanently removed. This cannot be undone.');
-  assert.match(confirmationText, /votes, proposals, schedules, and memberships will be permanently removed/);
   const dependentState = () => ({
     room: fixture.server.database.prepare('SELECT * FROM rooms WHERE id = ?').get(ownerRoom.id),
     votes: fixture.server.database.prepare('SELECT * FROM votes WHERE room_id = ? ORDER BY vote_date, user_id').all(ownerRoom.id),
@@ -333,13 +408,32 @@ test('Issue 39 real Chromium deletion controls are accessible, cancel safely, up
   const beforeCancel = dependentState();
   assert.ok(beforeCancel.votes.length && beforeCancel.events.length && beforeCancel.memberships.length && beforeCancel.retries.length,
     'the cancellation case includes seeded votes, events, memberships, and retry data');
+  const deleteConfirmationMessage = 'Permanently delete “Room deletion browser check”? Its votes, proposals, schedules, and memberships will be permanently removed. This cannot be undone.';
+  const cancelDialogPromise = waitForCdpEvent(ownerList, 'Page.javascriptDialogOpening');
+  await ownerList.send('Input.dispatchKeyEvent', { type: 'keyDown', key: ' ', code: 'Space', text: ' ', unmodifiedText: ' ', windowsVirtualKeyCode: 32 });
+  const cancelKeyUp = ownerList.send('Input.dispatchKeyEvent', { type: 'keyUp', key: ' ', code: 'Space', windowsVirtualKeyCode: 32 });
+  const cancelDialog = await cancelDialogPromise;
+  assert.equal(cancelDialog.type, 'confirm', 'Space opens the browser native confirmation dialog');
+  assert.equal(cancelDialog.message, deleteConfirmationMessage);
+  assert.match(cancelDialog.message, /votes, proposals, schedules, and memberships will be permanently removed/);
+  await ownerList.send('Page.handleJavaScriptDialog', { accept: false });
+  await cancelKeyUp;
   assert.equal(fixture.server.database.prepare('SELECT COUNT(*) AS count FROM rooms WHERE id = ?').get(ownerRoom.id).count, 1,
     'Cancel leaves the room present');
   assert.deepEqual(dependentState(), beforeCancel, 'Cancel preserves every seeded dependent row exactly');
+  assert.equal(await evaluate(ownerList, `window.__issue39FetchLog.filter(({ method, path }) => method === 'DELETE' && path === '/api/rooms/${ownerRoom.id}').length`), 0,
+    'native confirmation Cancel sends no room DELETE request');
   assert.equal(await evaluate(board, `location.pathname === '/vote/${ownerRoom.id}'`), true,
     'Cancel leaves the other tab on the selected room');
 
-  await evaluate(ownerList, `(() => { window.confirm = () => true; window.__issue39HoldNext('delete-response', 'DELETE', '/api/rooms/${ownerRoom.id}'); window.__issue39DeleteButton = document.querySelector('.room-card[data-room-id="${ownerRoom.id}"] .room-card__delete'); window.__issue39DeleteButton.click(); })()`);
+  await evaluate(ownerList, `(() => { window.__issue39HoldNext('delete-response', 'DELETE', '/api/rooms/${ownerRoom.id}'); window.__issue39DeleteButton = document.querySelector('.room-card[data-room-id="${ownerRoom.id}"] .room-card__delete'); })()`);
+  const confirmDialogPromise = waitForCdpEvent(ownerList, 'Page.javascriptDialogOpening');
+  const confirmClick = clickSelector(ownerList, `.room-card[data-room-id="${ownerRoom.id}"] .room-card__delete`);
+  const confirmDialog = await confirmDialogPromise;
+  assert.equal(confirmDialog.type, 'confirm', 'the second activation opens the browser native confirmation dialog');
+  assert.equal(confirmDialog.message, deleteConfirmationMessage);
+  await ownerList.send('Page.handleJavaScriptDialog', { accept: true });
+  await confirmClick;
   assert.equal(await waitFor(ownerList, "Boolean(window.__issue39Held['delete-response'])"), true,
     'the delete request remains pending after the server commits it');
   assert.equal(await evaluate(ownerList, "window.__issue39Held['delete-response'].status"), 200);
@@ -523,7 +617,7 @@ test('Issue 39 holds late board reads and writes across deletion without affecti
   });
   const port = await readDevToolsPort(profile, browser, { timeoutMs: chromiumReadinessTimeoutMs });
   const [deletedTarget, unrelatedTarget] = await Promise.all([createTarget(port), createTarget(port)]);
-  const boardInitScript = fetchGateScript() + `(() => {
+  const boardInitScript = `(() => {
     let factory;
     Object.defineProperty(window, 'io', { configurable: true, get: () => factory, set: (value) => {
       factory = (...args) => { const socket = value(...args); window.__issue39Socket = socket; return socket; };
@@ -541,44 +635,100 @@ test('Issue 39 holds late board reads and writes across deletion without affecti
   const weekPath = `/api/rooms/${deletedRoom.id}/weeks/2026-10-26`;
   const metadataPath = `/api/rooms/${deletedRoom.id}`;
   const timelinePath = `/api/rooms/${deletedRoom.id}/vote-timeline`;
+  const votePath = `/api/rooms/${deletedRoom.id}/votes/2026-10-29`;
+  const eventPath = `/api/rooms/${deletedRoom.id}/events/2026-10-28`;
+  const expectedApiPaths = new Set([weekPath, metadataPath, timelinePath, votePath, eventPath]);
   await evaluate(deletedTab, `(() => {
-    window.__issue39HoldNext('late-week', 'GET', ${JSON.stringify(weekPath)});
-    window.__issue39HoldNext('late-metadata', 'GET', ${JSON.stringify(metadataPath)});
-    window.__issue39HoldNext('late-timeline', 'GET', ${JSON.stringify(timelinePath)});
+    const originalFetch = window.fetch.bind(window);
+    window.__issue39LateResponses = [];
+    window.fetch = async (...args) => {
+      const response = await originalFetch(...args);
+      const input = args[0];
+      const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+      if (${JSON.stringify([...expectedApiPaths])}.includes(url.pathname)) {
+        window.__issue39LateResponses.push({ path: url.pathname, method: String(args[1]?.method ?? input.method ?? 'GET').toUpperCase(), status: response.status });
+      }
+      return response;
+    };
+  })()`);
+  await deletedTab.send('Fetch.enable', { patterns: [
+    { urlPattern: `${fixture.baseUrl}/api/rooms/${deletedRoom.id}*`, requestStage: 'Response' },
+  ] });
+  await evaluate(deletedTab, `(() => {
     window.__issue39Socket.disconnect();
   })()`);
   assert.equal(await waitFor(deletedTab, 'window.__issue39Socket?.connected === false'), true);
+  const boardReadRepliesPromise = waitForCdpEvents(deletedTab, 'Fetch.requestPaused', 3,
+    (event) => expectedApiPaths.has(new URL(event.request.url).pathname) && event.request.method === 'GET');
   await evaluate(deletedTab, '(() => { window.__issue39Socket.connect(); return true; })()');
-  for (const key of ['late-week', 'late-metadata', 'late-timeline']) {
-    assert.equal(await waitFor(deletedTab, `Boolean(window.__issue39Held[${JSON.stringify(key)}])`), true,
-      `${key} successful response is held before the board handles it`);
-    assert.equal(await evaluate(deletedTab, `window.__issue39Held[${JSON.stringify(key)}].status`), 200);
-  }
+  const boardReadReplies = await boardReadRepliesPromise;
+  assert.deepEqual(boardReadReplies.map((event) => new URL(event.request.url).pathname).sort(), [weekPath, metadataPath, timelinePath].sort(),
+    'the real successful week, metadata, and timeline responses are paused before their browser callbacks run');
+  assert.ok(boardReadReplies.every((event) => event.responseStatusCode === 200), 'all paused board read replies are successful HTTP 200 responses');
 
+  const voteReplyPromise = waitForCdpEvents(deletedTab, 'Fetch.requestPaused', 1,
+    (event) => new URL(event.request.url).pathname === votePath && event.request.method === 'PUT');
   await evaluate(deletedTab, `(() => {
-    window.__issue39HoldNext('late-vote', 'PUT', '/api/rooms/${deletedRoom.id}/votes/2026-10-29');
     document.querySelector('.vote-card[data-date="2026-10-29"]').click();
   })()`);
-  assert.equal(await waitFor(deletedTab, "Boolean(window.__issue39Held['late-vote'])"), true,
-    'the successful vote reply is held after the server accepts the vote');
-  assert.equal(await evaluate(deletedTab, "window.__issue39Held['late-vote'].status"), 200);
+  const voteReply = (await voteReplyPromise)[0];
+  assert.equal(voteReply.responseStatusCode, 200, 'the server accepted the vote before its browser callback is released');
+  assert.equal((await readPausedJson(deletedTab, voteReply)).selected, true, 'the held vote reply contains the accepted selected state');
+  const eventReplyPromise = waitForCdpEvents(deletedTab, 'Fetch.requestPaused', 1,
+    (event) => new URL(event.request.url).pathname === eventPath && event.request.method === 'POST');
   await evaluate(deletedTab, `(() => {
-    window.__issue39HoldNext('late-event', 'POST', '/api/rooms/${deletedRoom.id}/events/2026-10-28');
     document.querySelector('.run-event-day-action[data-date="2026-10-28"]').click();
   })()`);
-  assert.equal(await waitFor(deletedTab, "Boolean(window.__issue39Held['late-event'])"), true,
-    'the successful event reply is held after the server accepts the proposal');
-  assert.equal(await evaluate(deletedTab, "window.__issue39Held['late-event'].status"), 201);
+  const eventReply = (await eventReplyPromise)[0];
+  assert.equal(eventReply.responseStatusCode, 201, 'the server accepted the event before its browser callback is released');
+  assert.equal((await readPausedJson(deletedTab, eventReply)).event.roomId, deletedRoom.id, 'the held event reply identifies the deleted room');
 
+  await evaluate(deletedTab, `(() => {
+    window.__issue39BeforeUnload = (event) => { event.preventDefault(); event.returnValue = ''; };
+    window.addEventListener('beforeunload', window.__issue39BeforeUnload);
+  })()`);
+  await clickSelector(deletedTab, '#room-heading');
+  const navigationDialogPromise = waitForCdpEvent(deletedTab, 'Page.javascriptDialogOpening');
   const deletion = await fetch(`${fixture.baseUrl}/api/rooms/${encodeURIComponent(deletedRoom.id)}`, {
     method: 'DELETE', headers: { origin: fixture.baseUrl, cookie: admin.cookie, 'x-csrf-token': admin.csrfToken, 'content-type': 'application/json' },
     body: JSON.stringify({ confirmation: true }),
   });
   assert.equal(deletion.status, 200);
-  assert.equal(await waitFor(deletedTab, `location.pathname === '/rooms'`), true,
-    'the subscribed board exits before late metadata, week, timeline, vote, or event replies can restore protected content');
-  const safePage = await evaluate(deletedTab, `({ path: location.pathname, hasProtectedContent: Boolean(document.querySelector('#protected-content') && !document.querySelector('#protected-content').hidden), hasStaleHeading: document.body.innerText.includes('Held board responses') })`);
-  assert.deepEqual(safePage, { path: '/rooms', hasProtectedContent: false, hasStaleHeading: false });
+  const navigationDialog = await navigationDialogPromise;
+  assert.equal(navigationDialog.type, 'beforeunload', 'the real deleted-room exit reaches a pending browser navigation dialog');
+  await deletedTab.send('Page.handleJavaScriptDialog', { accept: false });
+  assert.equal(await waitFor(deletedTab, `location.pathname === '/vote/${deletedRoom.id}'`), true,
+    'cancelling the test-only beforeunload pause keeps the old document available for callback-guard verification');
+  const guardedOldPage = await evaluate(deletedTab, `({ path: location.pathname, protectedHidden: document.querySelector('#protected-content').hidden, heading: document.querySelector('#room-heading').textContent, headingVisible: document.querySelector('#room-heading').getClientRects().length > 0, cardCount: document.querySelectorAll('#week-days .vote-card').length, bannerCount: document.querySelectorAll('.run-event-banner').length })`);
+  assert.deepEqual(guardedOldPage, { path: `/vote/${deletedRoom.id}`, protectedHidden: true, heading: 'Held board responses', headingVisible: false, cardCount: 0, bannerCount: 0 },
+    'the deleted-room guard hides protected state before the replacement document loads');
+  const lateReplies = [...boardReadReplies, voteReply, eventReply];
+  for (const reply of lateReplies) {
+    const body = await readPausedJson(deletedTab, reply);
+    assert.ok(body && typeof body === 'object', `the genuine ${new URL(reply.request.url).pathname} response body is valid JSON`);
+    await deletedTab.send('Fetch.continueResponse', { requestId: reply.requestId });
+  }
+  assert.equal(await waitFor(deletedTab, `window.__issue39LateResponses.length === ${lateReplies.length}`), true,
+    'all five genuine successful server replies resolve in the guarded deleted-room context after the test cancels the navigation prompt');
+  const afterLateReplies = await evaluate(deletedTab, `({ path: location.pathname, protectedHidden: document.querySelector('#protected-content').hidden, heading: document.querySelector('#room-heading').textContent, headingVisible: document.querySelector('#room-heading').getClientRects().length > 0, cardCount: document.querySelectorAll('#week-days .vote-card').length, bannerCount: document.querySelectorAll('.run-event-banner').length, replies: window.__issue39LateResponses })`);
+  assert.equal(afterLateReplies.path, `/vote/${deletedRoom.id}`);
+  assert.equal(afterLateReplies.protectedHidden, true);
+  assert.equal(afterLateReplies.heading, 'Held board responses');
+  assert.equal(afterLateReplies.headingVisible, false);
+  assert.equal(afterLateReplies.cardCount, 0);
+  assert.equal(afterLateReplies.bannerCount, 0);
+  assert.deepEqual(afterLateReplies.replies.map(({ path, method, status }) => ({ path, method, status })).sort((left, right) => left.path.localeCompare(right.path)), [
+    { path: eventPath, method: 'POST', status: 201 },
+    { path: metadataPath, method: 'GET', status: 200 },
+    { path: timelinePath, method: 'GET', status: 200 },
+    { path: votePath, method: 'PUT', status: 200 },
+    { path: weekPath, method: 'GET', status: 200 },
+  ].sort((left, right) => left.path.localeCompare(right.path)), 'only successful replies for the deleted room were released');
+  await deletedTab.send('Fetch.disable');
+  await evaluate(deletedTab, 'window.removeEventListener("beforeunload", window.__issue39BeforeUnload)');
+  await deletedTab.send('Page.navigate', { url: `${fixture.baseUrl}/rooms` });
+  assert.equal(await waitFor(deletedTab, `location.pathname === '/rooms' && !document.querySelector('#rooms-content').hidden && !document.querySelector('#room-cards').textContent.includes('Held board responses')`), true,
+    'the browser completes its safe exit and loads the room list after late callbacks are discarded');
   assert.equal(await evaluate(unrelatedTab, `location.pathname === '/vote/${unrelatedRoom.id}' && !document.querySelector('#protected-content').hidden`), true,
     'the unrelated same-session tab remains on its explicit room');
   assert.deepEqual({
