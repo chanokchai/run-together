@@ -415,9 +415,38 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
   t.diagnostic(`Observed banner scheduling response: ${JSON.stringify(adminTapResponses.map(({ method, path, status, body }) => ({ method, path, status, eventStatus: body.event?.status })))}`);
   await clickSelector(client, '.run-event-banner[data-date="2024-03-01"] .run-event-banner__summary');
   assert.equal(await waitFor(client, `document.querySelector('.run-event-banner[data-date="2024-03-01"] .run-event-banner__status')?.textContent === 'Proposed'`), true, 'admin tap on the banner body reverts a scheduled run');
-  await evaluate(client, `document.querySelector('.run-event-banner[data-date="2024-03-01"] button[data-run-event-status="proposed"]')?.focus()`);
+  const keyboardFocusBefore = await evaluate(client, `(() => {
+    const button = document.querySelector('.run-event-banner[data-date="2024-03-01"] button[data-run-event-status="proposed"]');
+    button?.focus({ preventScroll: true });
+    return { found: Boolean(button), disabled: button?.disabled ?? null, focused: document.activeElement === button,
+      active: document.activeElement?.outerHTML ?? null, button: button?.outerHTML ?? null,
+      bannerStatus: document.querySelector('.run-event-banner[data-date="2024-03-01"] .run-event-banner__status')?.textContent ?? null };
+  })()`);
+  t.diagnostic(`Keyboard scheduling pre-action focus/readiness: ${JSON.stringify(keyboardFocusBefore)}`);
+  const keyboardResponseStart = await evaluate(client, 'window.issue32AdminTapResponses.length');
+  await evaluate(client, `(() => {
+    window.issue32KeyboardEvents = [];
+    const describe = (event) => ({ type: event.type, key: event.key ?? null, trusted: event.isTrusted,
+      target: event.target?.outerHTML ?? null, active: document.activeElement?.outerHTML ?? null });
+    document.addEventListener('keydown', (event) => window.issue32KeyboardEvents.push(describe(event)), true);
+    document.addEventListener('click', (event) => {
+      if (event.target?.closest?.('.run-event-actions [data-run-event-status]')) window.issue32KeyboardEvents.push(describe(event));
+    }, true);
+  })()`);
   await pressEnter(client);
-  assert.equal(await waitFor(client, `document.querySelector('.run-event-banner[data-date="2024-03-01"] .run-event-banner__status')?.textContent === 'Scheduled'`), true, 'admin keyboard action schedules a proposal');
+  const keyboardProposalScheduled = await waitFor(client, `document.querySelector('.run-event-banner[data-date="2024-03-01"] .run-event-banner__status')?.textContent === 'Scheduled'`);
+  const keyboardDiagnostics = await evaluate(client, `({ active: document.activeElement?.outerHTML ?? null,
+    status: document.querySelector('.run-event-banner[data-date="2024-03-01"] .run-event-banner__status')?.textContent ?? null,
+    actions: [...document.querySelectorAll('.run-event-banner[data-date="2024-03-01"] .run-event-actions button')].map((button) => ({ text: button.textContent, status: button.dataset.runEventStatus, disabled: button.disabled, html: button.outerHTML })),
+    message: document.querySelector('#message')?.textContent ?? null, keyboardEvents: window.issue32KeyboardEvents,
+    responses: window.issue32AdminTapResponses.slice(${keyboardResponseStart}).map(({ method, path, status, body }) => ({ method, path, status, eventStatus: body.event?.status, code: body.code ?? null, message: body.message ?? null })) })`);
+  const keyboardDatabaseState = server.database.prepare('SELECT status, revision FROM run_events WHERE event_date = ?').get('2024-03-01');
+  t.diagnostic(`Keyboard scheduling authoritative result: ${JSON.stringify({ diagnostics: keyboardDiagnostics, database: keyboardDatabaseState })}`);
+  assert.equal(keyboardProposalScheduled, true, 'admin keyboard action schedules a proposal');
+  assert.deepEqual(keyboardDiagnostics.responses, [
+    { method: 'PUT', path: `/api/rooms/${LEGACY_ROOM_ID}/admin/events/2024-03-01`, status: 200, eventStatus: 'scheduled', code: null, message: null },
+  ], 'the keyboard action produces one authoritative room-scoped scheduling response');
+  assert.equal(keyboardDatabaseState.status, 'scheduled', 'the keyboard action commits the scheduled state');
   assert.equal(await evaluate(client, `document.activeElement?.closest('.run-event-banner')?.dataset.date === '2024-03-01' && document.activeElement.matches('.run-event-actions [data-run-event-status]')`), true, 'keyboard focus follows the status control when scheduling reorders its banner');
   await client.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
   assert.equal(await evaluate(client, `getComputedStyle(document.querySelector('.run-event-banner[data-date="2024-03-01"]')).animationName`), 'none', 'scheduled emphasis is disabled for reduced-motion users');
@@ -687,12 +716,26 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
   const reentryPhase = await evaluate(client2, `(async () => {
     for (let frame = 0; frame < 4; frame += 1) await new Promise(requestAnimationFrame);
     const date = document.querySelector('.vote-timeline__date[datetime="2024-03-03"]');
-    const angle = Number.parseFloat(getComputedStyle(date, '::before').getPropertyValue('--beam-angle'));
-    const expected = (document.timeline.currentTime % 1400) / 1400 * 360;
+    const style = getComputedStyle(date, '::before');
+    const angle = Number.parseFloat(style.getPropertyValue('--beam-angle'));
+    const timelineTime = document.timeline.currentTime;
+    const expected = (timelineTime % 1400) / 1400 * 360;
     const rawDifference = Math.abs(angle - expected);
-    return { difference: Math.min(rawDifference, 360 - rawDifference), active: date.classList.contains('is-beam-running') };
+    const animation = document.getAnimations().find((candidate) => candidate.animationName === 'scheduled-border-beam'
+      && candidate.effect?.pseudoElement === '::before' && candidate.effect?.target === date);
+    const bounds = date.getBoundingClientRect();
+    return { difference: Math.min(rawDifference, 360 - rawDifference), active: date.classList.contains('is-beam-running'),
+      timelineTime, angle, expected, animation: style.animationName, duration: style.animationDuration, delay: style.animationDelay,
+      beamDelay: getComputedStyle(date).getPropertyValue('--beam-delay').trim(),
+      animationStartTime: animation?.startTime ?? null, animationCurrentTime: animation?.currentTime ?? null,
+      animationPlayState: animation?.playState ?? null, animationProgress: animation?.effect?.getComputedTiming().progress ?? null,
+      visibilityState: document.visibilityState, rect: { top: bounds.top, bottom: bounds.bottom }, innerHeight,
+      intersecting: bounds.bottom > 0 && bounds.top < innerHeight,
+      matchingAnimations: document.getAnimations().filter((candidate) => candidate.animationName === 'scheduled-border-beam'
+        && candidate.effect?.pseudoElement === '::before' && candidate.effect?.target === date).length };
   })()`);
-  assert.ok(reentryPhase.active && reentryPhase.difference < 10, 'independent viewport re-entry resumes at the current normalized page phase after multiple animation frames');
+  t.diagnostic(`Observed viewport re-entry phase sample: ${JSON.stringify(reentryPhase)}`);
+  assert.ok(reentryPhase.active && reentryPhase.difference < 10, `independent viewport re-entry resumes at the current normalized page phase after multiple animation frames: ${JSON.stringify(reentryPhase)}`);
   await client2.send('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0, connectionType: 'none' });
   assert.equal(await waitFor(client2, '!navigator.onLine'), true, 'the peer browser goes offline before the authoritative change');
   const scheduledEvent = server.database.prepare('SELECT id, revision FROM run_events WHERE event_date = ?').get('2024-03-03');
