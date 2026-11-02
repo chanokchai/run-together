@@ -20,6 +20,21 @@ function validateRoomTitle(value) {
   return title;
 }
 
+function validateRoomVenue(value = '') {
+  if (typeof value !== 'string') throw new TypeError('room venue must be a string');
+  const venue = value.trim();
+  if (Array.from(venue).length > 30) throw new RangeError('room venue must contain at most 30 characters');
+  return venue;
+}
+
+function validateRoomTime(value = '') {
+  if (typeof value !== 'string') throw new TypeError('room time must be a string');
+  if (value !== '' && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value)) {
+    throw new RangeError('room time must use valid 24-hour HH:mm format');
+  }
+  return value;
+}
+
 function validateRoomColor(color) {
   if (!ROOM_COLOR_PALETTE.includes(color)) throw new RangeError('invalid room color');
   return color;
@@ -40,6 +55,8 @@ function roomFromRow(row) {
     icon: row.icon,
     ownerUserId: row.owner_user_id,
     createdAt: row.created_at,
+    venue: row.venue ?? '',
+    time: row.time ?? '',
   };
 }
 
@@ -48,11 +65,15 @@ export function createRoom(database, {
   title,
   color = ROOM_COLOR_PALETTE[randomInt(ROOM_COLOR_PALETTE.length)],
   icon = DEFAULT_ROOM_ICON,
+  venue = '',
+  time = '',
   now = () => new Date(),
 } = {}) {
   const roomTitle = validateRoomTitle(title);
   const roomColor = validateRoomColor(color);
   const roomIcon = validateRoomIcon(icon);
+  const roomVenue = validateRoomVenue(venue);
+  const roomTime = validateRoomTime(time);
   if (!Number.isSafeInteger(creatorUserId) || creatorUserId < 1) {
     throw new TypeError('creatorUserId must be a positive safe integer');
   }
@@ -74,9 +95,9 @@ export function createRoom(database, {
       }
     }
     database.prepare(`
-      INSERT INTO rooms (id, display_number, title, color, icon, owner_user_id, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(roomId, counter.next_display_number, roomTitle, roomColor, roomIcon, creatorUserId, createdAt);
+      INSERT INTO rooms (id, display_number, title, color, icon, owner_user_id, created_at, venue, time)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(roomId, counter.next_display_number, roomTitle, roomColor, roomIcon, creatorUserId, createdAt, roomVenue, roomTime);
     database.prepare(`
       INSERT INTO room_memberships (room_id, user_id, joined_at)
       VALUES (?, ?, ?)
@@ -119,24 +140,49 @@ export function getRoomSummary(database, { roomId, now = () => new Date() } = {}
   return summarizeRoomEvents(database, roomId, getBangkokDate(now));
 }
 
-export function listRooms(database, { now = () => new Date() } = {}) {
+export function listRooms(database, { now = () => new Date(), currentUserId } = {}) {
   const today = getBangkokDate(now);
-  return database.prepare('SELECT * FROM rooms ORDER BY display_number, title, id').all()
-    .map((row) => ({ ...roomFromRow(row), summary: summarizeRoomEvents(database, row.id, today) }))
+  const hasViewer = Number.isSafeInteger(currentUserId) && currentUserId > 0;
+  const viewerSelect = hasViewer
+    ? ', EXISTS(SELECT 1 FROM votes AS viewer_votes WHERE viewer_votes.room_id = rooms.id AND viewer_votes.user_id = ? AND viewer_votes.vote_date >= ?) AS my_voted'
+    : '';
+  const parameters = hasViewer ? [today, currentUserId, today] : [today];
+  return database.prepare(`
+    SELECT rooms.*, owner.name AS owner_display_name,
+      (SELECT COUNT(DISTINCT votes.user_id)
+       FROM votes JOIN users ON users.id = votes.user_id
+       WHERE votes.room_id = rooms.id AND votes.vote_date >= ?) AS voter_count
+      ${viewerSelect}
+    FROM rooms
+    LEFT JOIN users AS owner ON owner.id = rooms.owner_user_id
+    ORDER BY rooms.display_number, rooms.title, rooms.id
+  `).all(...parameters)
+    .map((row) => ({
+      ...roomFromRow(row),
+      ownerDisplayName: row.owner_display_name ?? '',
+      voterCount: row.voter_count,
+      ...(hasViewer ? { myVoted: Boolean(row.my_voted) } : {}),
+      summary: summarizeRoomEvents(database, row.id, today),
+    }))
     .sort((left, right) => (left.summary.earliestDate ?? '9999-12-31').localeCompare(right.summary.earliestDate ?? '9999-12-31')
       || left.displayNumber - right.displayNumber
       || left.title.localeCompare(right.title)
       || left.id.localeCompare(right.id));
 }
 
-export function updateRoomMetadata(database, { roomId, title, icon } = {}) {
+export function updateRoomMetadata(database, { roomId, title, icon, venue, time } = {}) {
   if (typeof roomId !== 'string' || roomId.length === 0) throw new TypeError('roomId is required');
-  if (title === undefined && icon === undefined) throw new TypeError('room title or icon is required');
+  if (title === undefined && icon === undefined && venue === undefined && time === undefined) {
+    throw new TypeError('room title, icon, venue, or time is required');
+  }
   const current = getRoom(database, { roomId });
   if (!current) return null;
   const roomTitle = title === undefined ? current.title : validateRoomTitle(title);
   const roomIcon = icon === undefined ? current.icon : validateRoomIcon(icon);
-  database.prepare('UPDATE rooms SET title = ?, icon = ? WHERE id = ?').run(roomTitle, roomIcon, roomId);
+  const roomVenue = venue === undefined ? current.venue : validateRoomVenue(venue);
+  const roomTime = time === undefined ? current.time : validateRoomTime(time);
+  database.prepare('UPDATE rooms SET title = ?, icon = ?, venue = ?, time = ? WHERE id = ?')
+    .run(roomTitle, roomIcon, roomVenue, roomTime, roomId);
   return getRoom(database, { roomId });
 }
 
@@ -178,4 +224,4 @@ export function validateRoomMetadata({ color, icon }) {
   return { color: validateRoomColor(color), icon: validateRoomIcon(icon) };
 }
 
-export { LEGACY_ROOM_ID, ROOM_COLOR_PALETTE, ROOM_ICONS };
+export { LEGACY_ROOM_ID, ROOM_COLOR_PALETTE, ROOM_ICONS, validateRoomTime, validateRoomVenue };

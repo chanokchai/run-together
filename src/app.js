@@ -29,6 +29,7 @@ import {
 } from './domain.js';
 
 const voteBoardScript = readFileSync(new URL('./vote-board.js', import.meta.url), 'utf8');
+const calendarScript = readFileSync(new URL('./calendar.js', import.meta.url), 'utf8');
 const dateTimeScript = readFileSync(new URL('./date-time.js', import.meta.url), 'utf8');
 const runEventsScript = readFileSync(new URL('./run-events.js', import.meta.url), 'utf8');
 const roomContractScript = readFileSync(new URL('./room-contract.js', import.meta.url), 'utf8');
@@ -83,29 +84,51 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       .rooms-toolbar h1 { margin: 0; }
       .rooms-toolbar__account { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .8rem; margin: .4rem 0 0; }
       .rooms-toolbar__account button, .rooms-toolbar__account .button { width: auto; min-width: 44px; margin: 0; }
-      .room-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 12rem), 1fr)); align-items: start; gap: 1rem; margin: 1rem 0 0; padding: 0; list-style: none; }
-      .room-card { position: relative; display: grid; grid-template-rows: 1.55rem minmax(3.2rem, 1.2fr) minmax(2.6rem, .9fr) minmax(2.6rem, .9fr); gap: .25rem; padding: .35rem .45rem; box-sizing: border-box; isolation: isolate; aspect-ratio: 1; min-width: 0; overflow: hidden; border: 5px solid #dbeafe; border-radius: 1rem; background: var(--room-color); color: #fff; box-shadow: 0 .25rem .9rem #14213d30; }
-      .room-card.is-scheduled { border-color: #15803d; box-shadow: inset 0 0 0 1px #dcfce7, 0 .25rem .9rem #14213d30; }
-      .room-card__entry { display: grid; grid-row: 1 / span 2; grid-template-rows: 1.45rem minmax(0, 1fr); gap: .15rem; min-width: 0; min-height: 0; color: #fff; text-align: center; text-decoration: none; }
-      .room-card__entry:focus-visible { outline: 4px solid #f5c542; outline-offset: -7px; border-radius: .65rem; }
-      .room-card__number { align-self: center; justify-self: start; padding: .1rem .45rem; border-radius: 1rem; background: #14213d44; font-size: .8rem; font-weight: 800; font-variant-numeric: tabular-nums; }
-      .room-card__identity { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; justify-content: center; gap: .35rem; min-width: 0; min-height: 0; }
+      .room-page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: .5rem; min-width: 0; }
+      .room-page-header__identity { flex: 1 1 auto; min-width: 0; }
+      .room-page-header__identity h1 { margin-top: 0; overflow-wrap: anywhere; }
+      .room-page-metadata { max-width: 100%; margin: .15rem 0; font-size: .9rem; line-height: 1.25; overflow-wrap: anywhere; }
+      .room-page-header a.button { display: inline-flex; flex: 0 0 44px; width: 44px; min-width: 44px; height: 44px; align-items: center; justify-content: center; margin: 0; padding: .45rem; background: #e8eef5; color: #14213d; }
+      .room-page-header a.button:focus-visible { outline: 3px solid #145da0; outline-offset: 2px; }
+      .room-page-header a.button svg { width: 1.35rem; height: 1.35rem; }
+      .room-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 13rem), 1fr)); align-items: start; gap: 1rem; margin: 1rem 0 0; padding: 0; list-style: none; }
+      .room-card { --room-title-size: clamp(.92rem, 2.07vw, 1.035rem); position: relative; display: grid; grid-template-columns: minmax(0, 1fr) minmax(3rem, max-content); grid-template-areas: "entry summary" "scheduled scheduled" "proposed proposed"; align-content: start; gap: .45rem .35rem; box-sizing: border-box; isolation: isolate; min-width: 0; min-height: 180px; padding: .65rem; border: 5px solid var(--room-color); border-radius: 1rem; background: transparent; color: #14213d; box-shadow: 0 .25rem .9rem #14213d30; }
+      .room-card[hidden] { display: none; }
+      .room-card.is-scheduled { border-width: 5.5px; box-shadow: inset 0 0 0 1px #dcfce7, 0 .25rem .9rem #14213d30; --border-width: 5.5px; }
+      .room-card__entry { grid-area: entry; display: flex; min-width: 0; min-height: 0; flex-direction: column; align-items: flex-start; gap: .12rem; color: #14213d; text-align: left; text-decoration: none; }
+      .room-card__entry:focus-visible { outline: 4px solid #145da0; outline-offset: 2px; border-radius: .35rem; }
+      .room-card__number { align-self: flex-start; max-width: 100%; color: #14213d; font-size: calc(var(--room-title-size) * 1.2); font-weight: 800; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+      .room-card__owner { max-width: 100%; font-size: clamp(.78rem, 1.65vw, .92rem); font-weight: 600; overflow-wrap: anywhere; }
+      .room-card__identity { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: .3rem; min-width: 0; margin-top: .3rem; }
       .room-card__icon { font-size: clamp(1.3rem, 4.5vw, 1.8rem); line-height: 1; }
-      .room-card__title { min-width: 0; max-width: 100%; font-size: clamp(.8rem, 1.8vw, .9rem); font-weight: 800; line-height: 1; overflow-wrap: anywhere; }
-      .room-card__dates { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: stretch; gap: .25rem; min-width: 0; min-height: 0; margin: 0; padding: .15rem .25rem; border-radius: .35rem; font-size: clamp(.64rem, 1.5vw, .78rem); line-height: 1.2; overflow: hidden; }
+      .room-card__title { min-width: 0; max-width: 100%; font-size: var(--room-title-size); font-weight: 800; line-height: 1.15; overflow-wrap: anywhere; }
+      .room-card__venue, .room-card__time { max-width: 100%; font-size: clamp(.76rem, 1.6vw, .9rem); line-height: 1.2; overflow-wrap: anywhere; }
+      .room-card__summary { grid-area: summary; display: flex; min-width: 0; flex-direction: column; align-items: flex-end; gap: .4rem; text-align: right; }
+      .room-card__voter-count { max-width: 100%; font-size: clamp(.72rem, 1.5vw, .86rem); font-weight: 700; line-height: 1.2; overflow-wrap: anywhere; }
+      .room-card__dates { display: grid; grid-area: auto; grid-template-columns: max-content minmax(0, 1fr); align-items: start; gap: .3rem; min-width: 0; margin: 0; padding: .12rem 0; color: #14213d; font-size: clamp(.736rem, 1.725vw, .897rem); line-height: 1.25; }
+      .room-card__dates[hidden] { display: none; }
+      .room-card__dates--scheduled { grid-area: scheduled; font-weight: 600; }
+      .room-card__dates--proposed { grid-area: proposed; font-size: clamp(.782rem, 1.955vw, .966rem); font-weight: 700; }
       .room-card__dates strong { align-self: start; white-space: nowrap; }
-      .room-card__date-values { display: block; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; overflow-wrap: anywhere; overscroll-behavior: contain; scrollbar-width: thin; touch-action: pan-y; }
-      .room-card__dates--scheduled { font-weight: 600; }
-      .room-card__dates--proposed { background: #14213d35; font-size: clamp(.68rem, 1.7vw, .84rem); font-weight: 800; }
-      .room-card__actions { position: absolute; z-index: 2; top: .35rem; right: .35rem; display: flex; justify-content: flex-end; }
-      .room-card__edit { display: inline-flex; width: auto; min-width: 44px; min-height: 44px; align-items: center; justify-content: center; margin: 0; padding: .4rem .65rem; border: 2px solid #14213d; background: #fff; color: #14213d; }
+      .room-card__date-values { display: block; min-width: 0; max-height: 2.75rem; overflow-x: hidden; overflow-y: auto; overflow-wrap: anywhere; scrollbar-width: thin; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+      .room-card__date-value { display: inline; font-style: normal; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+      .room-card__date-value:not(:last-child)::after { content: ", "; white-space: pre; }
+      .room-card__date-value.is-proposed-date-glowing { color: #6b21a8; text-shadow: 0 0 2px #c084fc, 0 0 5px #a855f7; }
+      .room-card__date-value.is-proposed-glow-running { animation: proposed-date-glow 2.8s ease-in-out infinite; animation-delay: var(--proposed-glow-delay, 0ms); }
+      @keyframes proposed-date-glow { 0%, 100% { text-shadow: 0 0 2px #c084fc, 0 0 5px #a855f7; } 50% { text-shadow: 0 0 3px #d8b4fe, 0 0 8px #a855f7, 0 0 13px #7e22ce; } }
+      .room-card__actions { display: flex; width: auto; justify-content: flex-end; }
+      .room-card__edit { display: inline-flex; width: auto; min-width: 44px; min-height: 44px; align-items: center; justify-content: center; margin: 0; padding: .35rem .55rem; border: 2px solid #14213d; background: #fff; color: #14213d; }
       .room-card__edit[hidden] { display: none; }
-      .room-card__edit:focus-visible, .room-icon-picker input:focus-visible { outline: 3px solid #f5c542; outline-offset: 2px; }
-      .room-icon-picker { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 8rem), 1fr)); gap: .35rem .6rem; margin: .75rem 0; padding: .65rem; border: 1px solid #94a3b8; border-radius: .5rem; }
-      .room-icon-picker label { display: flex; min-height: 44px; align-items: center; gap: .4rem; margin: 0; overflow-wrap: anywhere; }
-      .room-icon-picker input { width: 1.25rem; min-width: 1.25rem; min-height: 1.25rem; margin: 0; padding: 0; }
+      .room-card__edit:focus-visible, .room-icon-picker select:focus-visible { outline: 3px solid #145da0; outline-offset: 2px; }
+      .room-icon-picker { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .6rem; margin: .75rem 0; padding: .65rem; border: 1px solid #94a3b8; border-radius: .5rem; }
+      .room-icon-picker__label { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin: 0; }
+      .room-icon-picker__select { box-sizing: border-box; min-width: min(100%, 12rem); min-height: 44px; padding: .45rem .65rem; border: 1px solid #52606d; border-radius: .4rem; background: #fff; color: #14213d; font: inherit; }
+      #room-filters { display: flex; flex-wrap: wrap; gap: .45rem 1rem; margin: 1rem 0; padding: .5rem .75rem; border: 1px solid #94a3b8; border-radius: .5rem; }
+      #room-filters label { display: inline-flex; min-height: 44px; align-items: center; gap: .4rem; margin: 0; }
+      #room-filters input { width: 1.2rem; min-width: 1.2rem; min-height: 1.2rem; margin: 0; padding: 0; }
+      #rooms-no-matches { margin: 1rem 0; }
       .room-edit-dialog { width: min(32rem, calc(100vw - 2rem)); }
-      .room-edit-dialog input[name="title"] { width: 100%; }
+      .room-edit-dialog input[name="title"], .room-edit-dialog input[name="venue"], .room-edit-dialog input[name="time"] { width: 100%; }
       .room-edit-dialog .dialog-actions { grid-template-columns: 1fr 1fr; }
       .room-edit-dialog .dialog-actions button { margin: 0; }
       .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
@@ -149,7 +172,8 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       :is(.vote-timeline__date.is-scheduled, .vote-timeline__bar.is-scheduled, .vote-card.is-scheduled, .room-card.is-scheduled, .run-event-banner--scheduled).is-beam-running { position: relative; isolation: isolate; }
       :is(.vote-timeline__date.is-scheduled, .vote-timeline__bar.is-scheduled, .vote-card.is-scheduled, .room-card.is-scheduled, .run-event-banner--scheduled).is-beam-running::before { content: ""; position: absolute; z-index: 0; inset: 0; box-sizing: border-box; padding: var(--border-width); border-radius: inherit; background: conic-gradient(from var(--beam-angle), transparent 0 25%, var(--beam-color) 38%, #f0fdf4 var(--beam-length), var(--beam-color) 62%, transparent 75% 100%); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; filter: drop-shadow(0 0 var(--glow-blur) var(--beam-color)); clip-path: inset(0); pointer-events: none; animation: scheduled-border-beam var(--beam-speed) linear infinite; animation-delay: var(--beam-delay, 0ms); }
       :is(.vote-timeline__date, .vote-timeline__bar, .vote-card, .room-card, .run-event-banner).is-beam-running > * { position: relative; z-index: 1; }
-      .room-card.is-beam-running > .room-card__actions { position: absolute; z-index: 2; }
+
+      .room-card.is-scheduled { --border-width: 5.5px; }
       @keyframes scheduled-border-beam { to { --beam-angle: 360deg; } }
       .vote-timeline__month { font-size: .42rem; line-height: 8px; }
       .vote-day { display: flex; min-width: 0; }
@@ -350,15 +374,27 @@ const roomListPage = () => page({
       <form id="create-room-form">
         <label for="create-room-title">Room title / ชื่อห้อง</label>
         <input id="create-room-title" name="title" type="text" required maxlength="60" autocomplete="off" aria-describedby="rooms-message">
+        <label for="create-room-venue">Venue / สถานที่ (optional)</label>
+        <input id="create-room-venue" name="venue" type="text" maxlength="60" autocomplete="off">
+        <label for="create-room-time">Time in Bangkok / เวลา (HH:mm)</label>
+        <input id="create-room-time" name="time" type="text" inputmode="numeric" pattern="(?:[01]\\d|2[0-3]):[0-5]\\d" maxlength="5" placeholder="HH:mm" aria-describedby="create-room-time-format">
+        <span id="create-room-time-format" class="visually-hidden">Use a valid 24-hour time in HH:mm format.</span>
         <fieldset class="room-icon-picker" id="create-icon-picker"></fieldset>
         <button type="submit">Create room / สร้างห้อง</button>
       </form>
       <p id="rooms-message" class="message" role="status" aria-live="polite"></p>
     </section>
     <p id="rooms-empty" hidden>No rooms yet. Create a room to get started. / ยังไม่มีห้อง กรุณาสร้างห้องใหม่</p>
+    <fieldset id="room-filters" aria-label="Filter rooms / กรองห้อง">
+      <legend>Filter rooms / กรองห้อง</legend>
+      <label><input id="filter-my-voted" type="checkbox"> My voted</label>
+      <label><input id="filter-scheduled" type="checkbox"> Scheduled</label>
+      <label><input id="filter-proposed" type="checkbox"> Proposed</label>
+    </fieldset>
+    <p id="rooms-no-matches" hidden>No rooms match these filters. / ไม่มีห้องที่ตรงกับตัวกรอง</p>
     <div id="room-cards" class="room-cards" role="list" aria-label="Rooms"></div>
   </section>`,
-  script: `import { startRoomListPage } from '/room-list.js?v=issue-38-room-list-2'; startRoomListPage();`,
+  script: `import { startRoomListPage } from '/room-list.js?v=issue-43-room-list-2'; startRoomListPage();`,
 });
 
 const changePinPage = (returnTo = '/rooms') => page({
@@ -621,6 +657,8 @@ export function createApp({ databaseReady = false, database, env = process.env, 
 
   app.get('/vote-board.js', (_request, response) => response.type('application/javascript').send(voteBoardScript));
 
+  app.get('/calendar.js', (_request, response) => response.type('application/javascript').send(calendarScript));
+
   app.get('/date-time.js', (_request, response) => response.type('application/javascript').send(dateTimeScript));
 
   app.get('/run-events.js', (_request, response) => response.type('application/javascript').send(runEventsScript));
@@ -668,7 +706,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
       response.setHeader('Cache-Control', 'no-store');
       const session = auth.requireSession(request, response);
       if (!session) return;
-      response.json({ rooms: listRooms(database, { now })
+      response.json({ rooms: listRooms(database, { now, currentUserId: session.user_id })
         .map((room) => ({ ...room, canEdit: room.ownerUserId === session.user_id })) });
     });
 
@@ -680,7 +718,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
         auth.assertCsrf(request, session);
         const body = request.body;
         if (!body || typeof body !== 'object' || Array.isArray(body)
-          || Object.keys(body).some((key) => !['title', 'icon'].includes(key))
+          || Object.keys(body).some((key) => !['title', 'icon', 'venue', 'time'].includes(key))
           || !Object.hasOwn(body, 'title')) {
           throw new AuthError(400, 'INVALID_ROOM_REQUEST', 'Room title and supported icon are required.');
         }
@@ -691,6 +729,8 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           creatorUserId: session.user_id,
           title: body.title,
           icon: body.icon ?? DEFAULT_ROOM_ICON,
+          venue: body.venue === undefined ? '' : body.venue,
+          time: body.time === undefined ? '' : body.time,
           now,
         });
         const summary = getRoomSummary(database, { roomId: room.id, now });
@@ -698,7 +738,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
         response.status(201).json({ room: { ...room, summary } });
       } catch (error) {
         if (error instanceof TypeError || error instanceof RangeError) {
-          sendError(response, new AuthError(400, 'INVALID_ROOM_REQUEST', 'Room title or icon is invalid.', { cause: error }));
+          sendError(response, new AuthError(400, 'INVALID_ROOM_REQUEST', 'Room title, venue, time, or icon is invalid.', { cause: error }));
           return;
         }
         sendError(response, error);
@@ -741,8 +781,8 @@ export function createApp({ databaseReady = false, database, env = process.env, 
         const body = request.body;
         const keys = body && typeof body === 'object' && !Array.isArray(body) ? Object.keys(body) : [];
         if (!body || typeof body !== 'object' || Array.isArray(body) || keys.length === 0
-          || keys.some((key) => !['title', 'icon'].includes(key))) {
-          throw new AuthError(400, 'INVALID_ROOM_REQUEST', 'Only a room title or supported icon can be changed.');
+          || keys.some((key) => !['title', 'icon', 'venue', 'time'].includes(key))) {
+          throw new AuthError(400, 'INVALID_ROOM_REQUEST', 'Only room title, icon, venue, or time can be changed.');
         }
         if (body.icon !== undefined && !ROOM_ICONS.includes(body.icon)) {
           throw new AuthError(400, 'INVALID_ROOM_ICON', 'The room icon is not supported.');
@@ -750,7 +790,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
         const room = getRoom(database, { roomId: request.params.roomId });
         if (!room) throw new AuthError(404, 'ROOM_NOT_FOUND', 'The room was not found.');
         if (room.ownerUserId !== session.user_id) {
-          throw new AuthError(403, 'ROOM_OWNER_REQUIRED', 'Only the room owner can change its title or icon.');
+          throw new AuthError(403, 'ROOM_OWNER_REQUIRED', 'Only the room owner can change its metadata.');
         }
         const updated = updateRoomMetadata(database, { roomId: room.id, ...body });
         const summary = getRoomSummary(database, { roomId: room.id, now });
@@ -758,7 +798,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
         response.json({ room: { ...updated, summary } });
       } catch (error) {
         if (error instanceof TypeError || error instanceof RangeError) {
-          sendError(response, new AuthError(400, 'INVALID_ROOM_REQUEST', 'Room title or icon is invalid.', { cause: error }));
+          sendError(response, new AuthError(400, 'INVALID_ROOM_REQUEST', 'Room title, venue, time, or icon is invalid.', { cause: error }));
           return;
         }
         sendError(response, error);
@@ -1143,7 +1183,16 @@ export function createApp({ databaseReady = false, database, env = process.env, 
         mainClass: 'vote-page-main',
         scriptSrc: '/socket.io/socket.io.js',
         content: `<section id="protected-content" hidden data-room-id="${room.id}">
-          <h1 id="room-heading">${escapeHtml(room.title)}</h1>
+          <header id="room-page-header" class="room-page-header">
+            <div class="room-page-header__identity">
+              <h1 id="room-heading">${escapeHtml(room.title)}</h1>
+              <p id="room-venue-line" class="room-page-metadata" aria-label="Venue / สถานที่"${room.venue ? '' : ' hidden'}>Venue / สถานที่: <span id="room-venue">${escapeHtml(room.venue)}</span></p>
+              <p id="room-time-line" class="room-page-metadata" aria-label="Time in Bangkok / เวลา"${room.time ? '' : ' hidden'}>Time / เวลา: <time id="room-time">${escapeHtml(room.time)}</time></p>
+            </div>
+            <a id="back-to-rooms" class="button" href="/rooms" aria-label="Return to rooms">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M10 3H4v18h6M14 7l5 5-5 5M19 12H8" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></svg>
+            </a>
+          </header>
           <section id="vote-timeline" class="vote-timeline" aria-labelledby="vote-timeline-heading">
             <h2 id="vote-timeline-heading">Vote timeline</h2>
             <p id="vote-timeline-range" class="vote-timeline__range" role="status">Loading vote totals…</p>
@@ -1162,7 +1211,6 @@ export function createApp({ databaseReady = false, database, env = process.env, 
             <button id="next-week" type="button" aria-label="Next week">&gt;&gt;</button>
           </nav>
           ${resetControl}
-          <a id="back-to-rooms" class="button" href="/rooms">Return to rooms / กลับไปหน้าห้อง</a>
           <a id="change-pin" class="button" href="/change-pin?returnTo=${encodeURIComponent(`/vote/${room.id}`)}">เปลี่ยน PIN / Change PIN</a>
           ${session.role === 'admin' ? `<a id="manage-users-link" class="button" href="/admin?returnTo=${encodeURIComponent(`/vote/${room.id}`)}">Manage users</a>` : ''}
           <div class="actions"><button id="logout" type="button" class="secondary">Logout</button></div>
@@ -1190,6 +1238,10 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           const displayName = document.querySelector('#display-name');
           const weekHeading = document.querySelector('#week-heading');
           const roomHeading = document.querySelector('#room-heading');
+          const roomVenueLine = document.querySelector('#room-venue-line');
+          const roomVenue = document.querySelector('#room-venue');
+          const roomTimeLine = document.querySelector('#room-time-line');
+          const roomTime = document.querySelector('#room-time');
           const weekDays = document.querySelector('#week-days');
           const timelineDays = document.querySelector('#vote-timeline-days');
           const timelineRange = document.querySelector('#vote-timeline-range');
@@ -1204,7 +1256,22 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           function guardProtectedContent() { weekLoadSequence += 1; roomMetadataSequence += 1; window.clearTimeout(rolloverTimer); protectedContent.hidden = true; csrfToken = ''; displayName.textContent = ''; weekDays.replaceChildren(); runEvents.replaceChildren(); timelineDays.replaceChildren(); scheduledEffects.sync('banner', []); scheduledEffects.sync('date-card', []); scheduledEffects.sync('timeline', []); runEventHandlers.forEach(({ abort, disposeSwipe }) => { abort.abort(); disposeSwipe?.(); }); runEventHandlers.clear(); runEventElements.clear(); weekState = null; eventsByDate = new Map(); message.textContent = ''; }
           function redirectToLogin() { guardProtectedContent(); location.replace('/'); }
           function addText(parent, tag, text) { const element = document.createElement(tag); element.textContent = text; parent.append(element); return element; }
-          function applyRoomMetadata(room) { if (room?.id !== roomId || typeof room.title !== 'string') return; roomMetadataSequence += 1; roomHeading.textContent = room.title; }
+          function renderRoomMetadata(room) {
+            roomHeading.textContent = room.title;
+            const venue = typeof room.venue === 'string' ? room.venue : '';
+            const time = typeof room.time === 'string' ? room.time : '';
+            roomVenue.textContent = venue;
+            roomVenueLine.hidden = venue.length === 0;
+            roomTime.textContent = time;
+            if (time) roomTime.dateTime = time;
+            else roomTime.removeAttribute('datetime');
+            roomTimeLine.hidden = time.length === 0;
+          }
+          function applyRoomMetadata(room) {
+            if (room?.id !== roomId || typeof room.title !== 'string') return;
+            roomMetadataSequence += 1;
+            renderRoomMetadata(room);
+          }
           async function refreshRoomMetadata() {
             const sequence = ++roomMetadataSequence;
             try {
@@ -1213,7 +1280,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
               if (sequence !== roomMetadataSequence) return false;
               if (response.status === 401) { redirectToLogin(); return false; }
               if (!response.ok || result.room?.id !== roomId || typeof result.room.title !== 'string') return false;
-              roomHeading.textContent = result.room.title;
+              renderRoomMetadata(result.room);
               return true;
             } catch { return false; }
           }

@@ -108,8 +108,9 @@ test('Issue 32 migration adds durable event and retry tables without changing ex
 
     migrate(database);
 
-    const migration = database.prepare('SELECT version, name FROM schema_migrations ORDER BY version DESC LIMIT 1').get();
-    assert.equal(migration.version, 7);
+    const latestMigration = database.prepare('SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1').get();
+    const migration = database.prepare('SELECT name FROM schema_migrations WHERE version = 7').get();
+    assert.equal(latestMigration.version, 9);
     assert.equal(migration.name, 'preserve_event_attribution_after_user_deletion');
     assert.deepEqual(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('run_events', 'run_event_requests') ORDER BY name").all(), [
       { name: 'run_event_requests' },

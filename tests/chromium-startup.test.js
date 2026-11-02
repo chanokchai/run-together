@@ -76,7 +76,7 @@ test('Chromium readiness accepts a port published beyond five seconds within its
       const port = await readDevToolsPort(directory, browser, {
         read: async () => {
           if (simulatedNow < 5250) throw Object.assign(new Error('port is not ready yet'), { code: 'ENOENT' });
-          return '43123\n';
+          return '43123\n/devtools/browser/fixture-id\n';
         },
         wait: async (milliseconds) => { simulatedNow += milliseconds; },
       });
@@ -85,6 +85,76 @@ test('Chromium readiness accepts a port published beyond five seconds within its
     } finally {
       Date.now = originalNow;
     }
+  });
+});
+
+test('Chromium readiness waits for a complete valid DevToolsActivePort publication', async () => {
+  await withTemporaryProfile(async (directory) => {
+    const browser = Object.assign(new EventEmitter(), {
+      exitCode: null,
+      signalCode: null,
+      spawnError: null,
+      spawnfile: 'fixture-browser',
+      stderrTail: '',
+    });
+    const publications = [
+      '',
+      '43123',
+      '43123\n',
+      '43123\n/devtools/browser/',
+      '0\n/devtools/browser/fixture-id\n',
+      '65536\n/devtools/browser/fixture-id\n',
+      '1.5\n/devtools/browser/fixture-id\n',
+      '43123\n/devtools/page/fixture-id\n',
+      '43123\n/devtools/browser/fixture-id\nextra\n',
+      '43123\n/devtools/browser/fixture-id\n',
+    ];
+    let readCount = 0;
+    let simulatedNow = 0;
+    const originalNow = Date.now;
+    Date.now = () => simulatedNow;
+
+    try {
+      const port = await readDevToolsPort(directory, browser, {
+        pollIntervalMs: 50,
+        read: async () => publications[readCount++],
+        wait: async (milliseconds) => { simulatedNow += milliseconds; },
+      });
+      assert.equal(port, 43123);
+      assert.equal(readCount, publications.length, 'ignores empty, partial, malformed and out-of-range publications');
+      assert.equal(simulatedNow, 50 * (publications.length - 1), 'keeps polling within the existing readiness deadline');
+      for (const boundaryPort of [1, 65535]) {
+        const acceptedBoundary = await readDevToolsPort(directory, browser, {
+          read: async () => `${boundaryPort}\n/devtools/browser/fixture-id\n`,
+        });
+        assert.equal(acceptedBoundary, boundaryPort, 'accepts both ends of the valid TCP port range');
+      }
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+});
+
+test('Chromium readiness propagates unexpected DevToolsActivePort read errors', async () => {
+  await withTemporaryProfile(async (directory) => {
+    const browser = Object.assign(new EventEmitter(), {
+      exitCode: null,
+      signalCode: null,
+      spawnError: null,
+      spawnfile: 'fixture-browser',
+      stderrTail: '',
+    });
+    const readError = Object.assign(new Error('fixture profile access denied'), { code: 'EACCES' });
+    let waitCount = 0;
+
+    await assert.rejects(
+      readDevToolsPort(directory, browser, {
+        read: async () => { throw readError; },
+        wait: async () => { waitCount += 1; },
+      }),
+      (error) => error === readError,
+    );
+    assert.equal(waitCount, 0, 'does not retry or hide non-ENOENT filesystem errors');
   });
 });
 

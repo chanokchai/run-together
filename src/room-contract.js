@@ -21,6 +21,16 @@ export const ROOM_ICONS = Object.freeze([
   'cycling',
   'swimming',
   'hiking',
+  'dinner',
+  'office',
+  'meeting',
+  'coffee',
+  'birthday',
+  'study',
+  'shopping',
+  'travel',
+  'cinema',
+  'music',
 ]);
 
 export const DEFAULT_ROOM_COLOR = ROOM_COLOR_PALETTE[0];
