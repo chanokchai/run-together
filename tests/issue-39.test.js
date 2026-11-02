@@ -429,6 +429,58 @@ test('Issue 39 blocks stale room reads, writes, metadata, entry, reset, retry, a
   });
 });
 
+test('Issue 39 closes legacy APIs and subscriptions after deleting the legacy room', async () => {
+  await withServer(async (baseUrl, server) => {
+    const admin = await loginAdmin(baseUrl);
+    const socket = connectSocket(baseUrl, { transports: ['websocket'], extraHeaders: { origin: baseUrl, cookie: admin.cookie } });
+    await waitForSocket(socket);
+    await subscribeRoom(socket, LEGACY_ROOM_ID);
+    try {
+      const deletedEvent = new Promise((resolve) => socket.once('room:deleted', resolve));
+      const deletion = await deleteRoom(baseUrl, admin, LEGACY_ROOM_ID);
+      assert.equal(deletion.status, 200);
+      assert.deepEqual(await deletion.json(), { deletedRoomId: LEGACY_ROOM_ID });
+      assert.deepEqual(await deletedEvent, { roomId: LEGACY_ROOM_ID }, 'the subscribed legacy board receives the committed deletion');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.equal(server.io.sockets.adapter.rooms.get(`board:${LEGACY_ROOM_ID}`)?.size ?? 0, 0);
+      for (const activeSocket of server.io.sockets.sockets.values()) {
+        assert.equal(activeSocket.data.roomIds.has(LEGACY_ROOM_ID), false);
+      }
+
+      const routes = [
+        ['GET', `/api/rooms/${LEGACY_ROOM_ID}`, null],
+        ['POST', `/api/rooms/${LEGACY_ROOM_ID}/enter`, {}],
+        ['PUT', `/api/rooms/${LEGACY_ROOM_ID}`, { title: 'Must not restore legacy room' }],
+        ['GET', `/api/rooms/${LEGACY_ROOM_ID}/weeks/${WEEK}`, null],
+        ['GET', `/api/rooms/${LEGACY_ROOM_ID}/vote-timeline`, null],
+        ['PUT', `/api/rooms/${LEGACY_ROOM_ID}/votes/${DATE}`, { selected: true }],
+        ['POST', `/api/rooms/${LEGACY_ROOM_ID}/events/${DATE}`, { requestId: 'legacy-after-delete-propose' }],
+        ['DELETE', `/api/rooms/${LEGACY_ROOM_ID}/events/${DATE}`, { eventId: 1, revision: 1, requestId: 'legacy-after-delete-withdraw' }],
+        ['PUT', `/api/rooms/${LEGACY_ROOM_ID}/admin/events/${DATE}`, { eventId: 1, revision: 1, requestId: 'legacy-after-delete-schedule', status: 'scheduled' }],
+        ['DELETE', `/api/rooms/${LEGACY_ROOM_ID}/admin/events/${DATE}`, { eventId: 1, revision: 1, requestId: 'legacy-after-delete-event-delete' }],
+        ['DELETE', `/api/rooms/${LEGACY_ROOM_ID}/admin/weeks/${WEEK}/votes`, { confirmation: true }],
+      ];
+      for (const [method, path, body] of routes) {
+        const response = await fetch(`${baseUrl}${path}`, {
+          method,
+          headers: headers(baseUrl, admin),
+          ...(body === null ? {} : { body: JSON.stringify(body) }),
+        });
+        assert.equal(response.status, 404, `${method} ${path} cannot access or recreate the deleted legacy room`);
+        assert.equal((await response.json()).code, 'ROOM_NOT_FOUND');
+      }
+      const legacyBoard = await fetch(`${baseUrl}/vote/${LEGACY_ROOM_ID}`, { headers: { cookie: admin.cookie } });
+      assert.equal(legacyBoard.status, 404, 'the legacy board URL cannot reopen deleted state');
+      const resubscribe = await new Promise((resolve) => socket.emit('room:subscribe', { roomId: LEGACY_ROOM_ID }, resolve));
+      assert.deepEqual(resubscribe, { ok: false, code: 'ROOM_NOT_FOUND' });
+      assert.equal(server.database.prepare('SELECT COUNT(*) AS count FROM rooms WHERE id = ?').get(LEGACY_ROOM_ID).count, 0);
+      assert.equal(server.database.prepare('SELECT COUNT(*) AS count FROM room_identity_ledger WHERE room_id = ?').get(LEGACY_ROOM_ID).count, 1);
+    } finally {
+      socket.close();
+    }
+  });
+});
+
 test('Issue 39 runs the A/B/C versus A/C/D lifecycle without cross-room effects or elevated user privileges', async () => {
   await withServer(async (baseUrl, server) => {
     const [a, b, c, d] = await Promise.all([
@@ -458,6 +510,21 @@ test('Issue 39 runs the A/B/C versus A/C/D lifecycle without cross-room effects 
     });
     assert.equal(proposalOne.status, 201);
     let eventOne = (await proposalOne.json()).event;
+    const proposalTwo = await fetch(`${baseUrl}/api/rooms/${roomTwo.id}/events/${DATE}`, {
+      method: 'POST', headers: headers(baseUrl, c), body: JSON.stringify({ requestId: randomUUID() }),
+    });
+    assert.equal(proposalTwo.status, 201);
+    const eventTwoBefore = server.database.prepare(`
+      SELECT id, room_id, event_date, status, revision, proposed_by, proposed_by_name, proposed_at,
+        scheduled_by, scheduled_by_name, scheduled_at
+      FROM run_events WHERE room_id = ? AND event_date = ?
+    `).get(roomTwo.id, DATE);
+    const assertRoomTwoEventUnchanged = () => assert.deepEqual(server.database.prepare(`
+      SELECT id, room_id, event_date, status, revision, proposed_by, proposed_by_name, proposed_at,
+        scheduled_by, scheduled_by_name, scheduled_at
+      FROM run_events WHERE room_id = ? AND event_date = ?
+    `).get(roomTwo.id, DATE), eventTwoBefore, 'room-one event actions preserve room-two event identity and every field');
+    assertRoomTwoEventUnchanged();
     for (const status of ['scheduled', 'proposed', 'scheduled']) {
       const changed = await fetch(`${baseUrl}/api/rooms/${roomOne.id}/admin/events/${DATE}`, {
         method: 'PUT', headers: headers(baseUrl, a),
@@ -466,6 +533,7 @@ test('Issue 39 runs the A/B/C versus A/C/D lifecycle without cross-room effects 
       assert.equal(changed.status, 200);
       eventOne = (await changed.json()).event;
       assert.equal(eventOne.status, status);
+      assertRoomTwoEventUnchanged();
     }
     const eventDeleted = await fetch(`${baseUrl}/api/rooms/${roomOne.id}/admin/events/${DATE}`, {
       method: 'DELETE', headers: headers(baseUrl, a),
@@ -473,11 +541,7 @@ test('Issue 39 runs the A/B/C versus A/C/D lifecycle without cross-room effects 
     });
     assert.equal(eventDeleted.status, 200);
     assert.equal((await eventDeleted.json()).event, null);
-    const proposalTwo = await fetch(`${baseUrl}/api/rooms/${roomTwo.id}/events/${DATE}`, {
-      method: 'POST', headers: headers(baseUrl, c), body: JSON.stringify({ requestId: randomUUID() }),
-    });
-    assert.equal(proposalTwo.status, 201);
-    assert.equal(server.database.prepare('SELECT status FROM run_events WHERE room_id = ? AND event_date = ?').get(roomTwo.id, DATE).status, 'proposed');
+    assertRoomTwoEventUnchanged();
     assert.equal(server.database.prepare('SELECT COUNT(*) AS count FROM run_events WHERE room_id = ?').get(roomOne.id).count, 0,
       'scheduling, reverting, and deleting a room-one event does not mutate room two');
 
@@ -486,7 +550,7 @@ test('Issue 39 runs the A/B/C versus A/C/D lifecycle without cross-room effects 
     });
     assert.equal(resetOne.status, 204);
     assert.deepEqual(counts(), { [roomOne.id]: 0, [roomTwo.id]: 3 }, 'the week reset is limited to its explicit room');
-    assert.equal(server.database.prepare('SELECT status FROM run_events WHERE room_id = ? AND event_date = ?').get(roomTwo.id, DATE).status, 'proposed');
+    assertRoomTwoEventUnchanged();
 
     const userCId = server.database.prepare('SELECT id FROM users WHERE name_key = ?').get('issue 39 runner c').id;
     for (const roomId of [roomOne.id, roomTwo.id]) assert.equal((await vote(baseUrl, c, roomId)).status, 200);
@@ -533,6 +597,15 @@ test('Issue 39 runs the A/B/C versus A/C/D lifecycle without cross-room effects 
       assert.equal(hasRoomMember(server.database, { roomId, userId: retained.owner_user_id }), true,
         'application admin receives membership when ownership transfers');
     }
+    const inheritedEdit = await fetch(`${baseUrl}/api/rooms/${roomOne.id}`, {
+      method: 'PUT', headers: headers(baseUrl, admin),
+      body: JSON.stringify({ title: 'Inherited owner edit', venue: 'Bangkok track', time: '18:30' }),
+    });
+    assert.equal(inheritedEdit.status, 200, 'the application admin can edit metadata inherited from a deleted creator account');
+    assert.deepEqual(
+      (({ title, venue, time }) => ({ title, venue, time }))((await inheritedEdit.json()).room),
+      { title: 'Inherited owner edit', venue: 'Bangkok track', time: '18:30' },
+    );
     for (const roomId of [roomOne.id, roomTwo.id]) {
       const deletion = await deleteRoom(baseUrl, admin, roomId);
       assert.equal(deletion.status, 200, 'the application admin can delete a transferred room');

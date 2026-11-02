@@ -561,6 +561,7 @@ export function startRoomListPage() {
         return;
       }
       const result = await responseBody(response);
+      if (deletedRoomIds.has(roomId)) return;
       if (result.code === 'ROOM_NOT_FOUND') {
         forgetDeletedRoom(roomId);
         announce('This room is no longer available. / ห้องนี้ไม่มีแล้ว');

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { request } from 'node:http';
@@ -81,6 +82,34 @@ async function waitFor(client, expression, timeoutMs = 8000) {
     await delay(50);
   }
   return false;
+}
+
+function fetchGateScript() {
+  return `(() => {
+    const originalFetch = window.fetch.bind(window);
+    const rules = [];
+    window.__issue39Held = {};
+    window.__issue39Releases = {};
+    window.__issue39FetchLog = [];
+    window.__issue39HoldNext = (key, method, path) => rules.push({ key, method: method.toUpperCase(), path });
+    window.__issue39Release = (key) => { window.__issue39Releases[key]?.(); delete window.__issue39Releases[key]; };
+    window.fetch = async (...args) => {
+      const input = args[0];
+      const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+      const method = String(args[1]?.method ?? input.method ?? 'GET').toUpperCase();
+      const response = await originalFetch(...args);
+      window.__issue39FetchLog.push({ method, path: url.pathname, status: response.status });
+      const index = rules.findIndex((rule) => rule.method === method && rule.path === url.pathname);
+      if (index !== -1) {
+        const [{ key }] = rules.splice(index, 1);
+        let body = null;
+        try { body = await response.clone().json(); } catch {}
+        window.__issue39Held[key] = { method, path: url.pathname, status: response.status, body };
+        await new Promise((resolve) => { window.__issue39Releases[key] = resolve; });
+      }
+      return response;
+    };
+  })();`;
 }
 
 async function openPage(client, url, cookie, { initScript } = {}) {
@@ -169,6 +198,17 @@ test('Issue 39 real Chromium deletion controls are accessible, cancel safely, up
   const ownerRoom = await createRoom(fixture.baseUrl, owner, 'Room deletion browser check');
   const adminRoom = await createRoom(fixture.baseUrl, owner, 'Admin-managed room');
   await enterRoom(fixture.baseUrl, owner, ownerRoom.id);
+  await enterRoom(fixture.baseUrl, owner, adminRoom.id);
+  const seededVote = await fetch(`${fixture.baseUrl}/api/rooms/${ownerRoom.id}/votes/2026-10-28`, {
+    method: 'PUT', headers: { origin: fixture.baseUrl, cookie: owner.cookie, 'x-csrf-token': owner.csrfToken, 'content-type': 'application/json' },
+    body: JSON.stringify({ selected: true }),
+  });
+  assert.equal(seededVote.status, 200, 'the cancellation case starts with a real dependent vote');
+  const seededEvent = await fetch(`${fixture.baseUrl}/api/rooms/${ownerRoom.id}/events/2026-10-28`, {
+    method: 'POST', headers: { origin: fixture.baseUrl, cookie: owner.cookie, 'x-csrf-token': owner.csrfToken, 'content-type': 'application/json' },
+    body: JSON.stringify({ requestId: randomUUID() }),
+  });
+  assert.equal(seededEvent.status, 201, 'the cancellation case starts with a real event and retry ledger row');
   const ownerId = fixture.server.database.prepare('SELECT id FROM users WHERE name_key = ?').get('issue 39 browser owner').id;
   assert.equal(fixture.server.database.prepare('SELECT COUNT(*) AS count FROM room_memberships WHERE room_id = ? AND user_id = ?')
     .get(ownerRoom.id, ownerId).count, 1, 'the test owner has entered the board room');
@@ -190,10 +230,12 @@ test('Issue 39 real Chromium deletion controls are accessible, cancel safely, up
   const adminBrowser = spawnChromium(chromePath, [...chromiumArgs, `--user-data-dir=${adminProfile}`, 'about:blank']);
   let ownerList;
   let board;
+  let unrelatedBoard;
   let adminList;
   t.after(async () => {
     ownerList?.close();
     board?.close();
+    unrelatedBoard?.close();
     adminList?.close();
     await stopChromium(ownerBrowser);
     await stopChromium(adminBrowser);
@@ -206,14 +248,15 @@ test('Issue 39 real Chromium deletion controls are accessible, cancel safely, up
     readDevToolsPort(adminProfile, adminBrowser, { timeoutMs: chromiumReadinessTimeoutMs }),
   ]);
   t.diagnostic(`Isolated Chromium profiles launch-to-DevTools readiness ${(performance.now() - startupStartedAt).toFixed(1)}ms each; executable: ${ownerBrowser.spawnfile}.`);
-  const [ownerTarget, boardTarget, adminTarget] = await Promise.all([
-    createTarget(ownerPort), createTarget(ownerPort), createTarget(adminPort),
+  const [ownerTarget, boardTarget, unrelatedBoardTarget, adminTarget] = await Promise.all([
+    createTarget(ownerPort), createTarget(ownerPort), createTarget(ownerPort), createTarget(adminPort),
   ]);
   ownerList = createCdpClient(ownerTarget.webSocketDebuggerUrl);
   board = createCdpClient(boardTarget.webSocketDebuggerUrl);
+  unrelatedBoard = createCdpClient(unrelatedBoardTarget.webSocketDebuggerUrl);
   adminList = createCdpClient(adminTarget.webSocketDebuggerUrl);
   await Promise.all([
-    openPage(ownerList, `${fixture.baseUrl}/rooms`, owner.cookie),
+    openPage(ownerList, `${fixture.baseUrl}/rooms`, owner.cookie, { initScript: fetchGateScript() }),
     openPage(board, `${fixture.baseUrl}/vote/${ownerRoom.id}`, owner.cookie, { initScript: `(() => {
       let factory;
       Object.defineProperty(window, 'io', { configurable: true, get: () => factory, set: (value) => {
@@ -224,6 +267,12 @@ test('Issue 39 real Chromium deletion controls are accessible, cancel safely, up
         };
       } });
     })();` }),
+    openPage(unrelatedBoard, `${fixture.baseUrl}/vote/${adminRoom.id}`, owner.cookie, { initScript: `(() => {
+      let factory;
+      Object.defineProperty(window, 'io', { configurable: true, get: () => factory, set: (value) => {
+        factory = (...args) => { const socket = value(...args); window.__issue39Socket = socket; return socket; };
+      } });
+    })();` }),
     openPage(adminList, `${fixture.baseUrl}/rooms`, admin.cookie),
   ]);
   assert.equal(await waitFor(ownerList, `Boolean(document.querySelector('#rooms-content') && !document.querySelector('#rooms-content').hidden && document.querySelectorAll('.room-card').length === 3)`), true,
@@ -232,6 +281,8 @@ test('Issue 39 real Chromium deletion controls are accessible, cancel safely, up
   if (!boardLoaded) t.diagnostic(`Board state: ${JSON.stringify(await evaluate(board, `(() => ({ url: location.href, heading: document.querySelector('#room-heading')?.textContent, hidden: document.querySelector('#protected-content')?.hidden, body: document.body.innerText.slice(0, 400) }))()`))}`);
   assert.equal(boardLoaded, true,
     'the second tab has loaded and subscribed to the selected internal room');
+  assert.equal(await waitFor(unrelatedBoard, `Boolean(document.querySelector('#protected-content') && !document.querySelector('#protected-content').hidden && document.querySelector('#room-heading')?.textContent === 'Admin-managed room' && window.__issue39Socket?.connected)`), true,
+    'a second same-session tab is open and subscribed to an unrelated internal room');
   assert.equal(await waitFor(adminList, `Boolean(document.querySelector('#rooms-content') && !document.querySelector('#rooms-content').hidden && document.querySelectorAll('.room-card').length === 3)`), true,
     'the application-admin list has loaded');
 
@@ -272,18 +323,50 @@ test('Issue 39 real Chromium deletion controls are accessible, cancel safely, up
   const confirmationText = await evaluate(ownerList, 'window.__issue39ConfirmMessages[0]');
   assert.equal(confirmationText, 'Permanently delete “Room deletion browser check”? Its votes, proposals, schedules, and memberships will be permanently removed. This cannot be undone.');
   assert.match(confirmationText, /votes, proposals, schedules, and memberships will be permanently removed/);
+  const dependentState = () => ({
+    room: fixture.server.database.prepare('SELECT * FROM rooms WHERE id = ?').get(ownerRoom.id),
+    votes: fixture.server.database.prepare('SELECT * FROM votes WHERE room_id = ? ORDER BY vote_date, user_id').all(ownerRoom.id),
+    events: fixture.server.database.prepare('SELECT * FROM run_events WHERE room_id = ? ORDER BY event_date').all(ownerRoom.id),
+    memberships: fixture.server.database.prepare('SELECT * FROM room_memberships WHERE room_id = ? ORDER BY user_id').all(ownerRoom.id),
+    retries: fixture.server.database.prepare('SELECT * FROM run_event_requests WHERE room_id = ? ORDER BY request_id').all(ownerRoom.id),
+  });
+  const beforeCancel = dependentState();
+  assert.ok(beforeCancel.votes.length && beforeCancel.events.length && beforeCancel.memberships.length && beforeCancel.retries.length,
+    'the cancellation case includes seeded votes, events, memberships, and retry data');
   assert.equal(fixture.server.database.prepare('SELECT COUNT(*) AS count FROM rooms WHERE id = ?').get(ownerRoom.id).count, 1,
-    'Cancel leaves the room and its data unchanged');
+    'Cancel leaves the room present');
+  assert.deepEqual(dependentState(), beforeCancel, 'Cancel preserves every seeded dependent row exactly');
   assert.equal(await evaluate(board, `location.pathname === '/vote/${ownerRoom.id}'`), true,
     'Cancel leaves the other tab on the selected room');
 
-  await evaluate(ownerList, `(() => { window.confirm = () => true; document.querySelector('.room-card[data-room-id="${ownerRoom.id}"] .room-card__delete').click(); })()`);
+  await evaluate(ownerList, `(() => { window.confirm = () => true; window.__issue39HoldNext('delete-response', 'DELETE', '/api/rooms/${ownerRoom.id}'); window.__issue39DeleteButton = document.querySelector('.room-card[data-room-id="${ownerRoom.id}"] .room-card__delete'); window.__issue39DeleteButton.click(); })()`);
+  assert.equal(await waitFor(ownerList, "Boolean(window.__issue39Held['delete-response'])"), true,
+    'the delete request remains pending after the server commits it');
+  assert.equal(await evaluate(ownerList, "window.__issue39Held['delete-response'].status"), 200);
+  await evaluate(ownerList, "window.__issue39DeleteButton.dispatchEvent(new MouseEvent('click', { bubbles: true }))");
+  assert.equal(await evaluate(ownerList, `window.__issue39FetchLog.filter(({ method, path }) => method === 'DELETE' && path === '/api/rooms/${ownerRoom.id}').length`), 1,
+    'duplicate activation while the first request is pending sends exactly one DELETE');
   assert.equal(await waitFor(ownerList, `!document.querySelector('.room-card[data-room-id="${ownerRoom.id}"]')`), true,
     'the connected room list removes the deleted card');
   assert.equal(await waitFor(board, `location.pathname === '/rooms'`), true,
     'the active board tab returns to the room list after the realtime deletion');
+  assert.equal(await evaluate(unrelatedBoard, `location.pathname === '/vote/${adminRoom.id}' && !document.querySelector('#protected-content').hidden`), true,
+    'deleting one room leaves the unrelated same-session room tab open');
+  await evaluate(unrelatedBoard, `document.querySelector('.vote-card[data-date="2026-10-29"]').click()`);
+  assert.equal(await waitFor(unrelatedBoard, `document.querySelector('.vote-card[data-date="2026-10-29"]')?.dataset.selected === 'true'`), true,
+    'the unrelated tab can save a vote while the other room remains deleted');
+  assert.equal(fixture.server.database.prepare('SELECT COUNT(*) AS count FROM votes WHERE room_id = ? AND user_id = ? AND vote_date = ?')
+    .get(adminRoom.id, ownerId, '2026-10-29').count, 1, 'the vote is stored only under the unrelated internal room ID');
+  await evaluate(unrelatedBoard, `document.querySelector('.run-event-day-action[data-date="2026-10-29"]').click()`);
+  assert.equal(await waitFor(unrelatedBoard, `document.querySelector('.run-event-banner[data-date="2026-10-29"]')?.textContent.includes('Proposed')`), true,
+    'the unrelated tab can create an event while the other room remains deleted');
+  assert.equal(fixture.server.database.prepare('SELECT COUNT(*) AS count FROM run_events WHERE room_id = ? AND event_date = ?')
+    .get(adminRoom.id, '2026-10-29').count, 1);
   assert.equal(fixture.server.database.prepare('SELECT COUNT(*) AS count FROM rooms WHERE id = ?').get(ownerRoom.id).count, 0);
   assert.equal(fixture.server.database.prepare('SELECT COUNT(*) AS count FROM room_identity_ledger WHERE room_id = ?').get(ownerRoom.id).count, 1);
+  assert.equal(fixture.server.database.prepare('SELECT COUNT(*) AS count FROM votes WHERE room_id = ?').get(ownerRoom.id).count, 0);
+  assert.equal(fixture.server.database.prepare('SELECT COUNT(*) AS count FROM run_events WHERE room_id = ?').get(ownerRoom.id).count, 0);
+  await evaluate(ownerList, "window.__issue39Release('delete-response')");
 
   const reconnectRoom = await createRoom(fixture.baseUrl, owner, 'Reconnect after deletion');
   await enterRoom(fixture.baseUrl, owner, reconnectRoom.id);
@@ -321,6 +404,8 @@ test('Issue 39 real Chromium deletion controls are accessible, cancel safely, up
   await evaluate(adminList, `(() => { window.confirm = () => true; document.querySelector('.room-card[data-room-id="${adminRoom.id}"] .room-card__delete').click(); })()`);
   assert.equal(await waitFor(adminList, `!document.querySelector('.room-card[data-room-id="${adminRoom.id}"]')`), true,
     'application admin can delete a room without joining it');
+  assert.equal(await waitFor(unrelatedBoard, `location.pathname === '/rooms'`), true,
+    'the unrelated active board tab safely exits when its own room is deleted');
   await evaluate(adminList, `(() => { window.confirm = () => true; document.querySelector('.room-card[data-room-id="${LEGACY_ROOM_ID}"] .room-card__delete').click(); })()`);
   assert.equal(await waitFor(adminList, `!document.querySelector('.room-card[data-room-id="${LEGACY_ROOM_ID}"]')`), true,
     'application admin can delete the final legacy room');
@@ -334,4 +419,174 @@ test('Issue 39 real Chromium deletion controls are accessible, cancel safely, up
   t.diagnostic(`Admin room-list screenshot: ${screenshotBase}-admin-list.png`);
   t.diagnostic(`Empty room-list screenshot: ${emptyScreenshot}`);
   assert.equal(fixture.server.database.prepare('SELECT COUNT(*) AS count FROM rooms').get().count, 0);
+});
+
+test('Issue 39 discards held successful entry and stale list responses after deletion', async (t) => {
+  const fixture = await createFixture();
+  const owner = await register(fixture.baseUrl, 'Issue 39 Late Entry Owner');
+  const admin = await loginAdmin(fixture.baseUrl);
+  const room = await createRoom(fixture.baseUrl, owner, 'Late entry after deletion');
+  const profile = await mkdtemp(join(process.env.TMPDIR || tmpdir(), 'run-together-issue-39-late-entry-chrome-'));
+  const browser = spawnChromium(chromePath, [
+    '--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--no-first-run',
+    '--no-default-browser-check', '--disable-background-networking', '--remote-debugging-port=0',
+    `--user-data-dir=${profile}`, 'about:blank',
+  ]);
+  let client;
+  t.after(async () => {
+    client?.close();
+    await stopChromium(browser);
+    await removeProfileWithRetry(profile);
+    await fixture.close();
+  });
+  const port = await readDevToolsPort(profile, browser, { timeoutMs: chromiumReadinessTimeoutMs });
+  client = createCdpClient((await createTarget(port)).webSocketDebuggerUrl);
+  await openPage(client, `${fixture.baseUrl}/rooms`, owner.cookie, { initScript: fetchGateScript() });
+  const card = `.room-card[data-room-id="${room.id}"]`;
+  assert.equal(await waitFor(client, `Boolean(document.querySelector(${JSON.stringify(card + ' .room-card__entry')}))`), true,
+    'the target room card is loaded before requests are held');
+
+  await evaluate(client, `window.__issue39HoldNext('stale-list', 'GET', '/api/rooms')`);
+  const update = await fetch(`${fixture.baseUrl}/api/rooms/${encodeURIComponent(room.id)}`, {
+    method: 'PUT', headers: { origin: fixture.baseUrl, cookie: owner.cookie, 'x-csrf-token': owner.csrfToken, 'content-type': 'application/json' },
+    body: JSON.stringify({ venue: 'Updated before deletion' }),
+  });
+  assert.equal(update.status, 200);
+  assert.equal(await waitFor(client, "Boolean(window.__issue39Held['stale-list'])"), true,
+    'a pre-deletion room-list response is held after the server returned its snapshot');
+
+  await evaluate(client, `window.__issue39HoldNext('late-entry', 'POST', '/api/rooms/${room.id}/enter')`);
+  await evaluate(client, `document.querySelector(${JSON.stringify(card + ' .room-card__entry')}).click()`);
+  assert.equal(await waitFor(client, "Boolean(window.__issue39Held['late-entry'])"), true,
+    'the genuine successful room-entry response is held before the page handles it');
+  assert.equal(await evaluate(client, "window.__issue39Held['late-entry'].status"), 200);
+  assert.equal(await evaluate(client, "window.__issue39Held['late-entry'].body.room.id"), room.id);
+
+  const deletion = await fetch(`${fixture.baseUrl}/api/rooms/${encodeURIComponent(room.id)}`, {
+    method: 'DELETE', headers: { origin: fixture.baseUrl, cookie: admin.cookie, 'x-csrf-token': admin.csrfToken, 'content-type': 'application/json' },
+    body: JSON.stringify({ confirmation: true }),
+  });
+  assert.equal(deletion.status, 200);
+  assert.equal(await waitFor(client, `!document.querySelector(${JSON.stringify(card)})`), true,
+    'room:deleted removes the card while both old successful responses remain held');
+  assert.equal(await evaluate(client, 'location.pathname'), '/rooms');
+
+  await evaluate(client, "window.__issue39Release('stale-list')");
+  await delay(100);
+  assert.equal(await evaluate(client, `!document.querySelector(${JSON.stringify(card)})`), true,
+    'the pre-deletion list response cannot restore the deleted room card');
+
+  await evaluate(client, "window.__issue39Release('late-entry')");
+  await delay(1000);
+  const afterLateEntry = await evaluate(client, '({ path: location.pathname, body: document.body.innerText })');
+  assert.equal(afterLateEntry.path, '/rooms', 'late successful entry cannot navigate into the deleted room');
+  assert.doesNotMatch(afterLateEntry.body, /ROOM_NOT_FOUND|The room was not found/,
+    'the room list does not show the raw deleted-room error response');
+  assert.equal(await evaluate(client, `!document.querySelector(${JSON.stringify(card)})`), true);
+  assert.equal(fixture.server.database.prepare('SELECT COUNT(*) AS count FROM rooms WHERE id = ?').get(room.id).count, 0);
+});
+
+test('Issue 39 holds late board reads and writes across deletion without affecting an unrelated room', async (t) => {
+  const fixture = await createFixture();
+  const owner = await register(fixture.baseUrl, 'Issue 39 Late Board Owner');
+  const admin = await loginAdmin(fixture.baseUrl);
+  const deletedRoom = await createRoom(fixture.baseUrl, owner, 'Held board responses');
+  const unrelatedRoom = await createRoom(fixture.baseUrl, owner, 'Unaffected board');
+  await enterRoom(fixture.baseUrl, owner, deletedRoom.id);
+  await enterRoom(fixture.baseUrl, owner, unrelatedRoom.id);
+  for (const [roomId, date] of [[deletedRoom.id, '2026-10-28'], [unrelatedRoom.id, '2026-10-29']]) {
+    const vote = await fetch(`${fixture.baseUrl}/api/rooms/${roomId}/votes/${date}`, {
+      method: 'PUT', headers: { origin: fixture.baseUrl, cookie: owner.cookie, 'x-csrf-token': owner.csrfToken, 'content-type': 'application/json' },
+      body: JSON.stringify({ selected: true }),
+    });
+    assert.equal(vote.status, 200);
+  }
+  const unrelatedBefore = {
+    votes: fixture.server.database.prepare('SELECT * FROM votes WHERE room_id = ? ORDER BY vote_date, user_id').all(unrelatedRoom.id),
+    events: fixture.server.database.prepare('SELECT * FROM run_events WHERE room_id = ? ORDER BY event_date').all(unrelatedRoom.id),
+  };
+
+  const profile = await mkdtemp(join(process.env.TMPDIR || tmpdir(), 'run-together-issue-39-held-board-chrome-'));
+  const browser = spawnChromium(chromePath, [
+    '--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--no-first-run',
+    '--no-default-browser-check', '--disable-background-networking', '--remote-debugging-port=0',
+    `--user-data-dir=${profile}`, 'about:blank',
+  ]);
+  let deletedTab;
+  let unrelatedTab;
+  t.after(async () => {
+    deletedTab?.close();
+    unrelatedTab?.close();
+    await stopChromium(browser);
+    await removeProfileWithRetry(profile);
+    await fixture.close();
+  });
+  const port = await readDevToolsPort(profile, browser, { timeoutMs: chromiumReadinessTimeoutMs });
+  const [deletedTarget, unrelatedTarget] = await Promise.all([createTarget(port), createTarget(port)]);
+  const boardInitScript = fetchGateScript() + `(() => {
+    let factory;
+    Object.defineProperty(window, 'io', { configurable: true, get: () => factory, set: (value) => {
+      factory = (...args) => { const socket = value(...args); window.__issue39Socket = socket; return socket; };
+    } });
+  })();`;
+  deletedTab = createCdpClient(deletedTarget.webSocketDebuggerUrl);
+  unrelatedTab = createCdpClient(unrelatedTarget.webSocketDebuggerUrl);
+  await Promise.all([
+    openPage(deletedTab, `${fixture.baseUrl}/vote/${deletedRoom.id}`, owner.cookie, { initScript: boardInitScript }),
+    openPage(unrelatedTab, `${fixture.baseUrl}/vote/${unrelatedRoom.id}`, owner.cookie),
+  ]);
+  assert.equal(await waitFor(deletedTab, `Boolean(document.querySelector('#protected-content') && !document.querySelector('#protected-content').hidden && document.querySelector('#room-heading')?.textContent === 'Held board responses' && window.__issue39Socket?.connected)`), true);
+  assert.equal(await waitFor(unrelatedTab, `Boolean(document.querySelector('#protected-content') && !document.querySelector('#protected-content').hidden && document.querySelector('#room-heading')?.textContent === 'Unaffected board')`), true);
+
+  const weekPath = `/api/rooms/${deletedRoom.id}/weeks/2026-10-26`;
+  const metadataPath = `/api/rooms/${deletedRoom.id}`;
+  const timelinePath = `/api/rooms/${deletedRoom.id}/vote-timeline`;
+  await evaluate(deletedTab, `(() => {
+    window.__issue39HoldNext('late-week', 'GET', ${JSON.stringify(weekPath)});
+    window.__issue39HoldNext('late-metadata', 'GET', ${JSON.stringify(metadataPath)});
+    window.__issue39HoldNext('late-timeline', 'GET', ${JSON.stringify(timelinePath)});
+    window.__issue39Socket.disconnect();
+  })()`);
+  assert.equal(await waitFor(deletedTab, 'window.__issue39Socket?.connected === false'), true);
+  await evaluate(deletedTab, '(() => { window.__issue39Socket.connect(); return true; })()');
+  for (const key of ['late-week', 'late-metadata', 'late-timeline']) {
+    assert.equal(await waitFor(deletedTab, `Boolean(window.__issue39Held[${JSON.stringify(key)}])`), true,
+      `${key} successful response is held before the board handles it`);
+    assert.equal(await evaluate(deletedTab, `window.__issue39Held[${JSON.stringify(key)}].status`), 200);
+  }
+
+  await evaluate(deletedTab, `(() => {
+    window.__issue39HoldNext('late-vote', 'PUT', '/api/rooms/${deletedRoom.id}/votes/2026-10-29');
+    document.querySelector('.vote-card[data-date="2026-10-29"]').click();
+  })()`);
+  assert.equal(await waitFor(deletedTab, "Boolean(window.__issue39Held['late-vote'])"), true,
+    'the successful vote reply is held after the server accepts the vote');
+  assert.equal(await evaluate(deletedTab, "window.__issue39Held['late-vote'].status"), 200);
+  await evaluate(deletedTab, `(() => {
+    window.__issue39HoldNext('late-event', 'POST', '/api/rooms/${deletedRoom.id}/events/2026-10-28');
+    document.querySelector('.run-event-day-action[data-date="2026-10-28"]').click();
+  })()`);
+  assert.equal(await waitFor(deletedTab, "Boolean(window.__issue39Held['late-event'])"), true,
+    'the successful event reply is held after the server accepts the proposal');
+  assert.equal(await evaluate(deletedTab, "window.__issue39Held['late-event'].status"), 201);
+
+  const deletion = await fetch(`${fixture.baseUrl}/api/rooms/${encodeURIComponent(deletedRoom.id)}`, {
+    method: 'DELETE', headers: { origin: fixture.baseUrl, cookie: admin.cookie, 'x-csrf-token': admin.csrfToken, 'content-type': 'application/json' },
+    body: JSON.stringify({ confirmation: true }),
+  });
+  assert.equal(deletion.status, 200);
+  assert.equal(await waitFor(deletedTab, `location.pathname === '/rooms'`), true,
+    'the subscribed board exits before late metadata, week, timeline, vote, or event replies can restore protected content');
+  const safePage = await evaluate(deletedTab, `({ path: location.pathname, hasProtectedContent: Boolean(document.querySelector('#protected-content') && !document.querySelector('#protected-content').hidden), hasStaleHeading: document.body.innerText.includes('Held board responses') })`);
+  assert.deepEqual(safePage, { path: '/rooms', hasProtectedContent: false, hasStaleHeading: false });
+  assert.equal(await evaluate(unrelatedTab, `location.pathname === '/vote/${unrelatedRoom.id}' && !document.querySelector('#protected-content').hidden`), true,
+    'the unrelated same-session tab remains on its explicit room');
+  assert.deepEqual({
+    votes: fixture.server.database.prepare('SELECT * FROM votes WHERE room_id = ? ORDER BY vote_date, user_id').all(unrelatedRoom.id),
+    events: fixture.server.database.prepare('SELECT * FROM run_events WHERE room_id = ? ORDER BY event_date').all(unrelatedRoom.id),
+  }, unrelatedBefore, 'late room-A replies and deletion do not overwrite any unrelated room-B data');
+  for (const table of ['votes', 'run_events', 'room_memberships', 'run_event_requests']) {
+    assert.equal(fixture.server.database.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE room_id = ?`).get(deletedRoom.id).count, 0,
+      `deletion leaves no ${table} rows for the deleted room`);
+  }
 });
