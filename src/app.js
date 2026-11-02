@@ -398,7 +398,7 @@ const roomListPage = () => page({
     <p id="rooms-no-matches" hidden>No rooms match these filters. / ไม่มีห้องที่ตรงกับตัวกรอง</p>
     <div id="room-cards" class="room-cards" role="list" aria-label="Rooms"></div>
   </section>`,
-  script: `import { startRoomListPage } from '/room-list.js?v=issue-43-room-list-2'; startRoomListPage();`,
+  script: `import { startRoomListPage } from '/room-list.js?v=issue-39-room-list-1'; startRoomListPage();`,
 });
 
 const changePinPage = (returnTo = '/rooms') => page({
