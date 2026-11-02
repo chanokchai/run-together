@@ -727,7 +727,7 @@ test('Issue 39 holds late board reads and writes across deletion without affecti
   await deletedTab.send('Fetch.disable');
   await evaluate(deletedTab, 'window.removeEventListener("beforeunload", window.__issue39BeforeUnload)');
   await deletedTab.send('Page.navigate', { url: `${fixture.baseUrl}/rooms` });
-  assert.equal(await waitFor(deletedTab, `location.pathname === '/rooms' && !document.querySelector('#rooms-content').hidden && !document.querySelector('#room-cards').textContent.includes('Held board responses')`), true,
+  assert.equal(await waitFor(deletedTab, `location.pathname === '/rooms' && Boolean(document.querySelector('#rooms-content') && document.querySelector('#room-cards')) && !document.querySelector('#rooms-content').hidden && !document.querySelector('#room-cards').textContent.includes('Held board responses')`), true,
     'the browser completes its safe exit and loads the room list after late callbacks are discarded');
   assert.equal(await evaluate(unrelatedTab, `location.pathname === '/vote/${unrelatedRoom.id}' && !document.querySelector('#protected-content').hidden`), true,
     'the unrelated same-session tab remains on its explicit room');
