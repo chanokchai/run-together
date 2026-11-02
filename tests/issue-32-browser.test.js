@@ -676,8 +676,14 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
   await client2.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 300, deviceScaleFactor: 1, mobile: true });
   await verticalPageSwipe(client2, -240);
   assert.equal(await waitFor(client2, `(() => { const box = document.querySelector('.vote-timeline__date[datetime="2024-03-03"]').getBoundingClientRect(); return box.bottom <= 0 || box.top >= innerHeight; })()`), true, 'a real vertical swipe moves the scheduled graph date fully offscreen');
-  await verticalPageSwipe(client2, 240);
-  assert.equal(await waitFor(client2, `document.querySelector('.vote-timeline__date[datetime="2024-03-03"]').classList.contains('is-beam-running')`), true, 'the scheduled graph beam resumes on viewport re-entry');
+  assert.equal(await waitFor(client2, `!document.querySelector('.vote-timeline__date[datetime="2024-03-03"]').classList.contains('is-beam-running')`), true,
+    'the scheduled graph beam pauses after the date leaves the viewport');
+  await evaluate(client2, `document.querySelector('.vote-timeline__date[datetime="2024-03-03"]').scrollIntoView({ block: 'center' })`);
+  const reentryVisible = await waitFor(client2, `document.querySelector('.vote-timeline__date[datetime="2024-03-03"]').classList.contains('is-beam-running')`);
+  const reentryMetrics = await evaluate(client2, `(() => { const element = document.querySelector('.vote-timeline__date[datetime="2024-03-03"]'); const box = element.getBoundingClientRect(); const style = getComputedStyle(element, '::before'); return { scrollY, innerHeight, scrollHeight: document.documentElement.scrollHeight, top: box.top, bottom: box.bottom, intersectsViewport: box.bottom > 0 && box.top < innerHeight, className: element.className, animationName: style.animationName, beamAngle: style.getPropertyValue('--beam-angle'), reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches, activeAnimations: document.getAnimations().filter((animation) => animation.animationName === 'scheduled-border-beam').length }; })()`);
+  t.diagnostic(`Observed viewport re-entry: ${JSON.stringify(reentryMetrics)}`);
+  assert.equal(reentryMetrics.intersectsViewport, true, `the return gesture places the scheduled graph date in the viewport: ${JSON.stringify(reentryMetrics)}`);
+  assert.equal(reentryVisible, true, 'the scheduled graph beam resumes on viewport re-entry');
   const reentryPhase = await evaluate(client2, `(async () => {
     for (let frame = 0; frame < 4; frame += 1) await new Promise(requestAnimationFrame);
     const date = document.querySelector('.vote-timeline__date[datetime="2024-03-03"]');
