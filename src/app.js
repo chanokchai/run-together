@@ -9,7 +9,7 @@ import {
 } from './calendar.js';
 import { AuthError, createAuthService } from './auth.js';
 import { DEFAULT_ROOM_ICON, LEGACY_ROOM_ID, ROOM_ICONS } from './room-contract.js';
-import { addRoomMember, createRoom, getRoom, getRoomSummary, hasRoomMember, listRooms, updateRoomMetadata } from './room-storage.js';
+import { addRoomMember, createRoom, deleteRoom, getRoom, getRoomSummary, hasRoomMember, listRooms, updateRoomMetadata } from './room-storage.js';
 import {
   AdminActionError,
   deleteRunEvent,
@@ -116,10 +116,14 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       .room-card__date-value.is-proposed-date-glowing { color: #6b21a8; text-shadow: 0 0 2px #c084fc, 0 0 5px #a855f7; }
       .room-card__date-value.is-proposed-glow-running { animation: proposed-date-glow 2.8s ease-in-out infinite; animation-delay: var(--proposed-glow-delay, 0ms); }
       @keyframes proposed-date-glow { 0%, 100% { text-shadow: 0 0 2px #c084fc, 0 0 5px #a855f7; } 50% { text-shadow: 0 0 3px #d8b4fe, 0 0 8px #a855f7, 0 0 13px #7e22ce; } }
-      .room-card__actions { display: flex; width: auto; justify-content: flex-end; }
+      .room-card__actions { display: flex; width: auto; flex-direction: column; justify-content: flex-start; gap: .4rem; }
       .room-card__edit { display: inline-flex; width: auto; min-width: 44px; min-height: 44px; align-items: center; justify-content: center; margin: 0; padding: .35rem .55rem; border: 2px solid #14213d; background: #fff; color: #14213d; }
       .room-card__edit[hidden] { display: none; }
       .room-card__edit:focus-visible, .room-icon-picker select:focus-visible { outline: 3px solid #145da0; outline-offset: 2px; }
+      .room-card__delete { display: inline-flex; width: auto; min-width: 44px; min-height: 44px; align-items: center; justify-content: center; margin: 0; padding: .35rem; border: 2px solid #991b1b; background: #fff; color: #991b1b; }
+      .room-card__delete[hidden] { display: none; }
+      .room-card__delete:focus-visible { outline: 3px solid #145da0; outline-offset: 2px; }
+      .room-card__delete svg { width: 1.25rem; height: 1.25rem; }
       .room-icon-picker { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .6rem; margin: .75rem 0; padding: .65rem; border: 1px solid #94a3b8; border-radius: .5rem; }
       .room-icon-picker__label { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin: 0; }
       .room-icon-picker__select { box-sizing: border-box; min-width: min(100%, 12rem); min-height: 44px; padding: .45rem .65rem; border: 1px solid #52606d; border-radius: .4rem; background: #fff; color: #14213d; font: inherit; }
@@ -599,7 +603,7 @@ const adminPage = (returnTo = '/rooms') => page({
   `,
 });
 
-export function createApp({ databaseReady = false, database, env = process.env, now = () => new Date(), onVoteChanged = () => {}, onRunEventChanged = () => {}, onUserSessionsRevoked = () => {}, onUserDeleted = () => {}, onWeekReset = () => {}, onRoomSummaryChanged = () => {} } = {}) {
+export function createApp({ databaseReady = false, database, env = process.env, now = () => new Date(), onVoteChanged = () => {}, onRunEventChanged = () => {}, onUserSessionsRevoked = () => {}, onUserDeleted = () => {}, onWeekReset = () => {}, onRoomSummaryChanged = () => {}, onRoomDeleted = () => {} } = {}) {
   const app = express();
   app.disable('x-powered-by');
   app.use(express.json({ limit: '10kb' }));
@@ -707,7 +711,11 @@ export function createApp({ databaseReady = false, database, env = process.env, 
       const session = auth.requireSession(request, response);
       if (!session) return;
       response.json({ rooms: listRooms(database, { now, currentUserId: session.user_id })
-        .map((room) => ({ ...room, canEdit: room.ownerUserId === session.user_id })) });
+        .map((room) => ({
+          ...room,
+          canEdit: room.ownerUserId === session.user_id,
+          canDelete: room.ownerUserId === session.user_id || session.role === 'admin',
+        })) });
     });
 
     app.post('/api/rooms', (request, response) => {
@@ -801,6 +809,31 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           sendError(response, new AuthError(400, 'INVALID_ROOM_REQUEST', 'Room title, venue, time, or icon is invalid.', { cause: error }));
           return;
         }
+        sendError(response, error);
+      }
+    });
+
+    app.delete('/api/rooms/:roomId', (request, response) => {
+      response.setHeader('Cache-Control', 'no-store');
+      const session = auth.requireSession(request, response);
+      if (!session) return;
+      try {
+        auth.assertCsrf(request, session);
+        const body = request.body;
+        if (!body || typeof body !== 'object' || Array.isArray(body)
+          || Object.keys(body).length !== 1 || body.confirmation !== true) {
+          throw new AuthError(400, 'ROOM_DELETE_CONFIRMATION_REQUIRED', 'Explicit room deletion confirmation is required.');
+        }
+        const room = getRoom(database, { roomId: request.params.roomId });
+        if (!room) throw new AuthError(404, 'ROOM_NOT_FOUND', 'The room was not found.');
+        if (session.role !== 'admin' && room.ownerUserId !== session.user_id) {
+          throw new AuthError(403, 'ROOM_OWNER_REQUIRED', 'Room owner or application admin access is required.');
+        }
+        const result = deleteRoom(database, { roomId: room.id });
+        if (!result) throw new AuthError(404, 'ROOM_NOT_FOUND', 'The room was not found.');
+        onRoomDeleted(result.deletedRoomId);
+        response.status(200).json(result);
+      } catch (error) {
         sendError(response, error);
       }
     });
@@ -1221,6 +1254,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           let sessionCheck = 0;
           let weekLoadSequence = 0;
           let roomMetadataSequence = 0;
+          let roomUnavailable = false;
           let weekState = null;
           let eventsByDate = new Map();
           let rolloverTimer = null;
@@ -1253,8 +1287,10 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           const message = document.querySelector('#message');
           const runEvents = document.querySelector('#run-events');
           function roomApiPath(_legacyPath, scopedPath) { return roomApiPrefix + scopedPath; }
-          function guardProtectedContent() { weekLoadSequence += 1; roomMetadataSequence += 1; window.clearTimeout(rolloverTimer); protectedContent.hidden = true; csrfToken = ''; displayName.textContent = ''; weekDays.replaceChildren(); runEvents.replaceChildren(); timelineDays.replaceChildren(); scheduledEffects.sync('banner', []); scheduledEffects.sync('date-card', []); scheduledEffects.sync('timeline', []); runEventHandlers.forEach(({ abort, disposeSwipe }) => { abort.abort(); disposeSwipe?.(); }); runEventHandlers.clear(); runEventElements.clear(); weekState = null; eventsByDate = new Map(); message.textContent = ''; }
+          function guardProtectedContent() { weekLoadSequence += 1; roomMetadataSequence += 1; window.clearTimeout(rolloverTimer); pendingEventDates.clear(); protectedContent.hidden = true; csrfToken = ''; displayName.textContent = ''; weekDays.replaceChildren(); runEvents.replaceChildren(); timelineDays.replaceChildren(); scheduledEffects.sync('banner', []); scheduledEffects.sync('date-card', []); scheduledEffects.sync('timeline', []); runEventHandlers.forEach(({ abort, disposeSwipe }) => { abort.abort(); disposeSwipe?.(); }); runEventHandlers.clear(); runEventElements.clear(); weekState = null; eventsByDate = new Map(); message.textContent = ''; }
           function redirectToLogin() { guardProtectedContent(); location.replace('/'); }
+          function exitDeletedRoom() { if (roomUnavailable) return; roomUnavailable = true; guardProtectedContent(); if (socket.connected) socket.emit('room:unsubscribe', { roomId }); location.replace('/rooms'); }
+          function handleDeletedRoomResponse(response, result) { if (response.status !== 404 || result?.code !== 'ROOM_NOT_FOUND') return false; exitDeletedRoom(); return true; }
           function addText(parent, tag, text) { const element = document.createElement(tag); element.textContent = text; parent.append(element); return element; }
           function renderRoomMetadata(room) {
             roomHeading.textContent = room.title;
@@ -1268,7 +1304,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
             roomTimeLine.hidden = time.length === 0;
           }
           function applyRoomMetadata(room) {
-            if (room?.id !== roomId || typeof room.title !== 'string') return;
+            if (roomUnavailable || room?.id !== roomId || typeof room.title !== 'string') return;
             roomMetadataSequence += 1;
             renderRoomMetadata(room);
           }
@@ -1277,8 +1313,9 @@ export function createApp({ databaseReady = false, database, env = process.env, 
             try {
               const response = await fetch('/api/rooms/' + encodeURIComponent(roomId), { cache: 'no-store' });
               const result = await response.json();
-              if (sequence !== roomMetadataSequence) return false;
+              if (sequence !== roomMetadataSequence || roomUnavailable) return false;
               if (response.status === 401) { redirectToLogin(); return false; }
+              if (handleDeletedRoomResponse(response, result)) return false;
               if (!response.ok || result.room?.id !== roomId || typeof result.room.title !== 'string') return false;
               renderRoomMetadata(result.room);
               return true;
@@ -1353,13 +1390,15 @@ export function createApp({ databaseReady = false, database, env = process.env, 
                 const response = await fetch(roomApiPath('/api/vote-timeline', '/vote-timeline'), { cache: 'no-store' });
                 if (response.status === 401) { redirectToLogin(); throw new Error('unauthenticated'); }
                 totals = await response.json();
+                if (roomUnavailable) throw new Error('room-unavailable');
+                if (handleDeletedRoomResponse(response, totals)) throw new Error('room-unavailable');
                 if (!response.ok) throw new Error(totals.message || 'Could not load vote totals.');
                 return totals;
               });
               if (refreshed && totals) { timelineRange.textContent = formatDisplayDate(totals.startDate) + ' – ' + formatDisplayDate(totals.endDate) + ' · ★ = highest votes'; return true; }
               return false;
             } catch {
-              timelineRange.textContent = 'Could not load vote totals.';
+              if (!roomUnavailable) timelineRange.textContent = 'Could not load vote totals.';
               return false;
             }
           }
@@ -1533,6 +1572,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
               });
               if (response.status === 401) { redirectToLogin(); return false; }
               const result = await response.json();
+              if (roomUnavailable || handleDeletedRoomResponse(response, result)) return false;
               if (!response.ok) {
                 const errorMessage = result.message || 'Could not update the run event.';
                 await loadWeek(weekMonday);
@@ -1550,6 +1590,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
                     : action === 'revert' ? 'Run reverted to proposed.' : 'Event deleted.';
               return true;
             } catch {
+              if (roomUnavailable) return false;
               const errorMessage = 'Could not update the run event. Please try again.';
               await loadWeek(weekMonday);
               message.textContent = errorMessage;
@@ -1683,11 +1724,13 @@ export function createApp({ databaseReady = false, database, env = process.env, 
             try {
               const response = await fetch(roomApiPath('/api/votes/' + encodeURIComponent(date), '/votes/' + encodeURIComponent(date)), { method: 'PUT', headers: { 'content-type': 'application/json', 'x-csrf-token': csrfToken }, body: JSON.stringify({ selected }) });
               const result = await response.json();
+              if (roomUnavailable || handleDeletedRoomResponse(response, result)) return false;
               if (response.status === 401) { redirectToLogin(); return; }
               if (!response.ok) { message.textContent = result.message; return; }
               patchDay(result);
               timelineController.patch(result);
             } catch {
+              if (roomUnavailable) return false;
               message.textContent = 'บันทึกการเลือกไม่สำเร็จ / Could not save your selection.';
             } finally {
               card.disabled = false;
@@ -1708,11 +1751,13 @@ export function createApp({ databaseReady = false, database, env = process.env, 
               const response = await fetch(roomApiPath('/api/admin/weeks/' + encodeURIComponent(monday) + '/votes', '/admin/weeks/' + encodeURIComponent(monday) + '/votes'), { method: 'DELETE', headers: { 'content-type': 'application/json', 'x-csrf-token': csrfToken }, body: JSON.stringify({ confirmation: true }) });
               if (response.status === 401) { redirectToLogin(); return; }
               const result = response.status === 204 ? null : await response.json();
+              if (roomUnavailable || handleDeletedRoomResponse(response, result)) return;
               if (!response.ok) { message.textContent = result.message; return; }
               message.textContent = 'Votes reset for ISO week ' + isoWeek + ' (' + isoWeekYear + ').';
               await loadWeek(monday);
               await loadTimeline();
             } catch {
+              if (roomUnavailable) return;
               message.textContent = 'รีเซ็ตไม่สำเร็จ / Could not reset votes.';
             } finally {
               resetWeek.disabled = resetWeek.hidden;
@@ -1724,8 +1769,9 @@ export function createApp({ databaseReady = false, database, env = process.env, 
             try {
               const response = await fetch(roomApiPath('/api/weeks/' + encodeURIComponent(monday), '/weeks/' + encodeURIComponent(monday)), { cache: 'no-store' });
               const state = await response.json();
-              if (sequence !== weekLoadSequence) return false;
+              if (sequence !== weekLoadSequence || roomUnavailable) return false;
               if (response.status === 401) { redirectToLogin(); return false; }
+              if (handleDeletedRoomResponse(response, state)) return false;
               if (!response.ok) { message.textContent = state.message; return false; }
               if (state.roomId !== roomId) return false;
               renderWeek(state);
@@ -1751,18 +1797,22 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           document.querySelector('#logout').addEventListener('click', async () => { const response = await fetch('/api/auth/logout', { method: 'POST', headers: { 'x-csrf-token': csrfToken } }); if (response.ok) location.href = '/'; });
           const socket = window.io({ transports: ['websocket'] });
           const socketRepair = createSocketRepairController({ loadWeek: () => loadWeek(weekMonday), patchDay });
-          socket.on('vote:changed', (patch) => { if (patch.roomId !== roomId) return; socketRepair.handlePatch(patch); timelineController.patch(patch); });
+          socket.on('vote:changed', (patch) => { if (roomUnavailable || patch.roomId !== roomId) return; socketRepair.handlePatch(patch); timelineController.patch(patch); });
           socket.on('event:changed', ({ roomId: changedRoomId, date }) => {
-            if (changedRoomId !== roomId) return;
+            if (roomUnavailable || changedRoomId !== roomId) return;
             if (weekState?.days.some((day) => day.date === date)) void loadWeek(weekMonday);
             void loadTimeline();
           });
           socket.on('rooms:summary-state', ({ rooms }) => { if (Array.isArray(rooms)) applyRoomMetadata(rooms.find((room) => room?.id === roomId)); });
           socket.on('rooms:summary-changed', ({ room }) => { applyRoomMetadata(room); });
-          socket.on('week:reset', ({ roomId: changedRoomId, monday }) => { if (changedRoomId !== roomId) return; if (monday === weekMonday) loadWeek(weekMonday); loadTimeline(); });
+          socket.on('week:reset', ({ roomId: changedRoomId, monday }) => { if (roomUnavailable || changedRoomId !== roomId) return; if (monday === weekMonday) loadWeek(weekMonday); loadTimeline(); });
+          socket.on('room:deleted', ({ roomId: deletedRoomId }) => { if (deletedRoomId === roomId) exitDeletedRoom(); });
           socket.on('connect', () => {
+            if (roomUnavailable) return;
             const repair = () => { void socketRepair.handleConnect(); void loadTimeline(); void refreshRoomMetadata(); };
             socket.emit('room:subscribe', { roomId }, (result) => {
+              if (roomUnavailable) return;
+              if (result?.code === 'ROOM_NOT_FOUND') { exitDeletedRoom(); return; }
               if (!result?.ok || result.roomId !== roomId) { message.textContent = 'Room access changed. Re-enter the room.'; return; }
               repair();
             });

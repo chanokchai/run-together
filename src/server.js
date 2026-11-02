@@ -40,6 +40,7 @@ export function createServer({
     },
     onWeekReset: (...args) => realtime?.broadcastWeekReset(...args),
     onRoomSummaryChanged: (roomId) => realtime?.broadcastRoomSummary(roomId),
+    onRoomDeleted: (roomId) => realtime?.broadcastRoomDeleted(roomId),
   });
   const server = createHttpServer(app);
   realtime = attachRealtime(server, { auth: app.auth, database, now });
