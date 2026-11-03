@@ -846,10 +846,131 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
   assert.equal(revertResponse.status, 200, 'the admin reverts the zero-vote scheduled event while the peer is disconnected');
   assert.equal(await waitFor(client, `!document.querySelector('.run-event-banner[data-date="2024-03-03"]')`), true, 'the online client removes the reverted event immediately');
   assert.equal(await evaluate(client2, `document.querySelector('.run-event-banner[data-date="2024-03-03"] .run-event-banner__status')?.textContent`), 'Scheduled', 'the offline peer retains its stale view until reconnect');
-  await client2.send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1, connectionType: 'wifi' });
-  assert.equal(await waitFor(client2, `!document.querySelector('.run-event-banner[data-date="2024-03-03"]')`), true, 'socket reconnect repairs the peer banner from authoritative state');
-  assert.equal(await evaluate(client2, `document.querySelector('.vote-timeline__date[datetime="2024-03-03"]').classList.contains('is-scheduled')`), false, 'socket reconnect repairs the scheduled graph state');
-  assert.equal(await evaluate(client2, `document.querySelector('.vote-timeline__date[datetime="2024-03-03"]').classList.contains('is-beam-running')`), false, 'reconnect cleanup stops any active stale beam');
+  let reconnectFailure;
+  try {
+    await evaluate(client2, `(() => {
+      const originalFetch = window.fetch.bind(window);
+      let releaseHeldResponse;
+      const heldResponse = new Promise((resolve) => { releaseHeldResponse = resolve; });
+      const state = {
+        armed: true,
+        held: null,
+        released: false,
+        release() {
+          if (this.released) return;
+          this.released = true;
+          releaseHeldResponse();
+        },
+      };
+      state.isComplete = () => {
+        const date = document.querySelector('.vote-timeline__date[datetime="2024-03-03"]');
+        const bounds = date?.getBoundingClientRect();
+        return Boolean(state.released
+          && state.held?.status === 200
+          && Array.isArray(state.held.body?.scheduledDates)
+          && !state.held.body.scheduledDates.includes('2024-03-03')
+          && !document.querySelector('.run-event-banner[data-date="2024-03-03"]')
+          && date
+          && !date.classList.contains('is-scheduled')
+          && !date.classList.contains('is-beam-running')
+          && getComputedStyle(date).visibility !== 'hidden'
+          && bounds.bottom > 0 && bounds.top < innerHeight);
+      };
+      window.__issue32ReconnectTimeline = state;
+      window.__issue32OriginalFetch = originalFetch;
+      window.fetch = async (...args) => {
+        const input = args[0];
+        const path = new URL(typeof input === 'string' ? input : input.url, location.href).pathname;
+        const response = await originalFetch(...args);
+        if (state.armed && path.endsWith('/vote-timeline')) {
+          state.armed = false;
+          state.held = { status: response.status, body: await response.clone().json() };
+          await heldResponse;
+        }
+        return response;
+      };
+    })()`);
+    await client2.send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1, connectionType: 'wifi' });
+    assert.equal(await waitFor(client2, `!document.querySelector('.run-event-banner[data-date="2024-03-03"]')`), true, 'socket reconnect repairs the peer banner from authoritative state');
+    assert.equal(await waitFor(client2, 'Boolean(window.__issue32ReconnectTimeline?.held)'), true, 'observes the reconnect timeline response while it remains held');
+    const heldSplit = await evaluate(client2, `(() => {
+      const state = window.__issue32ReconnectTimeline;
+      const date = document.querySelector('.vote-timeline__date[datetime="2024-03-03"]');
+      const bounds = date?.getBoundingClientRect();
+      return {
+        responseStatus: state.held.status,
+        responseScheduled: state.held.body.scheduledDates.includes('2024-03-03'),
+        bannerPresent: Boolean(document.querySelector('.run-event-banner[data-date="2024-03-03"]')),
+        dateExists: Boolean(date),
+        dateScheduled: date?.classList.contains('is-scheduled') ?? null,
+        beamRunning: date?.classList.contains('is-beam-running') ?? null,
+        visible: Boolean(bounds && getComputedStyle(date).visibility !== 'hidden' && bounds.bottom > 0 && bounds.top < innerHeight),
+        completionReady: state.isComplete(),
+      };
+    })()`);
+    t.diagnostic(`Observed genuine held reconnect timeline response and split graph state: ${JSON.stringify(heldSplit)}`);
+    assert.deepEqual(heldSplit, {
+      responseStatus: 200,
+      responseScheduled: false,
+      bannerPresent: false,
+      dateExists: true,
+      dateScheduled: true,
+      beamRunning: true,
+      visible: true,
+      completionReady: false,
+    }, 'a successful authoritative unscheduled response and repaired banner do not complete readiness while the visible graph and beam remain stale');
+
+    await evaluate(client2, 'window.__issue32ReconnectTimeline.release()');
+    const reconnectCompleted = await waitFor(client2, 'window.__issue32ReconnectTimeline.isComplete()');
+    assert.equal(reconnectCompleted, true, 'finite wait observes the released authoritative timeline and complete visible graph/beam repair');
+    const repaired = await evaluate(client2, `(() => {
+      const state = window.__issue32ReconnectTimeline;
+      const date = document.querySelector('.vote-timeline__date[datetime="2024-03-03"]');
+      const bounds = date?.getBoundingClientRect();
+      return {
+        responseStatus: state.held.status,
+        responseScheduled: state.held.body.scheduledDates.includes('2024-03-03'),
+        responseReleased: state.released,
+        bannerPresent: Boolean(document.querySelector('.run-event-banner[data-date="2024-03-03"]')),
+        dateExists: Boolean(date),
+        dateScheduled: date?.classList.contains('is-scheduled') ?? null,
+        beamRunning: date?.classList.contains('is-beam-running') ?? null,
+        visible: Boolean(bounds && getComputedStyle(date).visibility !== 'hidden' && bounds.bottom > 0 && bounds.top < innerHeight),
+      };
+    })()`);
+    t.diagnostic(`Completed reconnect timeline state: ${JSON.stringify(repaired)}`);
+    assert.deepEqual(repaired, {
+      responseStatus: 200,
+      responseScheduled: false,
+      responseReleased: true,
+      bannerPresent: false,
+      dateExists: true,
+      dateScheduled: false,
+      beamRunning: false,
+      visible: true,
+    }, 'reconnect completion requires the target date to exist visibly and be unscheduled with its stale beam stopped');
+    assert.equal(repaired.dateScheduled, false, 'socket reconnect repairs the scheduled graph state');
+    assert.equal(repaired.beamRunning, false, 'reconnect cleanup stops any active stale beam');
+  } catch (error) {
+    reconnectFailure = error;
+  } finally {
+    try {
+      await evaluate(client2, `(() => {
+        const state = window.__issue32ReconnectTimeline;
+        if (!state) return;
+        state.release();
+        if (window.__issue32OriginalFetch && window.fetch !== window.__issue32OriginalFetch) {
+          window.fetch = window.__issue32OriginalFetch;
+        }
+        delete window.__issue32ReconnectTimeline;
+        delete window.__issue32OriginalFetch;
+      })()`);
+    } catch (cleanupError) {
+      if (!reconnectFailure) throw cleanupError;
+      t.diagnostic(`Reconnect interceptor cleanup also failed after the primary test failure: ${cleanupError.message}`);
+    }
+  }
+  if (reconnectFailure) throw reconnectFailure;
   for (const width of [320, 390, 1280]) {
     await client2.send('Emulation.setDeviceMetricsOverride', { width, height: 844, deviceScaleFactor: 1, mobile: width <= 390 });
     const layout = await evaluate(client2, `(() => {
