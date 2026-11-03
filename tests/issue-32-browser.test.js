@@ -223,7 +223,79 @@ async function verticalPageSwipe(client, deltaY) {
   await client.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ id: 2, x, y: startY, radiusX: 1, radiusY: 1, force: 1 }] });
   await client.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ id: 2, x, y: startY + deltaY, radiusX: 1, radiusY: 1, force: 1 }] });
   await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-  await delay(120);
+}
+
+async function armPageScrollEnd(client, label, requireTrustedTouchEnd = false) {
+  await evaluate(client, `((label, requireTrustedTouchEnd) => {
+    let resolveCompletion;
+    let settled = false;
+    let sawScroll = false;
+    let sawTrustedTouchEnd = false;
+    const startedAt = performance.now();
+    const completion = new Promise((resolve) => { resolveCompletion = resolve; });
+    const cleanup = () => {
+      clearTimeout(timeout);
+      window.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('scrollend', onScrollEnd, true);
+      window.removeEventListener('touchend', onTouchEnd, true);
+    };
+    const finish = (completed) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolveCompletion({ label, completed, sawScroll, sawTrustedTouchEnd,
+        elapsed: Number((performance.now() - startedAt).toFixed(1)), scrollY });
+    };
+    const onScroll = () => { sawScroll = true; };
+    const onTouchEnd = (event) => { sawTrustedTouchEnd ||= event.isTrusted; };
+    const onScrollEnd = () => {
+      if (sawScroll && (!requireTrustedTouchEnd || sawTrustedTouchEnd)) finish(true);
+    };
+    const timeout = setTimeout(() => finish(false), 2000);
+    window.addEventListener('scroll', onScroll, { capture: true, passive: true });
+    window.addEventListener('scrollend', onScrollEnd, true);
+    window.addEventListener('touchend', onTouchEnd, { capture: true, passive: true });
+    window.__issue32PageScrollEnd = completion;
+  })(${JSON.stringify(label)}, ${JSON.stringify(requireTrustedTouchEnd)})`);
+}
+
+async function waitForPageScrollEnd(client) {
+  return evaluate(client, 'window.__issue32PageScrollEnd');
+}
+
+async function sampleSettledViewport(client, selector) {
+  return evaluate(client, `(async () => {
+    const selector = ${JSON.stringify(selector)};
+    let previous = null;
+    let initialElement = null;
+    let stableFrames = 0;
+    let sample = null;
+    for (let frame = 0; frame < 60; frame += 1) {
+      await new Promise(requestAnimationFrame);
+      const element = document.querySelector(selector);
+      if (!element) return { settled: false, frames: frame + 1, missing: true };
+      const bounds = element.getBoundingClientRect();
+      if (initialElement === null) initialElement = element;
+      sample = { scrollY, scrollHeight: document.documentElement.scrollHeight, innerHeight,
+        top: bounds.top, bottom: bounds.bottom, documentY: bounds.top + scrollY,
+        intersectsViewport: bounds.bottom > 0 && bounds.top < innerHeight,
+        isBeamRunning: element.classList.contains('is-beam-running'),
+        animationName: getComputedStyle(element, '::before').animationName,
+        sameNode: initialElement === element };
+      const unchanged = previous && sample.sameNode
+        && Math.abs(sample.scrollY - previous.scrollY) < 0.25
+        && Math.abs(sample.top - previous.top) < 0.25
+        && Math.abs(sample.bottom - previous.bottom) < 0.25
+        && sample.scrollHeight === previous.scrollHeight;
+      stableFrames = unchanged ? stableFrames + 1 : 0;
+      if (stableFrames >= 3) {
+        window.__issue32StableViewportElement = element;
+        return { settled: true, frames: frame + 1, stableFrames, sample };
+      }
+      previous = sample;
+    }
+    return { settled: false, frames: 60, stableFrames, sample };
+  })()`);
 }
 
 test('Issue 32 vote page renders stacked event banners and remains keyboard/mobile usable', {
@@ -703,16 +775,32 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
     }
   }
   await client2.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 300, deviceScaleFactor: 1, mobile: true });
+  const dateSelector = '.vote-timeline__date[datetime="2024-03-03"]';
+  await armPageScrollEnd(client2, 'trusted vertical swipe', true);
   await verticalPageSwipe(client2, -240);
-  assert.equal(await waitFor(client2, `(() => { const box = document.querySelector('.vote-timeline__date[datetime="2024-03-03"]').getBoundingClientRect(); return box.bottom <= 0 || box.top >= innerHeight; })()`), true, 'a real vertical swipe moves the scheduled graph date fully offscreen');
-  assert.equal(await waitFor(client2, `!document.querySelector('.vote-timeline__date[datetime="2024-03-03"]').classList.contains('is-beam-running')`), true,
-    'the scheduled graph beam pauses after the date leaves the viewport');
-  await evaluate(client2, `document.querySelector('.vote-timeline__date[datetime="2024-03-03"]').scrollIntoView({ block: 'center' })`);
-  const reentryVisible = await waitFor(client2, `document.querySelector('.vote-timeline__date[datetime="2024-03-03"]').classList.contains('is-beam-running')`);
-  const reentryMetrics = await evaluate(client2, `(() => { const element = document.querySelector('.vote-timeline__date[datetime="2024-03-03"]'); const box = element.getBoundingClientRect(); const style = getComputedStyle(element, '::before'); return { scrollY, innerHeight, scrollHeight: document.documentElement.scrollHeight, top: box.top, bottom: box.bottom, intersectsViewport: box.bottom > 0 && box.top < innerHeight, className: element.className, animationName: style.animationName, beamAngle: style.getPropertyValue('--beam-angle'), reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches, activeAnimations: document.getAnimations().filter((animation) => animation.animationName === 'scheduled-border-beam').length }; })()`);
-  t.diagnostic(`Observed viewport re-entry: ${JSON.stringify(reentryMetrics)}`);
-  assert.equal(reentryMetrics.intersectsViewport, true, `the return gesture places the scheduled graph date in the viewport: ${JSON.stringify(reentryMetrics)}`);
-  assert.equal(reentryVisible, true, 'the scheduled graph beam resumes on viewport re-entry');
+  const swipeScrollEnd = await waitForPageScrollEnd(client2);
+  t.diagnostic(`Trusted swipe scroll completion: ${JSON.stringify(swipeScrollEnd)}`);
+  assert.deepEqual({ completed: swipeScrollEnd.completed, sawScroll: swipeScrollEnd.sawScroll, sawTrustedTouchEnd: swipeScrollEnd.sawTrustedTouchEnd },
+    { completed: true, sawScroll: true, sawTrustedTouchEnd: true }, 'waits for the trusted vertical swipe and its real page scroll to finish');
+  const offscreenMetrics = await sampleSettledViewport(client2, dateSelector);
+  t.diagnostic(`Settled offscreen beam state after swipe: ${JSON.stringify(offscreenMetrics)}`);
+  assert.equal(offscreenMetrics.settled, true, 'the post-swipe viewport reaches a finite measured stable state');
+  assert.equal(offscreenMetrics.sample.intersectsViewport, false, 'a real vertical swipe moves the scheduled graph date fully offscreen');
+  assert.equal(offscreenMetrics.sample.isBeamRunning, false, 'the scheduled graph beam pauses after the date leaves the viewport');
+  assert.equal(offscreenMetrics.sample.animationName, 'none', 'the offscreen pseudo-element animation is stopped');
+
+  await armPageScrollEnd(client2, 'instant viewport return');
+  await evaluate(client2, `document.querySelector(${JSON.stringify(dateSelector)}).scrollIntoView({ block: 'center', behavior: 'instant' })`);
+  const returnScrollEnd = await waitForPageScrollEnd(client2);
+  t.diagnostic(`Programmatic return scroll completion: ${JSON.stringify(returnScrollEnd)}`);
+  assert.deepEqual({ completed: returnScrollEnd.completed, sawScroll: returnScrollEnd.sawScroll },
+    { completed: true, sawScroll: true }, 'waits for the finite programmatic return scroll to finish');
+  const reentryMetrics = await sampleSettledViewport(client2, dateSelector);
+  t.diagnostic(`Settled viewport re-entry: ${JSON.stringify(reentryMetrics)}`);
+  assert.equal(reentryMetrics.settled, true, 'the return viewport remains geometrically stable for multiple frames');
+  assert.equal(reentryMetrics.sample.intersectsViewport, true, 'the scheduled graph date is visible in the settled return viewport');
+  assert.equal(reentryMetrics.sample.isBeamRunning, true, 'the scheduled graph beam resumes in the settled viewport');
+  assert.equal(reentryMetrics.sample.animationName, 'scheduled-border-beam', 'the re-entered pseudo-element animation is active');
   const reentryPhase = await evaluate(client2, `(async () => {
     for (let frame = 0; frame < 4; frame += 1) await new Promise(requestAnimationFrame);
     const date = document.querySelector('.vote-timeline__date[datetime="2024-03-03"]');
@@ -725,17 +813,28 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
       && candidate.effect?.pseudoElement === '::before' && candidate.effect?.target === date);
     const bounds = date.getBoundingClientRect();
     return { difference: Math.min(rawDifference, 360 - rawDifference), active: date.classList.contains('is-beam-running'),
+      sameNode: window.__issue32StableViewportElement === date, scrollY,
       timelineTime, angle, expected, animation: style.animationName, duration: style.animationDuration, delay: style.animationDelay,
       beamDelay: getComputedStyle(date).getPropertyValue('--beam-delay').trim(),
       animationStartTime: animation?.startTime ?? null, animationCurrentTime: animation?.currentTime ?? null,
       animationPlayState: animation?.playState ?? null, animationProgress: animation?.effect?.getComputedTiming().progress ?? null,
-      visibilityState: document.visibilityState, rect: { top: bounds.top, bottom: bounds.bottom }, innerHeight,
+      visibilityState: document.visibilityState, rect: { top: bounds.top, bottom: bounds.bottom },
+      documentY: bounds.top + scrollY, scrollHeight: document.documentElement.scrollHeight, innerHeight,
       intersecting: bounds.bottom > 0 && bounds.top < innerHeight,
       matchingAnimations: document.getAnimations().filter((candidate) => candidate.animationName === 'scheduled-border-beam'
         && candidate.effect?.pseudoElement === '::before' && candidate.effect?.target === date).length };
   })()`);
   t.diagnostic(`Observed viewport re-entry phase sample: ${JSON.stringify(reentryPhase)}`);
-  assert.ok(reentryPhase.active && reentryPhase.difference < 10, `independent viewport re-entry resumes at the current normalized page phase after multiple animation frames: ${JSON.stringify(reentryPhase)}`);
+  assert.ok(reentryPhase.sameNode && reentryPhase.scrollY === reentryMetrics.sample.scrollY
+    && Math.abs(reentryPhase.rect.top - reentryMetrics.sample.top) < 0.25
+    && Math.abs(reentryPhase.rect.bottom - reentryMetrics.sample.bottom) < 0.25
+    && Math.abs(reentryPhase.documentY - reentryMetrics.sample.documentY) < 0.25
+    && reentryPhase.scrollHeight === reentryMetrics.sample.scrollHeight
+    && reentryPhase.innerHeight === reentryMetrics.sample.innerHeight
+    && reentryPhase.intersecting, `the phase sample remains in the same stable visible viewport: ${JSON.stringify(reentryPhase)}`);
+  assert.ok(reentryPhase.active && reentryPhase.animation === 'scheduled-border-beam'
+    && reentryPhase.matchingAnimations === 1 && reentryPhase.difference < 10,
+  `independent viewport re-entry resumes at the current normalized page phase after multiple animation frames: ${JSON.stringify(reentryPhase)}`);
   await client2.send('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0, connectionType: 'none' });
   assert.equal(await waitFor(client2, '!navigator.onLine'), true, 'the peer browser goes offline before the authoritative change');
   const scheduledEvent = server.database.prepare('SELECT id, revision FROM run_events WHERE event_date = ?').get('2024-03-03');
