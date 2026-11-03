@@ -481,6 +481,159 @@ test('Issue 39 closes legacy APIs and subscriptions after deleting the legacy ro
   });
 });
 
+test('Issue 39 rejects actual legacy API aliases after deletion without replay, mutation, or notifications', async () => {
+  await withServer(async (baseUrl, server) => {
+    const admin = await loginAdmin(baseUrl);
+    const member = await register(baseUrl, 'Issue 39 Legacy Alias Member');
+    const other = await createRoom(baseUrl, admin, 'Legacy alias survivor');
+    const adminId = server.database.prepare("SELECT id FROM users WHERE role = 'admin'").get().id;
+    const memberId = server.database.prepare('SELECT id FROM users WHERE name = ?').get('Issue 39 Legacy Alias Member').id;
+    await enterRoom(baseUrl, member, LEGACY_ROOM_ID);
+    await enterRoom(baseUrl, member, other.id);
+
+    for (const path of [`/api/weeks/${WEEK}`, '/api/vote-timeline']) {
+      assert.equal((await fetch(`${baseUrl}${path}`, { headers: { cookie: member.cookie } })).status, 200,
+        `${path} remains compatible while the exact legacy room exists`);
+    }
+    const legacyVote = await fetch(`${baseUrl}/api/votes/${DATE}`, {
+      method: 'PUT', headers: headers(baseUrl, member), body: JSON.stringify({ selected: true }),
+    });
+    assert.equal(legacyVote.status, 200);
+    const proposalRequestId = randomUUID();
+    const proposal = await fetch(`${baseUrl}/api/events/${DATE}`, {
+      method: 'POST', headers: headers(baseUrl, member), body: JSON.stringify({ requestId: proposalRequestId }),
+    });
+    assert.equal(proposal.status, 201);
+    const proposalBody = await proposal.json();
+    const event = proposalBody.event;
+    const scheduled = await fetch(`${baseUrl}/api/admin/events/${DATE}`, {
+      method: 'PUT', headers: headers(baseUrl, admin),
+      body: JSON.stringify({ eventId: event.eventId, revision: event.revision, requestId: randomUUID(), status: 'scheduled' }),
+    });
+    assert.equal(scheduled.status, 200);
+    const replay = await fetch(`${baseUrl}/api/events/${DATE}`, {
+      method: 'POST', headers: headers(baseUrl, member), body: JSON.stringify({ requestId: proposalRequestId }),
+    });
+    assert.equal(replay.status, 200);
+    assert.equal((await replay.json()).replayed, true, 'the old proposal request ID is a valid replay before deletion');
+
+    addVote(server.database, { roomId: other.id, userId: memberId, voteDate: DATE, createdAt: NOW.toISOString() });
+    seedRoomEvent(server.database, other.id, adminId, { status: 'scheduled' });
+    seedEventRequest(server.database, other.id, memberId, 'issue39-legacy-alias-other-retry');
+    server.database.prepare(`
+      INSERT INTO admin_action_audit
+        (request_id, admin_user_id, target_user_id, target_name, action, deleted_vote_count, occurred_at)
+      VALUES ('issue39-legacy-alias-audit', ?, ?, 'Issue 39 Legacy Alias Member', 'reset_votes', 0, ?)
+    `).run(adminId, memberId, NOW.toISOString());
+
+    const before = {
+      users: server.database.prepare('SELECT * FROM users ORDER BY id').all(),
+      sessions: server.database.prepare('SELECT * FROM sessions ORDER BY id').all(),
+      audit: server.database.prepare('SELECT * FROM admin_action_audit ORDER BY id').all(),
+      otherRoom: server.database.prepare('SELECT * FROM rooms WHERE id = ?').get(other.id),
+      otherVotes: server.database.prepare('SELECT * FROM votes WHERE room_id = ? ORDER BY id').all(other.id),
+      otherEvents: server.database.prepare('SELECT * FROM run_events WHERE room_id = ? ORDER BY id').all(other.id),
+      otherMemberships: server.database.prepare('SELECT * FROM room_memberships WHERE room_id = ? ORDER BY user_id').all(other.id),
+      otherRequests: server.database.prepare('SELECT * FROM run_event_requests WHERE room_id = ? ORDER BY request_id').all(other.id),
+      identityLedger: server.database.prepare('SELECT * FROM room_identity_ledger ORDER BY room_id').all(),
+      migrationLedger: server.database.prepare('SELECT * FROM room_migration_ledger ORDER BY migration_key').all(),
+      displayCounter: server.database.prepare('SELECT * FROM room_display_counter').get(),
+    };
+    assert.ok(before.otherVotes.length > 0);
+    assert.ok(before.otherEvents.length > 0);
+    assert.ok(before.otherMemberships.length > 0);
+    assert.ok(before.otherRequests.length > 0);
+
+    const socket = connectSocket(baseUrl, { transports: ['websocket'], extraHeaders: { origin: baseUrl, cookie: admin.cookie } });
+    await waitForSocket(socket);
+    await subscribeRoom(socket, LEGACY_ROOM_ID);
+    await subscribeRoom(socket, other.id);
+    const notifications = { vote: 0, event: 0, reset: 0 };
+    socket.on('vote:changed', () => { notifications.vote += 1; });
+    socket.on('event:changed', () => { notifications.event += 1; });
+    socket.on('week:reset', () => { notifications.reset += 1; });
+    try {
+      const deletedEvent = new Promise((resolve) => socket.once('room:deleted', resolve));
+      const deletion = await deleteRoom(baseUrl, admin, LEGACY_ROOM_ID);
+      assert.equal(deletion.status, 200);
+      assert.deepEqual(await deletion.json(), { deletedRoomId: LEGACY_ROOM_ID });
+      assert.deepEqual(await deletedEvent, { roomId: LEGACY_ROOM_ID });
+
+      const missingRoomRequests = [
+        ['GET', `/api/weeks/${WEEK}`, null, member],
+        ['GET', '/api/vote-timeline', null, member],
+        ['PUT', `/api/votes/${DATE}`, { selected: true }, member],
+        ['PUT', `/api/votes/${DATE}`, { selected: false }, member],
+        ['POST', `/api/events/${DATE}`, { requestId: proposalRequestId }, member],
+        ['DELETE', `/api/events/${DATE}`, { eventId: event.eventId, revision: event.revision, requestId: randomUUID() }, member],
+        ['PUT', `/api/admin/events/${DATE}`, { eventId: event.eventId, revision: event.revision, requestId: randomUUID(), status: 'scheduled' }, admin],
+        ['DELETE', `/api/admin/events/${DATE}`, { eventId: event.eventId, revision: event.revision, requestId: randomUUID() }, admin],
+        ['DELETE', `/api/admin/weeks/${WEEK}/votes`, { confirmation: true }, admin],
+      ];
+      for (const [method, path, body, user] of missingRoomRequests) {
+        const response = await fetch(`${baseUrl}${path}`, {
+          method,
+          headers: headers(baseUrl, user),
+          ...(body === null ? {} : { body: JSON.stringify(body) }),
+        });
+        assert.equal(response.status, 404, `${method} ${path} must reject the deleted exact legacy room`);
+        assert.equal((await response.json()).code, 'ROOM_NOT_FOUND');
+      }
+
+      const unauthenticated = await fetch(`${baseUrl}/api/weeks/${WEEK}`);
+      assert.equal(unauthenticated.status, 401, 'authentication is still checked before missing-room handling');
+      const missingCsrf = await fetch(`${baseUrl}/api/votes/${DATE}`, {
+        method: 'PUT', headers: headers(baseUrl, admin, { csrf: false }), body: JSON.stringify({ selected: false }),
+      });
+      assert.equal(missingCsrf.status, 403);
+      assert.equal((await missingCsrf.json()).code, 'CSRF_INVALID', 'CSRF is still checked before missing-room handling');
+      const deniedAdminAction = await fetch(`${baseUrl}/api/admin/weeks/${WEEK}/votes`, {
+        method: 'DELETE', headers: headers(baseUrl, member), body: JSON.stringify({ confirmation: true }),
+      });
+      assert.equal(deniedAdminAction.status, 403, 'application-admin authorization remains enforced');
+
+      const session = await fetch(`${baseUrl}/api/session`, { headers: { cookie: admin.cookie } });
+      assert.equal(session.status, 200, 'global session operations remain available after legacy deletion');
+      const globalUsers = await fetch(`${baseUrl}/api/admin/users`, { headers: { cookie: admin.cookie } });
+      assert.equal(globalUsers.status, 200, 'global user management remains independent of the legacy room');
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.deepEqual(notifications, { vote: 0, event: 0, reset: 0 }, 'missing-room aliases do not broadcast vote, event, or reset notifications');
+      assert.equal(server.database.prepare('SELECT COUNT(*) AS count FROM rooms WHERE id = ?').get(LEGACY_ROOM_ID).count, 0);
+      for (const table of ['votes', 'run_events', 'room_memberships', 'run_event_requests']) {
+        assert.equal(server.database.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE room_id = ?`).get(LEGACY_ROOM_ID).count, 0,
+          `${table} remains absent after every actual legacy alias request`);
+      }
+      assert.deepEqual(server.database.prepare('SELECT * FROM rooms WHERE id = ?').get(other.id), before.otherRoom);
+      assert.deepEqual(server.database.prepare('SELECT * FROM votes WHERE room_id = ? ORDER BY id').all(other.id), before.otherVotes);
+      assert.deepEqual(server.database.prepare('SELECT * FROM run_events WHERE room_id = ? ORDER BY id').all(other.id), before.otherEvents);
+      assert.deepEqual(server.database.prepare('SELECT * FROM room_memberships WHERE room_id = ? ORDER BY user_id').all(other.id), before.otherMemberships);
+      assert.deepEqual(server.database.prepare('SELECT * FROM run_event_requests WHERE room_id = ? ORDER BY request_id').all(other.id), before.otherRequests);
+      assert.deepEqual(server.database.prepare('SELECT * FROM users ORDER BY id').all(), before.users);
+      assert.deepEqual(server.database.prepare('SELECT * FROM sessions ORDER BY id').all(), before.sessions);
+      assert.deepEqual(server.database.prepare('SELECT * FROM admin_action_audit ORDER BY id').all(), before.audit);
+      assert.deepEqual(server.database.prepare('SELECT * FROM room_identity_ledger ORDER BY room_id').all(), before.identityLedger);
+      assert.deepEqual(server.database.prepare('SELECT * FROM room_migration_ledger ORDER BY migration_key').all(), before.migrationLedger);
+      assert.deepEqual(server.database.prepare('SELECT * FROM room_display_counter').get(), before.displayCounter);
+
+      const resetGlobalPin = await fetch(`${baseUrl}/api/admin/users/${memberId}/pin`, {
+        method: 'PUT', headers: headers(baseUrl, admin),
+        body: JSON.stringify({ newPin: '5937', newPinConfirmation: '5937' }),
+      });
+      assert.equal(resetGlobalPin.status, 204, 'global account management remains actionable after legacy deletion');
+
+      const laterRoom = await createRoom(baseUrl, admin, 'Created after legacy deletion');
+      const legacyStillMissing = await fetch(`${baseUrl}/api/weeks/${WEEK}`, { headers: { cookie: admin.cookie } });
+      assert.equal(legacyStillMissing.status, 404, 'creating a later room never retargets the legacy aliases');
+      assert.equal((await legacyStillMissing.json()).code, 'ROOM_NOT_FOUND');
+      const laterRoomWeek = await fetch(`${baseUrl}/api/rooms/${laterRoom.id}/weeks/${WEEK}`, { headers: { cookie: admin.cookie } });
+      assert.equal(laterRoomWeek.status, 200, 'the later room remains available through its explicit scoped route');
+    } finally {
+      socket.close();
+    }
+  });
+});
+
 test('Issue 39 runs the A/B/C versus A/C/D lifecycle without cross-room effects or elevated user privileges', async () => {
   await withServer(async (baseUrl, server) => {
     const [a, b, c, d] = await Promise.all([

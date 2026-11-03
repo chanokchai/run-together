@@ -1071,9 +1071,10 @@ export function createApp({ databaseReady = false, database, env = process.env, 
         if (request.body?.confirmation !== true) {
           throw new AuthError(400, 'RESET_CONFIRMATION_REQUIRED', 'ต้องยืนยันการรีเซ็ต / Explicit reset confirmation is required.');
         }
-        const result = resetWeek(database, { monday: request.params.monday, now });
-        result.affectedDates.forEach((date) => onVoteChanged(date));
-        onWeekReset(result.monday, result.sunday);
+        const room = requireRoom(LEGACY_ROOM_ID);
+        const result = resetWeek(database, { roomId: room.id, monday: request.params.monday, now });
+        result.affectedDates.forEach((date) => onVoteChanged(room.id, date));
+        onWeekReset(room.id, result.monday, result.sunday);
         response.status(204).end();
       } catch (error) {
         sendError(response, error);
@@ -1087,8 +1088,9 @@ export function createApp({ databaseReady = false, database, env = process.env, 
       try {
         auth.assertCsrf(request, session);
         const { requestId } = runEventActionBody(request.body, { proposal: true });
-        const result = proposeRunEvent(database, { userId: session.user_id, eventDate: request.params.date, requestId, now });
-        if (result.changed) onRunEventChanged(request.params.date);
+        const room = requireRoom(LEGACY_ROOM_ID);
+        const result = proposeRunEvent(database, { roomId: room.id, userId: session.user_id, eventDate: request.params.date, requestId, now });
+        if (result.changed) onRunEventChanged(room.id, request.params.date);
         response.status(result.changed ? 201 : 200).json(result);
       } catch (error) {
         sendError(response, error);
@@ -1102,10 +1104,11 @@ export function createApp({ databaseReady = false, database, env = process.env, 
       try {
         auth.assertCsrf(request, session);
         const { eventId, revision, requestId } = runEventActionBody(request.body);
+        const room = requireRoom(LEGACY_ROOM_ID);
         const result = withdrawRunEvent(database, {
-          userId: session.user_id, eventDate: request.params.date, eventId, revision, requestId, now,
+          roomId: room.id, userId: session.user_id, eventDate: request.params.date, eventId, revision, requestId, now,
         });
-        if (result.changed) onRunEventChanged(request.params.date);
+        if (result.changed) onRunEventChanged(room.id, request.params.date);
         response.json(result);
       } catch (error) {
         sendError(response, error);
@@ -1119,11 +1122,12 @@ export function createApp({ databaseReady = false, database, env = process.env, 
       try {
         auth.assertCsrf(request, session);
         const { eventId, revision, requestId, status } = runEventActionBody(request.body, { status: true });
+        const room = requireRoom(LEGACY_ROOM_ID);
         const result = setRunEventStatus(database, {
-          adminUserId: session.user_id, eventDate: request.params.date,
+          roomId: room.id, adminUserId: session.user_id, eventDate: request.params.date,
           eventId, revision, requestId, status, now,
         });
-        if (result.changed) onRunEventChanged(request.params.date);
+        if (result.changed) onRunEventChanged(room.id, request.params.date);
         response.json(result);
       } catch (error) {
         sendError(response, error);
@@ -1137,10 +1141,12 @@ export function createApp({ databaseReady = false, database, env = process.env, 
       try {
         auth.assertCsrf(request, session);
         const { eventId, revision, requestId } = runEventActionBody(request.body);
+        const room = requireRoom(LEGACY_ROOM_ID);
         const result = deleteRunEvent(database, {
-          adminUserId: session.user_id, eventDate: request.params.date, eventId, revision, requestId, now,
+          roomId: room.id, adminUserId: session.user_id, eventDate: request.params.date,
+          eventId, revision, requestId, now,
         });
-        if (result.changed) onRunEventChanged(request.params.date);
+        if (result.changed) onRunEventChanged(room.id, request.params.date);
         response.json(result);
       } catch (error) {
         sendError(response, error);
@@ -1153,7 +1159,8 @@ export function createApp({ databaseReady = false, database, env = process.env, 
       if (!session) return;
       try {
         const monday = requestedWeek(request.params.monday, now);
-        response.json(getWeekState(database, { monday, currentUserId: session.user_id, now }));
+        const room = requireRoom(LEGACY_ROOM_ID);
+        response.json(getWeekState(database, { roomId: room.id, monday, currentUserId: session.user_id, now }));
       } catch (error) {
         sendError(response, error);
       }
@@ -1163,7 +1170,12 @@ export function createApp({ databaseReady = false, database, env = process.env, 
       response.setHeader('Cache-Control', 'no-store');
       const session = auth.requireSession(request, response);
       if (!session) return;
-      response.json(getEligiblePeriodVoteTotals(database, { now }));
+      try {
+        const room = requireRoom(LEGACY_ROOM_ID);
+        response.json(getEligiblePeriodVoteTotals(database, { roomId: room.id, now }));
+      } catch (error) {
+        sendError(response, error);
+      }
     });
 
     app.put('/api/votes/:date', (request, response) => {
@@ -1173,13 +1185,15 @@ export function createApp({ databaseReady = false, database, env = process.env, 
       try {
         auth.assertCsrf(request, session);
         assertVoteBody(request.body);
+        const room = requireRoom(LEGACY_ROOM_ID);
         const result = setVote(database, {
+          roomId: room.id,
           userId: session.user_id,
           voteDate: request.params.date,
           now,
           body: request.body,
         });
-        if (result.changed) onVoteChanged(result.patch.date);
+        if (result.changed) onVoteChanged(room.id, result.patch.date);
         response.json(result.patch);
       } catch (error) {
         sendError(response, error);
