@@ -226,7 +226,9 @@ test('Issue 43 room filters, metadata, icon menus, responsive cards, and board r
       return { hidden: line.hidden, display: getComputedStyle(line).display, width: line.getBoundingClientRect().width };
     }),
   }))()`);
-  assert.deepEqual(initial.filters.map(({ label, checked }) => [label, checked]), [['My voted', false], ['Scheduled', false], ['Proposed', false]]);
+  assert.deepEqual(initial.filters.map(({ label, checked }) => [label, checked]), [
+    ['My voted', false], ['My created room', false], ['Scheduled', false], ['Proposed', false],
+  ]);
   assert.ok(initial.choices.includes('running') && initial.choices.includes('dinner') && initial.choices.includes('music'));
   assert.equal(initial.choices.length, 19, 'retains all nine sports and adds ten event icons');
   assert.equal(initial.defaultIcon, 'running');
@@ -303,7 +305,7 @@ test('Issue 43 room filters, metadata, icon menus, responsive cards, and board r
   const noMatch = await evaluate(client, `({ message: document.querySelector('#rooms-no-matches')?.hidden, filters: !document.querySelector('#room-filters').hidden, create: !document.querySelector('#create-room-form button[type=submit]').disabled, empty: document.querySelector('#rooms-empty').hidden })`);
   assert.deepEqual(noMatch, { message: false, filters: true, create: true, empty: true });
   await click(client, '#filter-proposed');
-  assert.deepEqual(new Set(await visibleIds()), new Set([proposed.id]), 'all three filters require My voted and either selected status');
+  assert.deepEqual(new Set(await visibleIds()), new Set([proposed.id]), 'the selected personal and status filters combine as an intersection');
   assert.equal(await evaluate(client, 'document.querySelector("#rooms-no-matches").hidden'), true, 'hides the no-match message when all three selected filters match');
   await click(client, '#filter-proposed');
   await click(client, '#filter-my-voted');

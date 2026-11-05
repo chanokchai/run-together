@@ -1,7 +1,7 @@
 import { DEFAULT_ROOM_ICON, ROOM_ICONS } from './room-contract.js?v=issue-43-icons-1';
 import { createScheduledEffectController } from './vote-board.js';
 import { millisecondsUntilBangkokMidnight } from './run-events.js';
-import { addDays, getBangkokDate } from './calendar.js?v=issue-43-calendar-1';
+import { addDays, getBangkokDate, parseIsoDate } from './calendar.js?v=issue-43-calendar-1';
 
 const ICONS = Object.freeze({
   running: { glyph: '🏃', label: 'Running' },
@@ -46,6 +46,19 @@ function formatDates(values) {
   return Array.isArray(values) && values.length
     ? values.map(formatRoomDate).filter(Boolean).join(', ')
     : '';
+}
+
+function formatScheduleDate(value) {
+  try {
+    parseIsoDate(value);
+  } catch {
+    return null;
+  }
+  const [, , month, day] = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  const fullDate = new Intl.DateTimeFormat('en-GB', {
+    day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC',
+  }).format(new Date(`${value}T00:00:00Z`));
+  return { shortDate: `${day}-${month}`, fullDate };
 }
 
 function titleError(value) {
@@ -332,6 +345,9 @@ export function startRoomListPage() {
   const content = document.querySelector('#rooms-content');
   const cards = document.querySelector('#room-cards');
   const createForm = document.querySelector('#create-room-form');
+  const createNavigation = document.querySelector('#create-room-navigation');
+  const scheduleSection = document.querySelector('#upcoming-schedule');
+  const scheduleRows = document.querySelector('#upcoming-schedule-rows');
   const message = document.querySelector('#rooms-message');
   const emptyState = document.querySelector('#rooms-empty');
   const noMatches = document.querySelector('#rooms-no-matches');
@@ -344,6 +360,7 @@ export function startRoomListPage() {
 
   createIconPicker(createForm, 'create-icon-picker', DEFAULT_ROOM_ICON);
   const cardNodes = new Map();
+  const scheduleNodes = new Map();
   const scheduledEffects = createScheduledEffectController();
   const proposedGlow = createProposedGlowController();
   let currentRooms = [];
@@ -481,6 +498,7 @@ export function startRoomListPage() {
       }
     });
     const myOnly = document.querySelector('#filter-my-voted')?.checked ?? false;
+    const createdOnly = document.querySelector('#filter-my-created')?.checked ?? false;
     const scheduledOnly = document.querySelector('#filter-scheduled')?.checked ?? false;
     const proposedOnly = document.querySelector('#filter-proposed')?.checked ?? false;
     const hasStatusFilter = scheduledOnly || proposedOnly;
@@ -494,11 +512,12 @@ export function startRoomListPage() {
         cardNodes.set(room.id, node);
       }
       updateCard(node, room);
-      const matchesMy = !myOnly || room.myVoted === true;
+      const matchesPersonal = (!myOnly || room.myVoted === true)
+        && (!createdOnly || room.myCreated === true);
       const matchesStatus = !hasStatusFilter
         || (scheduledOnly && Boolean(room.summary?.scheduledDates?.length))
         || (proposedOnly && Boolean(room.summary?.proposedDates?.length));
-      node.article.hidden = !(matchesMy && matchesStatus);
+      node.article.hidden = !(matchesPersonal && matchesStatus);
       if (!node.article.hidden) visibleCount += 1;
       const current = cards.children[index];
       if (current !== node.article) cards.insertBefore(node.article, current ?? null);
@@ -517,7 +536,63 @@ export function startRoomListPage() {
     proposedGlow.sync('room-list', glowDates);
   }
 
+  function renderUpcomingSchedule(items) {
+    if (!scheduleSection || !scheduleRows) return;
+    const validItems = (Array.isArray(items) ? items : []).filter((item) => (
+      item && typeof item.roomId === 'string' && item.roomId.length > 0
+      && Number.isSafeInteger(item.displayNumber) && item.displayNumber > 0
+      && typeof item.title === 'string' && formatScheduleDate(item.date)
+    )).sort((left, right) => left.date.localeCompare(right.date)
+      || left.displayNumber - right.displayNumber
+      || left.title.localeCompare(right.title)
+      || left.roomId.localeCompare(right.roomId));
+    const activeKeys = new Set(validItems.map(({ roomId, date }) => `${roomId}:${date}`));
+    scheduleNodes.forEach((node, key) => {
+      if (activeKeys.has(key)) return;
+      node.remove();
+      scheduleNodes.delete(key);
+    });
+    const ordered = validItems.map((item) => {
+      const key = `${item.roomId}:${item.date}`;
+      const formatted = formatScheduleDate(item.date);
+      let row = scheduleNodes.get(key);
+      if (!row) {
+        row = document.createElement('li');
+        const link = document.createElement('a');
+        link.className = 'upcoming-schedule__row';
+        const identity = document.createElement('span');
+        identity.className = 'upcoming-schedule__identity';
+        const date = document.createElement('time');
+        date.className = 'upcoming-schedule__date';
+        link.append(identity, date);
+        row.append(link);
+        scheduleNodes.set(key, row);
+      }
+      const link = row.firstElementChild;
+      const [identity, date] = link.children;
+      link.href = `/vote/${encodeURIComponent(item.roomId)}?date=${encodeURIComponent(item.date)}`;
+      link.setAttribute('aria-label', `Room ${String(item.displayNumber).padStart(2, '0')}: ${item.title}, ${formatted.fullDate}`);
+      identity.textContent = `Room ${String(item.displayNumber).padStart(2, '0')}: ${item.title}`;
+      date.dateTime = item.date;
+      date.setAttribute('aria-label', formatted.fullDate);
+      date.textContent = formatted.shortDate;
+      return row;
+    });
+    ordered.forEach((row, index) => {
+      if (scheduleRows.children[index] !== row) scheduleRows.insertBefore(row, scheduleRows.children[index] ?? null);
+    });
+    scheduleSection.hidden = ordered.length === 0;
+  }
+
   filters.forEach((filter) => filter.addEventListener('change', () => renderRooms(currentRooms)));
+
+  createNavigation?.addEventListener('click', () => {
+    const firstInput = createForm.querySelector('input[name="title"]');
+    if (!firstInput) return;
+    const behavior = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+    createForm.scrollIntoView({ behavior, block: 'center' });
+    firstInput.focus({ preventScroll: true });
+  });
 
   function forgetDeletedRoom(roomId) {
     if (typeof roomId !== 'string' || roomId.length === 0) return;
@@ -539,6 +614,7 @@ export function startRoomListPage() {
       if (sequence !== refreshSequence) return false;
       if (!Array.isArray(result.rooms)) throw new Error('Room list response is invalid.');
       renderRooms(result.rooms);
+      renderUpcomingSchedule(result.upcomingSchedule);
       return true;
     } catch {
       if (sequence === refreshSequence) announce('Could not load rooms. Please retry. / โหลดรายชื่อห้องไม่สำเร็จ');

@@ -5,9 +5,9 @@ import { once } from 'node:events';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { LEGACY_ROOM_ID } from '../src/room-contract.js';
+import { DEFAULT_ROOM_COLOR, DEFAULT_ROOM_ICON, LEGACY_ROOM_ID } from '../src/room-contract.js';
 import { addVote } from '../src/domain.js';
-import { createRoom as createStoredRoom, listRooms } from '../src/room-storage.js';
+import { listRooms } from '../src/room-storage.js';
 import { migrate, openDatabase } from '../src/database.js';
 import { createServer } from '../src/server.js';
 
@@ -106,13 +106,16 @@ test('Issue 43 icon migration expands an existing legacy room constraint without
       INSERT INTO users (name, name_key, pin_salt, pin_hash, role, created_at, updated_at)
       VALUES ('Legacy Icon Owner', 'legacy icon owner', x'01', x'02', 'user', ?, ?)
     `).run(NOW.toISOString(), NOW.toISOString()).lastInsertRowid);
-    const additionalRoom = createStoredRoom(database, {
-      creatorUserId: userId,
-      title: 'Existing icon room',
-      venue: 'Riverside',
-      time: '07:30',
-      now: () => NOW,
-    });
+    const additionalRoom = { id: randomUUID() };
+    database.prepare('INSERT INTO room_identity_ledger (room_id, allocated_at) VALUES (?, ?)')
+      .run(additionalRoom.id, NOW.toISOString());
+    database.prepare(`
+      INSERT INTO rooms (id, display_number, title, color, icon, owner_user_id, created_at, venue, time)
+      VALUES (?, 2, 'Existing icon room', ?, ?, ?, ?, 'Riverside', '07:30')
+    `).run(additionalRoom.id, DEFAULT_ROOM_COLOR, DEFAULT_ROOM_ICON, userId, NOW.toISOString());
+    database.prepare('INSERT INTO room_memberships (room_id, user_id, joined_at) VALUES (?, ?, ?)')
+      .run(additionalRoom.id, userId, NOW.toISOString());
+    database.prepare('UPDATE room_display_counter SET next_display_number = 3 WHERE singleton = 1').run();
     addVote(database, { roomId: LEGACY_ROOM_ID, userId, voteDate: '2026-10-28', now: () => NOW });
     addVote(database, { roomId: additionalRoom.id, userId, voteDate: '2026-10-29', now: () => NOW });
     database.prepare(`
@@ -129,7 +132,10 @@ test('Issue 43 icon migration expands an existing legacy room constraint without
     `).run(additionalRoom.id, randomUUID(), userId, NOW.toISOString());
     const legacyRoom = database.prepare('SELECT * FROM rooms WHERE id = ?').get(LEGACY_ROOM_ID);
     const before = {
-      rooms: database.prepare('SELECT * FROM rooms ORDER BY id').all(),
+      rooms: database.prepare(`
+        SELECT id, display_number, title, color, icon, owner_user_id, created_at, venue, time
+        FROM rooms ORDER BY id
+      `).all(),
       memberships: database.prepare('SELECT * FROM room_memberships ORDER BY room_id, user_id').all(),
       votes: database.prepare('SELECT * FROM votes ORDER BY room_id, user_id, vote_date').all(),
       events: database.prepare('SELECT * FROM run_events ORDER BY room_id, event_date').all(),
@@ -170,7 +176,12 @@ test('Issue 43 icon migration expands an existing legacy room constraint without
     migrate(database);
 
     stage = 'verify preserved room and foreign-key references';
-    assert.deepEqual(database.prepare('SELECT * FROM rooms ORDER BY id').all(), before.rooms);
+    assert.deepEqual(database.prepare(`
+      SELECT id, display_number, title, color, icon, owner_user_id, created_at, venue, time
+      FROM rooms ORDER BY id
+    `).all(), before.rooms);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM rooms WHERE creator_user_id IS NOT NULL').get().count, 0,
+      'migration does not infer original creator from current room ownership');
     assert.deepEqual(database.prepare('SELECT * FROM room_memberships ORDER BY room_id, user_id').all(), before.memberships);
     assert.deepEqual(database.prepare('SELECT * FROM votes ORDER BY room_id, user_id, vote_date').all(), before.votes);
     assert.deepEqual(database.prepare('SELECT * FROM run_events ORDER BY room_id, event_date').all(), before.events);

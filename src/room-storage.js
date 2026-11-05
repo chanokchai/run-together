@@ -95,9 +95,10 @@ export function createRoom(database, {
       }
     }
     database.prepare(`
-      INSERT INTO rooms (id, display_number, title, color, icon, owner_user_id, created_at, venue, time)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(roomId, counter.next_display_number, roomTitle, roomColor, roomIcon, creatorUserId, createdAt, roomVenue, roomTime);
+      INSERT INTO rooms (id, display_number, title, color, icon, owner_user_id, created_at, venue, time, creator_user_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(roomId, counter.next_display_number, roomTitle, roomColor, roomIcon,
+      creatorUserId, createdAt, roomVenue, roomTime, creatorUserId);
     database.prepare(`
       INSERT INTO room_memberships (room_id, user_id, joined_at)
       VALUES (?, ?, ?)
@@ -153,9 +154,11 @@ export function listRooms(database, { now = () => new Date(), currentUserId } = 
   const today = getBangkokDate(now);
   const hasViewer = Number.isSafeInteger(currentUserId) && currentUserId > 0;
   const viewerSelect = hasViewer
-    ? ', EXISTS(SELECT 1 FROM votes AS viewer_votes WHERE viewer_votes.room_id = rooms.id AND viewer_votes.user_id = ? AND viewer_votes.vote_date >= ?) AS my_voted'
+    ? `, EXISTS(SELECT 1 FROM votes AS viewer_votes
+         WHERE viewer_votes.room_id = rooms.id AND viewer_votes.user_id = ? AND viewer_votes.vote_date >= ?) AS my_voted,
+       (rooms.creator_user_id = ?) AS my_created`
     : '';
-  const parameters = hasViewer ? [today, currentUserId, today] : [today];
+  const parameters = hasViewer ? [today, currentUserId, today, currentUserId] : [today];
   return database.prepare(`
     SELECT rooms.*, owner.name AS owner_display_name,
       (SELECT COUNT(DISTINCT votes.user_id)
@@ -171,12 +174,29 @@ export function listRooms(database, { now = () => new Date(), currentUserId } = 
       ownerDisplayName: row.owner_display_name ?? '',
       voterCount: row.voter_count,
       ...(hasViewer ? { myVoted: Boolean(row.my_voted) } : {}),
+      ...(hasViewer ? { myCreated: Boolean(row.my_created) } : {}),
       summary: summarizeRoomEvents(database, row.id, today),
     }))
     .sort((left, right) => (left.summary.earliestDate ?? '9999-12-31').localeCompare(right.summary.earliestDate ?? '9999-12-31')
       || left.displayNumber - right.displayNumber
       || left.title.localeCompare(right.title)
       || left.id.localeCompare(right.id));
+}
+
+export function getPersonalUpcomingSchedule(database, { currentUserId, now = () => new Date() } = {}) {
+  if (!Number.isSafeInteger(currentUserId) || currentUserId < 1) return [];
+  const today = getBangkokDate(now);
+  return database.prepare(`
+    SELECT rooms.id AS roomId, rooms.display_number AS displayNumber, rooms.title,
+      run_events.event_date AS date
+    FROM run_events
+    JOIN rooms ON rooms.id = run_events.room_id
+    JOIN votes ON votes.room_id = run_events.room_id
+      AND votes.vote_date = run_events.event_date
+      AND votes.user_id = ?
+    WHERE run_events.status = 'scheduled' AND run_events.event_date >= ?
+    ORDER BY run_events.event_date ASC, rooms.display_number ASC, rooms.title ASC, rooms.id ASC
+  `).all(currentUserId, today);
 }
 
 export function updateRoomMetadata(database, { roomId, title, icon, venue, time } = {}) {

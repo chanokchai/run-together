@@ -3,13 +3,14 @@ import { readFileSync } from 'node:fs';
 import {
   CANONICAL_TIME_ZONE,
   getCurrentWeekMonday,
+  getWeekMonday,
   isMonday,
   isWeekNavigable,
   parseIsoDate,
 } from './calendar.js';
 import { AuthError, createAuthService } from './auth.js';
 import { DEFAULT_ROOM_ICON, LEGACY_ROOM_ID, ROOM_ICONS } from './room-contract.js';
-import { addRoomMember, createRoom, deleteRoom, getRoom, getRoomSummary, hasRoomMember, listRooms, updateRoomMetadata } from './room-storage.js';
+import { addRoomMember, createRoom, deleteRoom, getPersonalUpcomingSchedule, getRoom, getRoomSummary, hasRoomMember, listRooms, updateRoomMetadata } from './room-storage.js';
 import {
   AdminActionError,
   deleteRunEvent,
@@ -107,7 +108,7 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       .room-card__voter-count { max-width: 100%; font-size: clamp(.72rem, 1.5vw, .86rem); font-weight: 700; line-height: 1.2; overflow-wrap: anywhere; }
       .room-card__dates { display: grid; grid-area: auto; grid-template-columns: max-content minmax(0, 1fr); align-items: start; gap: .3rem; min-width: 0; margin: 0; padding: .12rem 0; color: #14213d; font-size: clamp(.736rem, 1.725vw, .897rem); line-height: 1.25; }
       .room-card__dates[hidden] { display: none; }
-      .room-card__dates--scheduled { grid-area: scheduled; font-weight: 600; }
+      .room-card__dates--scheduled { grid-area: scheduled; grid-template-columns: minmax(0, 1fr); padding: .28rem .4rem; border-radius: .35rem; background: #fef3c7; color: #3f2d00; font-size: clamp(1rem, 2.4vw, 1.1rem); font-weight: 700; }
       .room-card__dates--proposed { grid-area: proposed; font-size: clamp(.782rem, 1.955vw, .966rem); font-weight: 700; }
       .room-card__dates strong { align-self: start; white-space: nowrap; }
       .room-card__date-values { display: block; min-width: 0; max-height: 2.75rem; overflow-x: hidden; overflow-y: auto; overflow-wrap: anywhere; scrollbar-width: thin; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
@@ -127,9 +128,25 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       .room-icon-picker { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .6rem; margin: .75rem 0; padding: .65rem; border: 1px solid #94a3b8; border-radius: .5rem; }
       .room-icon-picker__label { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin: 0; }
       .room-icon-picker__select { box-sizing: border-box; min-width: min(100%, 12rem); min-height: 44px; padding: .45rem .65rem; border: 1px solid #52606d; border-radius: .4rem; background: #fff; color: #14213d; font: inherit; }
-      #room-filters { display: flex; flex-wrap: wrap; gap: .45rem 1rem; margin: 1rem 0; padding: .5rem .75rem; border: 1px solid #94a3b8; border-radius: .5rem; }
-      #room-filters label { display: inline-flex; min-height: 44px; align-items: center; gap: .4rem; margin: 0; }
-      #room-filters input { width: 1.2rem; min-width: 1.2rem; min-height: 1.2rem; margin: 0; padding: 0; }
+      #room-filters { display: flex; flex-wrap: wrap; gap: .35rem .75rem; margin: 1rem 0; padding: .5rem .75rem; border: 1px solid #94a3b8; border-radius: .5rem; }
+      #room-filters .room-filter { display: inline-flex; flex: 0 1 auto; min-width: 0; min-height: 44px; align-items: center; gap: .45rem; margin: 0; padding: .15rem .25rem; cursor: pointer; }
+      .room-filter input { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+      .room-filter__switch { position: relative; flex: 0 0 2.8rem; width: 2.8rem; height: 1.55rem; box-sizing: border-box; border: 2px solid #52606d; border-radius: 999px; background: #e2e8f0; }
+      .room-filter__switch::after { position: absolute; top: 2px; left: 2px; width: 1.15rem; height: 1.15rem; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px #14213d66; content: ""; }
+      .room-filter input:checked + .room-filter__switch { border-color: #14532d; background: #166534; }
+      .room-filter input:checked + .room-filter__switch::after { transform: translateX(1.2rem); }
+      .room-filter input:focus-visible + .room-filter__switch { outline: 3px solid #145da0; outline-offset: 2px; }
+      #create-room-navigation { width: auto; min-width: 44px; min-height: 44px; margin: .85rem 0 0; padding-inline: 1rem; border: 1px solid #52606d; background: #e8eef5; color: #14213d; }
+      #create-room-navigation:hover { background: #dbe5ef; }
+      #create-room-navigation:focus-visible { outline: 3px solid #145da0; outline-offset: 2px; }
+      .your-upcoming-schedule { margin: .85rem 0 0; padding: .8rem; border: 1px solid #cbd5e1; border-radius: .7rem; background: #f8fafc; box-shadow: none; }
+      .your-upcoming-schedule h2 { margin: 0 0 .45rem; font-size: 1.05rem; }
+      .upcoming-schedule__rows { display: grid; gap: .35rem; margin: 0; padding: 0; list-style: none; }
+      .upcoming-schedule__row { display: flex; box-sizing: border-box; width: 100%; min-width: 0; min-height: 44px; align-items: center; justify-content: space-between; gap: .6rem; padding: .45rem .65rem; border: 1px solid #94a3b8; border-radius: .45rem; background: #fff; color: #14213d; text-decoration: none; }
+      .upcoming-schedule__row:hover { background: #f1f5f9; }
+      .upcoming-schedule__row:focus-visible { outline: 3px solid #145da0; outline-offset: 2px; }
+      .upcoming-schedule__identity { min-width: 0; overflow-wrap: anywhere; }
+      .upcoming-schedule__date { flex: 0 0 auto; color: #14213d; font-variant-numeric: tabular-nums; font-weight: 700; white-space: nowrap; }
       #rooms-no-matches { margin: 1rem 0; }
       .room-edit-dialog { width: min(32rem, calc(100vw - 2rem)); }
       .room-edit-dialog input[name="title"], .room-edit-dialog input[name="venue"], .room-edit-dialog input[name="time"] { width: 100%; }
@@ -187,6 +204,7 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       .vote-card.is-scheduled:not(:hover):not(:focus-visible):not(.is-selected) { border-color: #15803d; box-shadow: inset 0 0 0 1px #dcfce7; }
       .vote-card.is-scheduled:hover, .vote-card.is-scheduled:focus-visible, .vote-card.is-scheduled.is-selected { border-color: #f5c542; box-shadow: inset 0 0 0 1px #15803d; }
       .vote-card:focus-visible { outline: .2rem solid #14213d; outline-offset: .15rem; }
+      .vote-card.is-deep-link-target, .vote-day.is-deep-link-target .vote-card { outline: .2rem solid #14213d; outline-offset: .15rem; }
       .vote-card { position: relative; touch-action: pan-y; transition: transform .12s ease-out; }
       .vote-card[data-swipe-action="withdraw"] { border-color: #b91c1c; }
       .vote-card__swipe-cue { position: absolute; inset: auto .25rem .2rem; padding: .15rem .25rem; border-radius: .25rem; background: #14213d; color: #fff; font-size: .75rem; font-weight: 700; }
@@ -281,6 +299,19 @@ function requestedWeek(value, now) {
   return value;
 }
 
+function requestedRoomNavigation(value, now) {
+  const fallback = { initialWeekMonday: getCurrentWeekMonday(now), targetDate: null };
+  if (typeof value !== 'string') return fallback;
+  try {
+    parseIsoDate(value);
+    const monday = getWeekMonday(value);
+    requestedWeek(monday, now);
+    return { initialWeekMonday: monday, targetDate: value };
+  } catch {
+    return fallback;
+  }
+}
+
 const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 function adminActionBody(body) {
@@ -373,6 +404,21 @@ const roomListPage = () => page({
         <button id="rooms-logout" type="button" class="secondary">Logout</button>
       </div>
     </header>
+    <section id="upcoming-schedule" class="your-upcoming-schedule" aria-labelledby="upcoming-schedule-heading" hidden>
+      <h2 id="upcoming-schedule-heading">Your upcoming schedule</h2>
+      <ul id="upcoming-schedule-rows" class="upcoming-schedule__rows"></ul>
+    </section>
+    <button id="create-room-navigation" type="button" class="secondary">to create room</button>
+    <fieldset id="room-filters" aria-label="Filter rooms / กรองห้อง">
+      <legend>Filter rooms / กรองห้อง</legend>
+      <label class="room-filter"><input id="filter-my-voted" type="checkbox" role="switch"><span class="room-filter__switch" aria-hidden="true"></span><span>My voted</span></label>
+      <label class="room-filter"><input id="filter-my-created" type="checkbox" role="switch"><span class="room-filter__switch" aria-hidden="true"></span><span>My created room</span></label>
+      <label class="room-filter"><input id="filter-scheduled" type="checkbox" role="switch"><span class="room-filter__switch" aria-hidden="true"></span><span>Scheduled</span></label>
+      <label class="room-filter"><input id="filter-proposed" type="checkbox" role="switch"><span class="room-filter__switch" aria-hidden="true"></span><span>Proposed</span></label>
+    </fieldset>
+    <div id="room-cards" class="room-cards" role="list" aria-label="Rooms"></div>
+    <p id="rooms-empty" hidden>No rooms yet. Create a room to get started. / ยังไม่มีห้อง กรุณาสร้างห้องใหม่</p>
+    <p id="rooms-no-matches" hidden>No rooms match these filters. / ไม่มีห้องที่ตรงกับตัวกรอง</p>
     <section aria-labelledby="create-room-heading">
       <h2 id="create-room-heading">Create a room / สร้างห้อง</h2>
       <form id="create-room-form">
@@ -388,17 +434,8 @@ const roomListPage = () => page({
       </form>
       <p id="rooms-message" class="message" role="status" aria-live="polite"></p>
     </section>
-    <p id="rooms-empty" hidden>No rooms yet. Create a room to get started. / ยังไม่มีห้อง กรุณาสร้างห้องใหม่</p>
-    <fieldset id="room-filters" aria-label="Filter rooms / กรองห้อง">
-      <legend>Filter rooms / กรองห้อง</legend>
-      <label><input id="filter-my-voted" type="checkbox"> My voted</label>
-      <label><input id="filter-scheduled" type="checkbox"> Scheduled</label>
-      <label><input id="filter-proposed" type="checkbox"> Proposed</label>
-    </fieldset>
-    <p id="rooms-no-matches" hidden>No rooms match these filters. / ไม่มีห้องที่ตรงกับตัวกรอง</p>
-    <div id="room-cards" class="room-cards" role="list" aria-label="Rooms"></div>
   </section>`,
-  script: `import { startRoomListPage } from '/room-list.js?v=issue-39-room-list-1'; startRoomListPage();`,
+  script: `import { startRoomListPage } from '/room-list.js?v=issue-46-room-list-1'; startRoomListPage();`,
 });
 
 const changePinPage = (returnTo = '/rooms') => page({
@@ -710,12 +747,16 @@ export function createApp({ databaseReady = false, database, env = process.env, 
       response.setHeader('Cache-Control', 'no-store');
       const session = auth.requireSession(request, response);
       if (!session) return;
-      response.json({ rooms: listRooms(database, { now, currentUserId: session.user_id })
+      const rooms = listRooms(database, { now, currentUserId: session.user_id })
         .map((room) => ({
           ...room,
           canEdit: room.ownerUserId === session.user_id,
           canDelete: room.ownerUserId === session.user_id || session.role === 'admin',
-        })) });
+        }));
+      response.json({
+        rooms,
+        upcomingSchedule: getPersonalUpcomingSchedule(database, { currentUserId: session.user_id, now }),
+      });
     });
 
     app.post('/api/rooms', (request, response) => {
@@ -1221,6 +1262,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
       }
       const displayName = escapeHtml(session.name);
       const currentWeek = getCurrentWeekMonday(now);
+      const initialNavigation = requestedRoomNavigation(request.query.date, now);
       const canManageRoom = session.role === 'admin' || room.ownerUserId === session.user_id;
       const roomApiPrefix = `/api/rooms/${encodeURIComponent(room.id)}`;
       const roomControls = `${canManageRoom ? '<button id="reset-week" type="button" class="admin-action" hidden>Reset votes</button>' : ''}${session.role === 'admin' ? '<button id="manage-user" type="button" class="admin-action">manage user</button>' : ''}`;
@@ -1279,9 +1321,12 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           let isAdmin = false;
           let canManageRoom = ${JSON.stringify(canManageRoom)};
           const currentWeekMonday = '${currentWeek}';
+          const initialWeekMonday = '${initialNavigation.initialWeekMonday}';
+          const initialTargetDate = ${JSON.stringify(initialNavigation.targetDate)};
+          let pendingTargetDate = initialTargetDate;
           const roomId = '${room.id}';
           const roomApiPrefix = ${JSON.stringify(roomApiPrefix)};
-          let weekMonday = currentWeekMonday;
+          let weekMonday = initialWeekMonday;
           const protectedContent = document.querySelector('#protected-content');
           const displayName = document.querySelector('#display-name');
           const weekHeading = document.querySelector('#week-heading');
@@ -1623,6 +1668,8 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           }
           function renderWeek(state) {
             const dayActionFocus = captureDayEventActionFocus(document.activeElement);
+            const deepLinkFocusDate = document.activeElement?.matches('.vote-card.is-deep-link-target, .vote-day.is-deep-link-target')
+              ? document.activeElement.dataset.date : null;
             weekState = state;
             eventsByDate = new Map(state.events.map((event) => [event.date, event]));
             renderRunEvents(state.events);
@@ -1713,6 +1760,8 @@ export function createApp({ databaseReady = false, database, env = process.env, 
             restoreDayEventActionFocus(dayActionFocus);
             scheduledEffects.sync('date-card', scheduledCards);
             configureVoterNamesMarquee(weekDays);
+            if (deepLinkFocusDate) focusTargetDate(deepLinkFocusDate);
+            else focusPendingTargetDate();
           }
           function patchDay(patch) {
             const day = weekState?.days.find((currentDay) => currentDay.date === patch.date);
@@ -1750,6 +1799,23 @@ export function createApp({ databaseReady = false, database, env = process.env, 
               card.disabled = false;
               card.removeAttribute('aria-busy');
             }
+          }
+          function focusTargetDate(date) {
+            const row = weekDays.querySelector('.vote-day[data-date="' + date + '"]');
+            const card = row?.querySelector('.vote-card');
+            if (!row || !card) return false;
+            const target = card.disabled ? row : card;
+            if (target === row) row.tabIndex = -1;
+            target.classList.add('is-deep-link-target');
+            target.addEventListener('blur', () => target.classList.remove('is-deep-link-target'), { once: true });
+            target.focus({ preventScroll: true });
+            const behavior = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+            target.scrollIntoView({ behavior, block: 'center', inline: 'nearest' });
+            return true;
+          }
+          function focusPendingTargetDate() {
+            if (!pendingTargetDate) return;
+            if (focusTargetDate(pendingTargetDate)) pendingTargetDate = null;
           }
           async function resetSelectedWeek() {
             if (!resetWeek || resetWeek.hidden || resetWeek.disabled) return;

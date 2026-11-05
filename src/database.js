@@ -337,6 +337,14 @@ const MIGRATIONS = [
       if (violations.length) throw new Error('room icon migration would violate existing foreign keys');
     },
   },
+  {
+    version: 10,
+    name: 'record_original_room_creator',
+    statements: [
+      'ALTER TABLE rooms ADD COLUMN creator_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL',
+      'CREATE INDEX rooms_creator_user_id ON rooms(creator_user_id)',
+    ],
+  },
 ];
 
 export function openDatabase(databasePath) {
