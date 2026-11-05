@@ -112,6 +112,15 @@ export function createRoom(database, {
   return create.immediate();
 }
 
+export function deleteRoom(database, { roomId } = {}) {
+  if (typeof roomId !== 'string' || roomId.length === 0) throw new TypeError('roomId is required');
+  const remove = database.transaction(() => {
+    const result = database.prepare('DELETE FROM rooms WHERE id = ?').run(roomId);
+    return result.changes === 1 ? { deletedRoomId: roomId } : null;
+  });
+  return remove.immediate();
+}
+
 export function getRoom(database, { roomId } = {}) {
   if (typeof roomId !== 'string' || roomId.length === 0) throw new TypeError('roomId is required');
   return roomFromRow(database.prepare('SELECT * FROM rooms WHERE id = ?').get(roomId));

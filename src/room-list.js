@@ -347,6 +347,7 @@ export function startRoomListPage() {
   const scheduledEffects = createScheduledEffectController();
   const proposedGlow = createProposedGlowController();
   let currentRooms = [];
+  const deletedRoomIds = new Set();
   let csrfToken = '';
   let sessionCheck = 0;
   let refreshSequence = 0;
@@ -413,13 +414,30 @@ export function startRoomListPage() {
     const edit = addText(actions, 'button', 'Edit');
     edit.type = 'button';
     edit.className = 'room-card__edit';
+    const remove = addText(actions, 'button', '');
+    remove.type = 'button';
+    remove.className = 'room-card__delete';
+    const trash = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    trash.setAttribute('viewBox', '0 0 24 24');
+    trash.setAttribute('aria-hidden', 'true');
+    trash.setAttribute('focusable', 'false');
+    const trashPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    trashPath.setAttribute('d', 'M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5');
+    trashPath.setAttribute('fill', 'none');
+    trashPath.setAttribute('stroke', 'currentColor');
+    trashPath.setAttribute('stroke-linecap', 'round');
+    trashPath.setAttribute('stroke-linejoin', 'round');
+    trashPath.setAttribute('stroke-width', '2');
+    trash.append(trashPath);
+    remove.append(trash);
     let node;
     edit.addEventListener('click', () => showEditDialog(node.room));
+    remove.addEventListener('click', () => { void submitRoomDelete(node.room, remove); });
     summary.append(voterCount, actions);
     article.append(summary);
     node = {
       article, entry, number, owner, icon, iconLabel, title, venue, time, voterCount,
-      scheduledLine, proposedLine, edit, room,
+      scheduledLine, proposedLine, edit, remove, room,
     };
     return node;
   }
@@ -448,11 +466,14 @@ export function startRoomListPage() {
     updateDateLine(node.proposedLine, room.summary?.proposedDates, room, { today, tomorrow, glow: true });
     node.edit.hidden = !room.canEdit;
     node.edit.setAttribute('aria-label', `Edit ${room.title}`);
+    node.remove.hidden = !room.canDelete;
+    node.remove.setAttribute('aria-label', `Delete ${room.title}`);
   }
 
   function renderRooms(rooms) {
-    currentRooms = rooms;
-    const liveIds = new Set(rooms.map(({ id }) => id));
+    const visibleRooms = rooms.filter(({ id }) => !deletedRoomIds.has(id));
+    currentRooms = visibleRooms;
+    const liveIds = new Set(visibleRooms.map(({ id }) => id));
     cardNodes.forEach((node, roomId) => {
       if (!liveIds.has(roomId)) {
         node.article.remove();
@@ -466,7 +487,7 @@ export function startRoomListPage() {
     let visibleCount = 0;
     const scheduled = [];
     const glowDates = [];
-    rooms.forEach((room, index) => {
+    visibleRooms.forEach((room, index) => {
       let node = cardNodes.get(room.id);
       if (!node) {
         node = createCard(room);
@@ -490,13 +511,20 @@ export function startRoomListPage() {
         }
       });
     });
-    emptyState.hidden = rooms.length > 0;
-    if (noMatches) noMatches.hidden = rooms.length === 0 || visibleCount > 0;
+    emptyState.hidden = visibleRooms.length > 0;
+    if (noMatches) noMatches.hidden = visibleRooms.length === 0 || visibleCount > 0;
     scheduledEffects.sync('room-card', scheduled);
     proposedGlow.sync('room-list', glowDates);
   }
 
   filters.forEach((filter) => filter.addEventListener('change', () => renderRooms(currentRooms)));
+
+  function forgetDeletedRoom(roomId) {
+    if (typeof roomId !== 'string' || roomId.length === 0) return;
+    deletedRoomIds.add(roomId);
+    refreshSequence += 1;
+    renderRooms(currentRooms.filter(({ id }) => id !== roomId));
+  }
 
   async function refreshRooms() {
     const sequence = ++refreshSequence;
@@ -533,6 +561,13 @@ export function startRoomListPage() {
         return;
       }
       const result = await responseBody(response);
+      if (deletedRoomIds.has(roomId)) return;
+      if (result.code === 'ROOM_NOT_FOUND') {
+        forgetDeletedRoom(roomId);
+        announce('This room is no longer available. / ห้องนี้ไม่มีแล้ว');
+        void refreshRooms();
+        return;
+      }
       if (!response.ok || result.room?.id !== roomId) {
         announce(result.message || 'Could not enter this room. / ไม่สามารถเข้าห้องนี้ได้');
         return;
@@ -543,6 +578,51 @@ export function startRoomListPage() {
     } finally {
       delete entry.dataset.entering;
       entry.removeAttribute('aria-busy');
+    }
+  }
+
+  async function submitRoomDelete(room, button) {
+    if (button.disabled) return false;
+    const warning = `Permanently delete “${room.title}”? Its votes, proposals, schedules, and memberships will be permanently removed. This cannot be undone.`;
+    if (!window.confirm(warning)) return false;
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+    announce('');
+    try {
+      const response = await fetch(`/api/rooms/${encodeURIComponent(room.id)}`, {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json', 'x-csrf-token': csrfToken },
+        body: JSON.stringify({ confirmation: true }),
+      });
+      if (response.status === 401) {
+        redirectToLogin();
+        return false;
+      }
+      const result = await responseBody(response);
+      if (result.code === 'ROOM_NOT_FOUND') {
+        forgetDeletedRoom(room.id);
+        announce('This room is no longer available. / ห้องนี้ไม่มีแล้ว');
+        void refreshRooms();
+        return false;
+      }
+      if (!response.ok) {
+        announce(result.message || 'Could not delete this room. / ไม่สามารถลบห้องนี้ได้');
+        return false;
+      }
+      if (result.deletedRoomId !== room.id) {
+        announce('Could not verify the deleted room. Please refresh. / ตรวจสอบห้องที่ลบไม่สำเร็จ กรุณารีเฟรช');
+        return false;
+      }
+      forgetDeletedRoom(room.id);
+      announce(`Room “${room.title}” permanently deleted. / ลบห้อง “${room.title}” ถาวรแล้ว`);
+      await refreshRooms();
+      return true;
+    } catch {
+      announce('Could not delete this room. Please retry. / ไม่สามารถลบห้องนี้ได้ กรุณาลองอีกครั้ง');
+      return false;
+    } finally {
+      button.disabled = false;
+      button.removeAttribute('aria-busy');
     }
   }
 
@@ -752,6 +832,10 @@ export function startRoomListPage() {
   const socket = window.io({ transports: ['websocket'] });
   socket.on('rooms:summary-changed', () => { void refreshRooms(); });
   socket.on('rooms:summary-state', () => { void refreshRooms(); });
+  socket.on('room:deleted', ({ roomId }) => {
+    forgetDeletedRoom(roomId);
+    void refreshRooms();
+  });
   socket.on('connect', () => { void refreshRooms(); });
   socket.on('auth:revoked', redirectToLogin);
   socket.on('connect_error', (error) => { if (error.message === 'unauthenticated') redirectToLogin(); });

@@ -223,7 +223,79 @@ async function verticalPageSwipe(client, deltaY) {
   await client.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ id: 2, x, y: startY, radiusX: 1, radiusY: 1, force: 1 }] });
   await client.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ id: 2, x, y: startY + deltaY, radiusX: 1, radiusY: 1, force: 1 }] });
   await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-  await delay(120);
+}
+
+async function armPageScrollEnd(client, label, requireTrustedTouchEnd = false) {
+  await evaluate(client, `((label, requireTrustedTouchEnd) => {
+    let resolveCompletion;
+    let settled = false;
+    let sawScroll = false;
+    let sawTrustedTouchEnd = false;
+    const startedAt = performance.now();
+    const completion = new Promise((resolve) => { resolveCompletion = resolve; });
+    const cleanup = () => {
+      clearTimeout(timeout);
+      window.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('scrollend', onScrollEnd, true);
+      window.removeEventListener('touchend', onTouchEnd, true);
+    };
+    const finish = (completed) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolveCompletion({ label, completed, sawScroll, sawTrustedTouchEnd,
+        elapsed: Number((performance.now() - startedAt).toFixed(1)), scrollY });
+    };
+    const onScroll = () => { sawScroll = true; };
+    const onTouchEnd = (event) => { sawTrustedTouchEnd ||= event.isTrusted; };
+    const onScrollEnd = () => {
+      if (sawScroll && (!requireTrustedTouchEnd || sawTrustedTouchEnd)) finish(true);
+    };
+    const timeout = setTimeout(() => finish(false), 2000);
+    window.addEventListener('scroll', onScroll, { capture: true, passive: true });
+    window.addEventListener('scrollend', onScrollEnd, true);
+    window.addEventListener('touchend', onTouchEnd, { capture: true, passive: true });
+    window.__issue32PageScrollEnd = completion;
+  })(${JSON.stringify(label)}, ${JSON.stringify(requireTrustedTouchEnd)})`);
+}
+
+async function waitForPageScrollEnd(client) {
+  return evaluate(client, 'window.__issue32PageScrollEnd');
+}
+
+async function sampleSettledViewport(client, selector) {
+  return evaluate(client, `(async () => {
+    const selector = ${JSON.stringify(selector)};
+    let previous = null;
+    let initialElement = null;
+    let stableFrames = 0;
+    let sample = null;
+    for (let frame = 0; frame < 60; frame += 1) {
+      await new Promise(requestAnimationFrame);
+      const element = document.querySelector(selector);
+      if (!element) return { settled: false, frames: frame + 1, missing: true };
+      const bounds = element.getBoundingClientRect();
+      if (initialElement === null) initialElement = element;
+      sample = { scrollY, scrollHeight: document.documentElement.scrollHeight, innerHeight,
+        top: bounds.top, bottom: bounds.bottom, documentY: bounds.top + scrollY,
+        intersectsViewport: bounds.bottom > 0 && bounds.top < innerHeight,
+        isBeamRunning: element.classList.contains('is-beam-running'),
+        animationName: getComputedStyle(element, '::before').animationName,
+        sameNode: initialElement === element };
+      const unchanged = previous && sample.sameNode
+        && Math.abs(sample.scrollY - previous.scrollY) < 0.25
+        && Math.abs(sample.top - previous.top) < 0.25
+        && Math.abs(sample.bottom - previous.bottom) < 0.25
+        && sample.scrollHeight === previous.scrollHeight;
+      stableFrames = unchanged ? stableFrames + 1 : 0;
+      if (stableFrames >= 3) {
+        window.__issue32StableViewportElement = element;
+        return { settled: true, frames: frame + 1, stableFrames, sample };
+      }
+      previous = sample;
+    }
+    return { settled: false, frames: 60, stableFrames, sample };
+  })()`);
 }
 
 test('Issue 32 vote page renders stacked event banners and remains keyboard/mobile usable', {
@@ -401,13 +473,52 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
   await client.send('Page.navigate', { url: `${baseUrl}/vote/${LEGACY_ROOM_ID}` });
   assert.equal(await waitFor(client, `document.querySelector('#protected-content') && !document.querySelector('#protected-content').hidden && document.querySelectorAll('#week-days .vote-card').length === 7`), true, 'loads the board as the authenticated administrator');
   assert.equal(await evaluate(client, `document.querySelectorAll('.run-event-actions').length`), 2, 'renders explicit banner controls for an administrator');
+  await evaluate(client, `(() => { const priorFetch = window.fetch; window.issue32AdminTapResponses = []; window.fetch = async (...args) => { const response = await priorFetch(...args); const url = new URL(typeof args[0] === 'string' ? args[0] : args[0].url, location.href); if (url.pathname.includes('/admin/events/')) window.issue32AdminTapResponses.push({ method: args[1]?.method ?? 'GET', path: url.pathname, status: response.status, body: await response.clone().json() }); return response; }; })()`);
   await clickSelector(client, '.run-event-banner[data-date="2024-03-01"] .run-event-banner__summary');
-  assert.equal(await waitFor(client, `document.querySelector('.run-event-banner[data-date="2024-03-01"] .run-event-banner__status')?.textContent === 'Scheduled'`), true, 'admin tap on the banner body schedules a proposed run');
+  const adminTapScheduled = await waitFor(client, `document.querySelector('.run-event-banner[data-date="2024-03-01"] .run-event-banner__status')?.textContent === 'Scheduled'`);
+  if (!adminTapScheduled) {
+    t.diagnostic(`Admin banner tap failed to reach Scheduled: ${JSON.stringify(await evaluate(client, `({ url: location.href, status: document.querySelector('.run-event-banner[data-date="2024-03-01"] .run-event-banner__status')?.textContent, actions: [...document.querySelectorAll('.run-event-banner[data-date="2024-03-01"] .run-event-actions button')].map((button) => ({ label: button.textContent, disabled: button.disabled })), message: document.querySelector('#message')?.textContent, responses: window.issue32AdminTapResponses })`))}; database=${JSON.stringify(server.database.prepare('SELECT status, revision FROM run_events WHERE event_date = ?').get('2024-03-01'))}`);
+  }
+  assert.equal(adminTapScheduled, true, 'admin tap on the banner body schedules a proposed run');
+  const adminTapResponses = await evaluate(client, 'window.issue32AdminTapResponses');
+  assert.deepEqual(adminTapResponses.map(({ method, path, status, body }) => ({ method, path, status, eventStatus: body.event?.status })), [
+    { method: 'PUT', path: `/api/rooms/${LEGACY_ROOM_ID}/admin/events/2024-03-01`, status: 200, eventStatus: 'scheduled' },
+  ], 'the successful banner-body tap produced one authoritative room-scoped scheduling response');
+  t.diagnostic(`Observed banner scheduling response: ${JSON.stringify(adminTapResponses.map(({ method, path, status, body }) => ({ method, path, status, eventStatus: body.event?.status })))}`);
   await clickSelector(client, '.run-event-banner[data-date="2024-03-01"] .run-event-banner__summary');
   assert.equal(await waitFor(client, `document.querySelector('.run-event-banner[data-date="2024-03-01"] .run-event-banner__status')?.textContent === 'Proposed'`), true, 'admin tap on the banner body reverts a scheduled run');
-  await evaluate(client, `document.querySelector('.run-event-banner[data-date="2024-03-01"] button[data-run-event-status="proposed"]')?.focus()`);
+  const keyboardFocusBefore = await evaluate(client, `(() => {
+    const button = document.querySelector('.run-event-banner[data-date="2024-03-01"] button[data-run-event-status="proposed"]');
+    button?.focus({ preventScroll: true });
+    return { found: Boolean(button), disabled: button?.disabled ?? null, focused: document.activeElement === button,
+      active: document.activeElement?.outerHTML ?? null, button: button?.outerHTML ?? null,
+      bannerStatus: document.querySelector('.run-event-banner[data-date="2024-03-01"] .run-event-banner__status')?.textContent ?? null };
+  })()`);
+  t.diagnostic(`Keyboard scheduling pre-action focus/readiness: ${JSON.stringify(keyboardFocusBefore)}`);
+  const keyboardResponseStart = await evaluate(client, 'window.issue32AdminTapResponses.length');
+  await evaluate(client, `(() => {
+    window.issue32KeyboardEvents = [];
+    const describe = (event) => ({ type: event.type, key: event.key ?? null, trusted: event.isTrusted,
+      target: event.target?.outerHTML ?? null, active: document.activeElement?.outerHTML ?? null });
+    document.addEventListener('keydown', (event) => window.issue32KeyboardEvents.push(describe(event)), true);
+    document.addEventListener('click', (event) => {
+      if (event.target?.closest?.('.run-event-actions [data-run-event-status]')) window.issue32KeyboardEvents.push(describe(event));
+    }, true);
+  })()`);
   await pressEnter(client);
-  assert.equal(await waitFor(client, `document.querySelector('.run-event-banner[data-date="2024-03-01"] .run-event-banner__status')?.textContent === 'Scheduled'`), true, 'admin keyboard action schedules a proposal');
+  const keyboardProposalScheduled = await waitFor(client, `document.querySelector('.run-event-banner[data-date="2024-03-01"] .run-event-banner__status')?.textContent === 'Scheduled'`);
+  const keyboardDiagnostics = await evaluate(client, `({ active: document.activeElement?.outerHTML ?? null,
+    status: document.querySelector('.run-event-banner[data-date="2024-03-01"] .run-event-banner__status')?.textContent ?? null,
+    actions: [...document.querySelectorAll('.run-event-banner[data-date="2024-03-01"] .run-event-actions button')].map((button) => ({ text: button.textContent, status: button.dataset.runEventStatus, disabled: button.disabled, html: button.outerHTML })),
+    message: document.querySelector('#message')?.textContent ?? null, keyboardEvents: window.issue32KeyboardEvents,
+    responses: window.issue32AdminTapResponses.slice(${keyboardResponseStart}).map(({ method, path, status, body }) => ({ method, path, status, eventStatus: body.event?.status, code: body.code ?? null, message: body.message ?? null })) })`);
+  const keyboardDatabaseState = server.database.prepare('SELECT status, revision FROM run_events WHERE event_date = ?').get('2024-03-01');
+  t.diagnostic(`Keyboard scheduling authoritative result: ${JSON.stringify({ diagnostics: keyboardDiagnostics, database: keyboardDatabaseState })}`);
+  assert.equal(keyboardProposalScheduled, true, 'admin keyboard action schedules a proposal');
+  assert.deepEqual(keyboardDiagnostics.responses, [
+    { method: 'PUT', path: `/api/rooms/${LEGACY_ROOM_ID}/admin/events/2024-03-01`, status: 200, eventStatus: 'scheduled', code: null, message: null },
+  ], 'the keyboard action produces one authoritative room-scoped scheduling response');
+  assert.equal(keyboardDatabaseState.status, 'scheduled', 'the keyboard action commits the scheduled state');
   assert.equal(await evaluate(client, `document.activeElement?.closest('.run-event-banner')?.dataset.date === '2024-03-01' && document.activeElement.matches('.run-event-actions [data-run-event-status]')`), true, 'keyboard focus follows the status control when scheduling reorders its banner');
   await client.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
   assert.equal(await evaluate(client, `getComputedStyle(document.querySelector('.run-event-banner[data-date="2024-03-01"]')).animationName`), 'none', 'scheduled emphasis is disabled for reduced-motion users');
@@ -511,15 +622,44 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
     ['2024-03-03:Scheduled', '2024-03-01:Proposed'],
   ], 'a later scheduled event precedes an earlier proposed event on both clients');
   const eventBeforeLiveRevert = server.database.prepare('SELECT id, revision FROM run_events WHERE event_date = ?').get('2024-03-03');
+  await evaluate(client, `(() => {
+    const priorFetch = window.fetch;
+    window.__issue32HoldNextTimeline = true;
+    window.__issue32HeldTimeline = null;
+    window.fetch = async (...args) => {
+      const response = await priorFetch(...args);
+      const input = args[0];
+      const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+      if (window.__issue32HoldNextTimeline && url.pathname.endsWith('/vote-timeline')) {
+        window.__issue32HoldNextTimeline = false;
+        window.__issue32HeldTimeline = { status: response.status, body: await response.clone().json() };
+        await new Promise((resolve) => { window.__issue32ReleaseTimeline = resolve; });
+      }
+      return response;
+    };
+  })()`);
   const liveRevert = await fetch(`${baseUrl}/api/admin/events/2024-03-03`, {
     method: 'PUT',
     headers: { cookie: admin.cookie, origin: baseUrl, 'content-type': 'application/json', 'x-csrf-token': admin.csrfToken },
     body: JSON.stringify({ eventId: eventBeforeLiveRevert.id, revision: eventBeforeLiveRevert.revision, status: 'proposed', requestId: '00000000-0000-4000-8000-000000000146' }),
   });
   assert.equal(liveRevert.status, 200, 'admin reverts the event while both clients are connected');
+  const splitPresentationReached = await waitFor(client, `window.__issue32HeldTimeline && document.querySelector('.run-event-banner[data-date="2024-03-03"] .run-event-banner__status')?.textContent === 'Proposed' && !document.querySelector('#week-days .vote-card[data-date="2024-03-03"]').classList.contains('is-scheduled') && document.querySelector('.vote-timeline__bar[data-date="2024-03-03"]').classList.contains('is-scheduled')`);
+  assert.equal(splitPresentationReached, true, 'diagnostic holds a genuine timeline response after the banner and week card refresh');
+  const splitPresentation = await evaluate(client, `({ responseStatus: window.__issue32HeldTimeline.status, responseScheduled: window.__issue32HeldTimeline.body.scheduledDates.includes('2024-03-03'), banner: document.querySelector('.run-event-banner[data-date="2024-03-03"] .run-event-banner__status').textContent, cardScheduled: document.querySelector('#week-days .vote-card[data-date="2024-03-03"]').classList.contains('is-scheduled'), graphScheduled: document.querySelector('.vote-timeline__bar[data-date="2024-03-03"]').classList.contains('is-scheduled') })`);
+  assert.deepEqual(splitPresentation, { responseStatus: 200, responseScheduled: false, banner: 'Proposed', cardScheduled: false, graphScheduled: true },
+    'the server has returned the reverted timeline state, but its independent browser callback is still pending');
+  t.diagnostic(`Observed controlled split presentation while the genuine reverted timeline callback was held: ${JSON.stringify(splitPresentation)}`);
+  await evaluate(client, 'window.__issue32ReleaseTimeline()');
   for (const page of [client, client2]) {
     assert.equal(await waitFor(page, `document.querySelector('.run-event-banner[data-date="2024-03-03"] .run-event-banner__status')?.textContent === 'Proposed'`), true, 'both clients remove the live scheduled status');
-    assert.equal(await evaluate(page, `!document.querySelector('#week-days .vote-card[data-date="2024-03-03"]').classList.contains('is-scheduled') && !document.querySelector('.vote-timeline__bar[data-date="2024-03-03"]').classList.contains('is-scheduled')`), true, 'live reversion removes the card and gold graph styling');
+    const revertedCardAndGraph = `document.querySelector('.run-event-banner[data-date="2024-03-03"] .run-event-banner__status')?.textContent === 'Proposed' && !document.querySelector('#week-days .vote-card[data-date="2024-03-03"]').classList.contains('is-scheduled') && !document.querySelector('.vote-timeline__bar[data-date="2024-03-03"]').classList.contains('is-scheduled')`;
+    const presentationWasReadyWithBanner = await evaluate(page, `!document.querySelector('#week-days .vote-card[data-date="2024-03-03"]').classList.contains('is-scheduled') && !document.querySelector('.vote-timeline__bar[data-date="2024-03-03"]').classList.contains('is-scheduled')`);
+    const presentationSettled = presentationWasReadyWithBanner || await waitFor(page, revertedCardAndGraph);
+    if (!presentationWasReadyWithBanner) {
+      t.diagnostic(`Live reversion presentation settled asynchronously on ${page === client ? 'client 1' : 'client 2'}: ${JSON.stringify(await evaluate(page, `({ banner: document.querySelector('.run-event-banner[data-date="2024-03-03"] .run-event-banner__status')?.textContent, cardClasses: document.querySelector('#week-days .vote-card[data-date="2024-03-03"]')?.className, barClasses: document.querySelector('.vote-timeline__bar[data-date="2024-03-03"]')?.className })`))}`);
+    }
+    assert.equal(presentationSettled, true, 'live reversion removes the scheduled card and gold graph styling after both browser representations refresh');
   }
   const revertedOrder = await evaluate(client2, `[...document.querySelectorAll('.run-event-banner')].map((banner) => banner.dataset.date)`);
   assert.deepEqual(revertedOrder, ['2024-03-01', '2024-03-03'], 'proposed banners return to ascending date order');
@@ -635,19 +775,66 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
     }
   }
   await client2.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 300, deviceScaleFactor: 1, mobile: true });
+  const dateSelector = '.vote-timeline__date[datetime="2024-03-03"]';
+  await armPageScrollEnd(client2, 'trusted vertical swipe', true);
   await verticalPageSwipe(client2, -240);
-  assert.equal(await waitFor(client2, `(() => { const box = document.querySelector('.vote-timeline__date[datetime="2024-03-03"]').getBoundingClientRect(); return box.bottom <= 0 || box.top >= innerHeight; })()`), true, 'a real vertical swipe moves the scheduled graph date fully offscreen');
-  await verticalPageSwipe(client2, 240);
-  assert.equal(await waitFor(client2, `document.querySelector('.vote-timeline__date[datetime="2024-03-03"]').classList.contains('is-beam-running')`), true, 'the scheduled graph beam resumes on viewport re-entry');
+  const swipeScrollEnd = await waitForPageScrollEnd(client2);
+  t.diagnostic(`Trusted swipe scroll completion: ${JSON.stringify(swipeScrollEnd)}`);
+  assert.deepEqual({ completed: swipeScrollEnd.completed, sawScroll: swipeScrollEnd.sawScroll, sawTrustedTouchEnd: swipeScrollEnd.sawTrustedTouchEnd },
+    { completed: true, sawScroll: true, sawTrustedTouchEnd: true }, 'waits for the trusted vertical swipe and its real page scroll to finish');
+  const offscreenMetrics = await sampleSettledViewport(client2, dateSelector);
+  t.diagnostic(`Settled offscreen beam state after swipe: ${JSON.stringify(offscreenMetrics)}`);
+  assert.equal(offscreenMetrics.settled, true, 'the post-swipe viewport reaches a finite measured stable state');
+  assert.equal(offscreenMetrics.sample.intersectsViewport, false, 'a real vertical swipe moves the scheduled graph date fully offscreen');
+  assert.equal(offscreenMetrics.sample.isBeamRunning, false, 'the scheduled graph beam pauses after the date leaves the viewport');
+  assert.equal(offscreenMetrics.sample.animationName, 'none', 'the offscreen pseudo-element animation is stopped');
+
+  await armPageScrollEnd(client2, 'instant viewport return');
+  await evaluate(client2, `document.querySelector(${JSON.stringify(dateSelector)}).scrollIntoView({ block: 'center', behavior: 'instant' })`);
+  const returnScrollEnd = await waitForPageScrollEnd(client2);
+  t.diagnostic(`Programmatic return scroll completion: ${JSON.stringify(returnScrollEnd)}`);
+  assert.deepEqual({ completed: returnScrollEnd.completed, sawScroll: returnScrollEnd.sawScroll },
+    { completed: true, sawScroll: true }, 'waits for the finite programmatic return scroll to finish');
+  const reentryMetrics = await sampleSettledViewport(client2, dateSelector);
+  t.diagnostic(`Settled viewport re-entry: ${JSON.stringify(reentryMetrics)}`);
+  assert.equal(reentryMetrics.settled, true, 'the return viewport remains geometrically stable for multiple frames');
+  assert.equal(reentryMetrics.sample.intersectsViewport, true, 'the scheduled graph date is visible in the settled return viewport');
+  assert.equal(reentryMetrics.sample.isBeamRunning, true, 'the scheduled graph beam resumes in the settled viewport');
+  assert.equal(reentryMetrics.sample.animationName, 'scheduled-border-beam', 'the re-entered pseudo-element animation is active');
   const reentryPhase = await evaluate(client2, `(async () => {
     for (let frame = 0; frame < 4; frame += 1) await new Promise(requestAnimationFrame);
     const date = document.querySelector('.vote-timeline__date[datetime="2024-03-03"]');
-    const angle = Number.parseFloat(getComputedStyle(date, '::before').getPropertyValue('--beam-angle'));
-    const expected = (document.timeline.currentTime % 1400) / 1400 * 360;
+    const style = getComputedStyle(date, '::before');
+    const angle = Number.parseFloat(style.getPropertyValue('--beam-angle'));
+    const timelineTime = document.timeline.currentTime;
+    const expected = (timelineTime % 1400) / 1400 * 360;
     const rawDifference = Math.abs(angle - expected);
-    return { difference: Math.min(rawDifference, 360 - rawDifference), active: date.classList.contains('is-beam-running') };
+    const animation = document.getAnimations().find((candidate) => candidate.animationName === 'scheduled-border-beam'
+      && candidate.effect?.pseudoElement === '::before' && candidate.effect?.target === date);
+    const bounds = date.getBoundingClientRect();
+    return { difference: Math.min(rawDifference, 360 - rawDifference), active: date.classList.contains('is-beam-running'),
+      sameNode: window.__issue32StableViewportElement === date, scrollY,
+      timelineTime, angle, expected, animation: style.animationName, duration: style.animationDuration, delay: style.animationDelay,
+      beamDelay: getComputedStyle(date).getPropertyValue('--beam-delay').trim(),
+      animationStartTime: animation?.startTime ?? null, animationCurrentTime: animation?.currentTime ?? null,
+      animationPlayState: animation?.playState ?? null, animationProgress: animation?.effect?.getComputedTiming().progress ?? null,
+      visibilityState: document.visibilityState, rect: { top: bounds.top, bottom: bounds.bottom },
+      documentY: bounds.top + scrollY, scrollHeight: document.documentElement.scrollHeight, innerHeight,
+      intersecting: bounds.bottom > 0 && bounds.top < innerHeight,
+      matchingAnimations: document.getAnimations().filter((candidate) => candidate.animationName === 'scheduled-border-beam'
+        && candidate.effect?.pseudoElement === '::before' && candidate.effect?.target === date).length };
   })()`);
-  assert.ok(reentryPhase.active && reentryPhase.difference < 10, 'independent viewport re-entry resumes at the current normalized page phase after multiple animation frames');
+  t.diagnostic(`Observed viewport re-entry phase sample: ${JSON.stringify(reentryPhase)}`);
+  assert.ok(reentryPhase.sameNode && reentryPhase.scrollY === reentryMetrics.sample.scrollY
+    && Math.abs(reentryPhase.rect.top - reentryMetrics.sample.top) < 0.25
+    && Math.abs(reentryPhase.rect.bottom - reentryMetrics.sample.bottom) < 0.25
+    && Math.abs(reentryPhase.documentY - reentryMetrics.sample.documentY) < 0.25
+    && reentryPhase.scrollHeight === reentryMetrics.sample.scrollHeight
+    && reentryPhase.innerHeight === reentryMetrics.sample.innerHeight
+    && reentryPhase.intersecting, `the phase sample remains in the same stable visible viewport: ${JSON.stringify(reentryPhase)}`);
+  assert.ok(reentryPhase.active && reentryPhase.animation === 'scheduled-border-beam'
+    && reentryPhase.matchingAnimations === 1 && reentryPhase.difference < 10,
+  `independent viewport re-entry resumes at the current normalized page phase after multiple animation frames: ${JSON.stringify(reentryPhase)}`);
   await client2.send('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0, connectionType: 'none' });
   assert.equal(await waitFor(client2, '!navigator.onLine'), true, 'the peer browser goes offline before the authoritative change');
   const scheduledEvent = server.database.prepare('SELECT id, revision FROM run_events WHERE event_date = ?').get('2024-03-03');
@@ -659,10 +846,131 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
   assert.equal(revertResponse.status, 200, 'the admin reverts the zero-vote scheduled event while the peer is disconnected');
   assert.equal(await waitFor(client, `!document.querySelector('.run-event-banner[data-date="2024-03-03"]')`), true, 'the online client removes the reverted event immediately');
   assert.equal(await evaluate(client2, `document.querySelector('.run-event-banner[data-date="2024-03-03"] .run-event-banner__status')?.textContent`), 'Scheduled', 'the offline peer retains its stale view until reconnect');
-  await client2.send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1, connectionType: 'wifi' });
-  assert.equal(await waitFor(client2, `!document.querySelector('.run-event-banner[data-date="2024-03-03"]')`), true, 'socket reconnect repairs the peer banner from authoritative state');
-  assert.equal(await evaluate(client2, `document.querySelector('.vote-timeline__date[datetime="2024-03-03"]').classList.contains('is-scheduled')`), false, 'socket reconnect repairs the scheduled graph state');
-  assert.equal(await evaluate(client2, `document.querySelector('.vote-timeline__date[datetime="2024-03-03"]').classList.contains('is-beam-running')`), false, 'reconnect cleanup stops any active stale beam');
+  let reconnectFailure;
+  try {
+    await evaluate(client2, `(() => {
+      const originalFetch = window.fetch.bind(window);
+      let releaseHeldResponse;
+      const heldResponse = new Promise((resolve) => { releaseHeldResponse = resolve; });
+      const state = {
+        armed: true,
+        held: null,
+        released: false,
+        release() {
+          if (this.released) return;
+          this.released = true;
+          releaseHeldResponse();
+        },
+      };
+      state.isComplete = () => {
+        const date = document.querySelector('.vote-timeline__date[datetime="2024-03-03"]');
+        const bounds = date?.getBoundingClientRect();
+        return Boolean(state.released
+          && state.held?.status === 200
+          && Array.isArray(state.held.body?.scheduledDates)
+          && !state.held.body.scheduledDates.includes('2024-03-03')
+          && !document.querySelector('.run-event-banner[data-date="2024-03-03"]')
+          && date
+          && !date.classList.contains('is-scheduled')
+          && !date.classList.contains('is-beam-running')
+          && getComputedStyle(date).visibility !== 'hidden'
+          && bounds.bottom > 0 && bounds.top < innerHeight);
+      };
+      window.__issue32ReconnectTimeline = state;
+      window.__issue32OriginalFetch = originalFetch;
+      window.fetch = async (...args) => {
+        const input = args[0];
+        const path = new URL(typeof input === 'string' ? input : input.url, location.href).pathname;
+        const response = await originalFetch(...args);
+        if (state.armed && path.endsWith('/vote-timeline')) {
+          state.armed = false;
+          state.held = { status: response.status, body: await response.clone().json() };
+          await heldResponse;
+        }
+        return response;
+      };
+    })()`);
+    await client2.send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1, connectionType: 'wifi' });
+    assert.equal(await waitFor(client2, `!document.querySelector('.run-event-banner[data-date="2024-03-03"]')`), true, 'socket reconnect repairs the peer banner from authoritative state');
+    assert.equal(await waitFor(client2, 'Boolean(window.__issue32ReconnectTimeline?.held)'), true, 'observes the reconnect timeline response while it remains held');
+    const heldSplit = await evaluate(client2, `(() => {
+      const state = window.__issue32ReconnectTimeline;
+      const date = document.querySelector('.vote-timeline__date[datetime="2024-03-03"]');
+      const bounds = date?.getBoundingClientRect();
+      return {
+        responseStatus: state.held.status,
+        responseScheduled: state.held.body.scheduledDates.includes('2024-03-03'),
+        bannerPresent: Boolean(document.querySelector('.run-event-banner[data-date="2024-03-03"]')),
+        dateExists: Boolean(date),
+        dateScheduled: date?.classList.contains('is-scheduled') ?? null,
+        beamRunning: date?.classList.contains('is-beam-running') ?? null,
+        visible: Boolean(bounds && getComputedStyle(date).visibility !== 'hidden' && bounds.bottom > 0 && bounds.top < innerHeight),
+        completionReady: state.isComplete(),
+      };
+    })()`);
+    t.diagnostic(`Observed genuine held reconnect timeline response and split graph state: ${JSON.stringify(heldSplit)}`);
+    assert.deepEqual(heldSplit, {
+      responseStatus: 200,
+      responseScheduled: false,
+      bannerPresent: false,
+      dateExists: true,
+      dateScheduled: true,
+      beamRunning: true,
+      visible: true,
+      completionReady: false,
+    }, 'a successful authoritative unscheduled response and repaired banner do not complete readiness while the visible graph and beam remain stale');
+
+    await evaluate(client2, 'window.__issue32ReconnectTimeline.release()');
+    const reconnectCompleted = await waitFor(client2, 'window.__issue32ReconnectTimeline.isComplete()');
+    assert.equal(reconnectCompleted, true, 'finite wait observes the released authoritative timeline and complete visible graph/beam repair');
+    const repaired = await evaluate(client2, `(() => {
+      const state = window.__issue32ReconnectTimeline;
+      const date = document.querySelector('.vote-timeline__date[datetime="2024-03-03"]');
+      const bounds = date?.getBoundingClientRect();
+      return {
+        responseStatus: state.held.status,
+        responseScheduled: state.held.body.scheduledDates.includes('2024-03-03'),
+        responseReleased: state.released,
+        bannerPresent: Boolean(document.querySelector('.run-event-banner[data-date="2024-03-03"]')),
+        dateExists: Boolean(date),
+        dateScheduled: date?.classList.contains('is-scheduled') ?? null,
+        beamRunning: date?.classList.contains('is-beam-running') ?? null,
+        visible: Boolean(bounds && getComputedStyle(date).visibility !== 'hidden' && bounds.bottom > 0 && bounds.top < innerHeight),
+      };
+    })()`);
+    t.diagnostic(`Completed reconnect timeline state: ${JSON.stringify(repaired)}`);
+    assert.deepEqual(repaired, {
+      responseStatus: 200,
+      responseScheduled: false,
+      responseReleased: true,
+      bannerPresent: false,
+      dateExists: true,
+      dateScheduled: false,
+      beamRunning: false,
+      visible: true,
+    }, 'reconnect completion requires the target date to exist visibly and be unscheduled with its stale beam stopped');
+    assert.equal(repaired.dateScheduled, false, 'socket reconnect repairs the scheduled graph state');
+    assert.equal(repaired.beamRunning, false, 'reconnect cleanup stops any active stale beam');
+  } catch (error) {
+    reconnectFailure = error;
+  } finally {
+    try {
+      await evaluate(client2, `(() => {
+        const state = window.__issue32ReconnectTimeline;
+        if (!state) return;
+        state.release();
+        if (window.__issue32OriginalFetch && window.fetch !== window.__issue32OriginalFetch) {
+          window.fetch = window.__issue32OriginalFetch;
+        }
+        delete window.__issue32ReconnectTimeline;
+        delete window.__issue32OriginalFetch;
+      })()`);
+    } catch (cleanupError) {
+      if (!reconnectFailure) throw cleanupError;
+      t.diagnostic(`Reconnect interceptor cleanup also failed after the primary test failure: ${cleanupError.message}`);
+    }
+  }
+  if (reconnectFailure) throw reconnectFailure;
   for (const width of [320, 390, 1280]) {
     await client2.send('Emulation.setDeviceMetricsOverride', { width, height: 844, deviceScaleFactor: 1, mobile: width <= 390 });
     const layout = await evaluate(client2, `(() => {

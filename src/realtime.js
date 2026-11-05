@@ -59,7 +59,11 @@ export function attachRealtime(server, { auth, database, now = () => new Date() 
     socket.on('room:subscribe', (payload, acknowledge = () => {}) => {
       const roomId = typeof payload === 'string' ? payload : payload?.roomId;
       const room = typeof roomId === 'string' ? getRoom(database, { roomId }) : null;
-      if (!room || !hasRoomMember(database, { roomId, userId: socket.data.userId })) {
+      if (!room) {
+        acknowledge({ ok: false, code: 'ROOM_NOT_FOUND' });
+        return;
+      }
+      if (!hasRoomMember(database, { roomId, userId: socket.data.userId })) {
         acknowledge({ ok: false, code: 'ROOM_MEMBERSHIP_REQUIRED' });
         return;
       }
@@ -96,6 +100,15 @@ export function attachRealtime(server, { auth, database, now = () => new Date() 
       roomId,
       room: { ...room, summary },
     });
+  }
+
+  function broadcastRoomDeleted(roomId) {
+    const payload = { roomId };
+    io.to(SUMMARY_CHANNEL).to(boardChannel(roomId)).emit('room:deleted', payload);
+    for (const socket of io.sockets.sockets.values()) {
+      if (!socket.data.roomIds.delete(roomId)) continue;
+      socket.leave(boardChannel(roomId));
+    }
   }
 
   function broadcastVoteChanged(roomOrDate, maybeDate) {
@@ -144,6 +157,7 @@ export function attachRealtime(server, { auth, database, now = () => new Date() 
     broadcastRunEventChanged,
     broadcastWeekReset,
     broadcastRoomSummary,
+    broadcastRoomDeleted,
     disconnectUser,
   };
 }
