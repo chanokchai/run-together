@@ -58,7 +58,7 @@ test('Issue 21 moves PIN change behind a protected dedicated page', async () => 
     const voteBody = await votePage.text();
     assert.doesNotMatch(voteBody, /id="pin-form"/);
     assert.doesNotMatch(voteBody, /name="currentPin"/);
-    assert.ok(voteBody.includes(`/change-pin?returnTo=%2Fvote%2F${LEGACY_ROOM_ID}`));
+    assert.doesNotMatch(voteBody, /id="change-pin"/, 'Change PIN is available from the room page, not the vote page');
 
     const changePinPage = await fetch(`${baseUrl}/change-pin`, { headers: { cookie } });
     assert.equal(changePinPage.status, 200);

@@ -79,7 +79,7 @@ export function marqueeDurationForDimensions(containerWidth, textWidth) {
   return marqueeDurationForDistance(marqueeTravelDistance(containerWidth, textWidth));
 }
 
-export function createVoterNamesRegion(document, names) {
+export function createVoterNamesRegion(document, names, { emptyText = '—' } = {}) {
   const voterNames = Array.isArray(names) ? names : [];
   const region = document.createElement('div');
   region.className = 'vote-card__names';
@@ -93,14 +93,21 @@ export function createVoterNamesRegion(document, names) {
   const canonical = document.createElement('span');
   canonical.className = 'vote-card__names-copy vote-card__names-copy--canonical';
   if (voterNames.length) {
-    voterNames.forEach((name, index) => {
+    voterNames.forEach((voter, index) => {
       if (index) canonical.append(document.createTextNode(', '));
-      canonical.append(document.createTextNode(String(name)));
+      const name = typeof voter === 'string' ? voter : voter?.name;
+      const entry = document.createElement('span');
+      entry.className = 'vote-card__voter-name';
+      if (typeof voter === 'object' && voter?.isCurrentUser === true) {
+        entry.classList.add('is-current-user');
+      }
+      entry.textContent = String(name ?? '');
+      canonical.append(entry);
     });
-  } else {
+  } else if (emptyText) {
     const empty = document.createElement('span');
     empty.className = 'vote-card__names-empty';
-    empty.textContent = '—';
+    empty.textContent = emptyText;
     canonical.append(empty);
   }
   track.append(canonical);

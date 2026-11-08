@@ -9,6 +9,7 @@ import {
   parseIsoDate,
 } from './calendar.js';
 import { AuthError, createAuthService } from './auth.js';
+import { formatBangkokRoomTime } from './date-time.js';
 import { DEFAULT_ROOM_ICON, LEGACY_ROOM_ID, ROOM_ICONS } from './room-contract.js';
 import { addRoomMember, createRoom, deleteRoom, getPersonalUpcomingSchedule, getRoom, getRoomSummary, hasRoomMember, listRooms, updateRoomMetadata } from './room-storage.js';
 import {
@@ -70,7 +71,7 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       body { margin: 0; background: #f3f6fa; color: #14213d; }
       main { max-width: 34rem; margin: 0 auto; padding: 2rem 1rem; }
       .vote-page-main { max-width: 90rem; padding-inline: clamp(1rem, 4vw, 3rem); }
-      .rooms-page-main { max-width: 84rem; padding-inline: clamp(1rem, 4vw, 3rem); }
+      .rooms-page-main { max-width: 84rem; padding-inline: clamp(1rem, 4vw, 3rem); overflow-x: clip; }
       section { background: white; border-radius: 1rem; padding: 1.5rem; box-shadow: 0 0.25rem 1rem #14213d18; }
       .vote-page-main > section { padding: clamp(1rem, 3vw, 2rem); }
       label { display: block; margin-top: 1rem; font-weight: 600; }
@@ -82,14 +83,14 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       a.button:focus-visible { outline: 3px solid #f5c542; outline-offset: 2px; }
       .message { min-height: 1.5rem; margin-top: 1rem; }
       .rooms-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem 1rem; }
-      .rooms-toolbar h1 { margin: 0; }
+      .rooms-toolbar h1 { min-width: 0; margin: 0; overflow-wrap: anywhere; }
       .rooms-toolbar__account { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .8rem; margin: .4rem 0 0; }
       .rooms-toolbar__account button, .rooms-toolbar__account .button { width: auto; min-width: 44px; margin: 0; }
       .room-page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: .5rem; min-width: 0; }
       .room-page-header__identity { flex: 1 1 auto; min-width: 0; }
       .room-page-header__identity h1 { margin-top: 0; overflow-wrap: anywhere; }
       .room-page-metadata { max-width: 100%; margin: .15rem 0; font-size: .9rem; line-height: 1.25; overflow-wrap: anywhere; }
-      .room-page-header a.button { display: inline-flex; flex: 0 0 44px; width: 44px; min-width: 44px; height: 44px; align-items: center; justify-content: center; margin: 0; padding: .45rem; background: #e8eef5; color: #14213d; }
+      .room-page-header a.button { display: inline-flex; flex: 0 0 auto; width: auto; min-width: 44px; min-height: 44px; align-items: center; justify-content: center; gap: .35rem; margin: 0; padding: .45rem .7rem; background: #e8eef5; color: #14213d; white-space: nowrap; }
       .room-page-header a.button:focus-visible { outline: 3px solid #145da0; outline-offset: 2px; }
       .room-page-header a.button svg { width: 1.35rem; height: 1.35rem; }
       .room-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 13rem), 1fr)); align-items: start; gap: 1rem; margin: 1rem 0 0; padding: 0; list-style: none; }
@@ -128,6 +129,14 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       .room-icon-picker { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .6rem; margin: .75rem 0; padding: .65rem; border: 1px solid #94a3b8; border-radius: .5rem; }
       .room-icon-picker__label { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin: 0; }
       .room-icon-picker__select { box-sizing: border-box; min-width: min(100%, 12rem); min-height: 44px; padding: .45rem .65rem; border: 1px solid #52606d; border-radius: .4rem; background: #fff; color: #14213d; font: inherit; }
+      .create-room-time-picker { display: grid; gap: .4rem; margin: .75rem 0; padding: .65rem; border: 1px solid #94a3b8; border-radius: .5rem; }
+      .create-room-time-picker__segments { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .15rem .45rem; min-width: 0; }
+      .create-room-time-picker__segments label { min-width: 0; margin: 0; font-size: .85rem; overflow-wrap: anywhere; }
+      .create-room-time-picker__segments select { box-sizing: border-box; width: 100%; min-width: 0; min-height: 44px; margin: 0; padding: .4rem .3rem; border: 1px solid #52606d; border-radius: .4rem; background: #fff; color: #14213d; font: inherit; }
+      .create-room-time-picker__segments select:focus-visible, #create-room-time-clear:focus-visible { outline: 3px solid #145da0; outline-offset: 2px; }
+      #create-room-time-clear { width: auto; min-width: 44px; min-height: 44px; margin: 0; padding-inline: .8rem; }
+      #create-room-time-help, #create-room-time-error { margin: 0; font-size: .9rem; line-height: 1.35; }
+      #create-room-time-error { color: #7f1d1d; font-weight: 700; }
       #room-filters { display: flex; flex-wrap: wrap; gap: .35rem .75rem; margin: 1rem 0; padding: .5rem .75rem; border: 1px solid #94a3b8; border-radius: .5rem; }
       #room-filters .room-filter { display: inline-flex; flex: 0 1 auto; min-width: 0; min-height: 44px; align-items: center; gap: .45rem; margin: 0; padding: .15rem .25rem; cursor: pointer; }
       .room-filter input { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
@@ -141,11 +150,16 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       #create-room-navigation:focus-visible { outline: 3px solid #145da0; outline-offset: 2px; }
       .your-upcoming-schedule { margin: .85rem 0 0; padding: .8rem; border: 1px solid #cbd5e1; border-radius: .7rem; background: #f8fafc; box-shadow: none; }
       .your-upcoming-schedule h2 { margin: 0 0 .45rem; font-size: 1.05rem; }
-      .upcoming-schedule__rows { display: grid; gap: .35rem; margin: 0; padding: 0; list-style: none; }
+      .upcoming-schedule__rows { display: grid; grid-template-columns: minmax(0, 1fr); gap: .35rem; margin: 0; padding: 0; list-style: none; }
+      .upcoming-schedule__rows > li { min-width: 0; }
       .upcoming-schedule__row { display: flex; box-sizing: border-box; width: 100%; min-width: 0; min-height: 44px; align-items: center; justify-content: space-between; gap: .6rem; padding: .45rem .65rem; border: 1px solid #94a3b8; border-radius: .45rem; background: #fff; color: #14213d; text-decoration: none; }
       .upcoming-schedule__row:hover { background: #f1f5f9; }
       .upcoming-schedule__row:focus-visible { outline: 3px solid #145da0; outline-offset: 2px; }
-      .upcoming-schedule__identity { min-width: 0; overflow-wrap: anywhere; }
+      .upcoming-schedule__identity { display: flex; flex: 1 1 auto; flex-wrap: wrap; align-items: center; gap: .15rem .35rem; min-width: 0; overflow-wrap: anywhere; }
+      .upcoming-schedule__title { min-width: 0; overflow-wrap: anywhere; }
+      .upcoming-schedule__identity > .upcoming-schedule__voters { position: relative; flex: 1 1 0; min-width: 0; max-width: 100%; min-height: 1.3rem; overflow: clip; contain: paint; }
+      .upcoming-schedule__voters .vote-card__names-track { position: absolute; top: 0; left: 0; height: 100%; max-width: max-content; align-items: center; }
+      .upcoming-schedule__voters .vote-card__voter-name.is-current-user { border-radius: .15rem; background: #ffff00; color: #111827; }
       .upcoming-schedule__date { flex: 0 0 auto; color: #14213d; font-variant-numeric: tabular-nums; font-weight: 700; white-space: nowrap; }
       #rooms-no-matches { margin: 1rem 0; }
       .room-edit-dialog { width: min(32rem, calc(100vw - 2rem)); }
@@ -250,10 +264,13 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       .vote-page-identity #week-heading { font-weight: 700; }
       .vote-card.is-touch-paused .vote-card__names-track, .vote-card:hover .vote-card__names-track, .vote-card:focus-within .vote-card__names-track { animation-play-state: paused; }
       @keyframes voter-name-loop { from { transform: translateX(var(--vote-marquee-start, 100%)); } to { transform: translateX(var(--vote-marquee-end, -100%)); } }
-      @media (prefers-reduced-motion: reduce) { .vote-card__names-track { animation: none; display: block; white-space: normal; overflow-wrap: anywhere; } .vote-card__names-copy--canonical { display: block; } }
+      @media (prefers-reduced-motion: reduce) { .vote-card__names-track { animation: none; display: block; white-space: normal; overflow-wrap: anywhere; } .vote-card__names-copy--canonical { display: block; } .upcoming-schedule__voters .vote-card__names-track { position: static; height: auto; max-width: 100%; } }
       @media (max-width: 44rem) {
         .vote-page-main { padding-inline: .75rem; }
         .rooms-page-main { padding-inline: .65rem; }
+        .upcoming-schedule__row { flex-wrap: wrap; }
+        .upcoming-schedule__identity, .upcoming-schedule__date { flex: 1 1 100%; }
+        .upcoming-schedule__date { text-align: right; }
         .room-cards { gap: .65rem; }
         .vote-page-main > section { padding: .55rem .75rem; }
         .vote-page-main h1 { margin: .2rem 0; font-size: 1.35rem; }
@@ -278,6 +295,7 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
         .run-event-actions button { flex: 1 1 8rem; }
       }
       @media (max-width: 380px) { .vote-page-main { padding-inline: .5rem; } .vote-page-main > section { padding-inline: .5rem; } }
+      @media (max-width: 22rem) { .create-room-time-picker__segments { grid-template-columns: minmax(0, 1fr); } }
     </style>
   </head>
   <body><main${mainClass ? ` class="${mainClass}"` : ''}>${content}</main>${scriptSrc ? `<script src="${scriptSrc}"></script>` : ''}${script ? `<script type="module">${script}</script>` : ''}</body>
@@ -426,16 +444,28 @@ const roomListPage = () => page({
         <input id="create-room-title" name="title" type="text" required maxlength="60" autocomplete="off" aria-describedby="rooms-message">
         <label for="create-room-venue">Venue / สถานที่ (optional)</label>
         <input id="create-room-venue" name="venue" type="text" maxlength="60" autocomplete="off">
-        <label for="create-room-time">Time in Bangkok / เวลา (HH:mm)</label>
-        <input id="create-room-time" name="time" type="text" inputmode="numeric" pattern="(?:[01]\\d|2[0-3]):[0-5]\\d" maxlength="5" placeholder="HH:mm" aria-describedby="create-room-time-format">
-        <span id="create-room-time-format" class="visually-hidden">Use a valid 24-hour time in HH:mm format.</span>
+        <fieldset id="create-room-time-picker" class="create-room-time-picker" aria-describedby="create-room-time-help create-room-time-error rooms-message">
+          <legend>Time in Bangkok / เวลา (optional)</legend>
+          <div class="create-room-time-picker__segments">
+            <label for="create-room-time-hour">Hour</label>
+            <select id="create-room-time-hour" aria-label="Hour"><option value="">Hour</option></select>
+            <label for="create-room-time-minute">Minute</label>
+            <select id="create-room-time-minute" aria-label="Minute"><option value="">Minute</option></select>
+            <label for="create-room-time-period">AM/PM</label>
+            <select id="create-room-time-period" aria-label="AM or PM"><option value="">AM/PM</option></select>
+          </div>
+          <button id="create-room-time-clear" type="button" class="secondary" disabled>Clear time / ล้างเวลา</button>
+          <input id="create-room-time" name="time" type="hidden" value="">
+          <p id="create-room-time-help">Choose an hour, minute, and AM/PM. You can leave this blank.</p>
+          <p id="create-room-time-error" class="message" role="alert" hidden></p>
+        </fieldset>
         <fieldset class="room-icon-picker" id="create-icon-picker"></fieldset>
         <button type="submit">Create room / สร้างห้อง</button>
       </form>
       <p id="rooms-message" class="message" role="status" aria-live="polite"></p>
     </section>
   </section>`,
-  script: `import { startRoomListPage } from '/room-list.js?v=issue-46-room-list-1'; startRoomListPage();`,
+  script: `import { startRoomListPage } from '/room-list.js?v=issue-47-room-list-1'; startRoomListPage();`,
 });
 
 const changePinPage = (returnTo = '/rooms') => page({
@@ -1265,6 +1295,10 @@ export function createApp({ databaseReady = false, database, env = process.env, 
       const initialNavigation = requestedRoomNavigation(request.query.date, now);
       const canManageRoom = session.role === 'admin' || room.ownerUserId === session.user_id;
       const roomApiPrefix = `/api/rooms/${encodeURIComponent(room.id)}`;
+      const roomDetails = [
+        room.venue ? `at ${room.venue}` : '',
+        formatBangkokRoomTime(room.time) ? `on ${formatBangkokRoomTime(room.time)}` : '',
+      ].filter(Boolean).join(' ');
       const roomControls = `${canManageRoom ? '<button id="reset-week" type="button" class="admin-action" hidden>Reset votes</button>' : ''}${session.role === 'admin' ? '<button id="manage-user" type="button" class="admin-action">manage user</button>' : ''}`;
       const resetControl = roomControls ? `<div class="actions">${roomControls}</div>` : '';
       response.type('html').send(page({
@@ -1273,12 +1307,12 @@ export function createApp({ databaseReady = false, database, env = process.env, 
         scriptSrc: '/socket.io/socket.io.js',
         content: `<section id="protected-content" hidden data-room-id="${room.id}">
           <header id="room-page-header" class="room-page-header">
-            <div class="room-page-header__identity">
-              <h1 id="room-heading">${escapeHtml(room.title)}</h1>
-              <p id="room-venue-line" class="room-page-metadata" aria-label="Venue / สถานที่"${room.venue ? '' : ' hidden'}>Venue / สถานที่: <span id="room-venue">${escapeHtml(room.venue)}</span></p>
-              <p id="room-time-line" class="room-page-metadata" aria-label="Time in Bangkok / เวลา"${room.time ? '' : ' hidden'}>Time / เวลา: <time id="room-time">${escapeHtml(room.time)}</time></p>
+            <div id="room-information" class="room-page-header__identity">
+              <h1 id="room-information-heading"><span id="room-number">Room ${String(room.displayNumber).padStart(2, '0')} : </span><span id="room-heading">${escapeHtml(room.title)}</span></h1>
+              <p id="room-information-details" class="room-page-metadata" aria-label="Room venue and Bangkok time"${roomDetails ? '' : ' hidden'}>${escapeHtml(roomDetails)}</p>
             </div>
-            <a id="back-to-rooms" class="button" href="/rooms" aria-label="Return to rooms">
+            <a id="back-to-rooms" class="button" href="/rooms" aria-label="Back to rooms">
+              <span>Back</span>
               <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M10 3H4v18h6M14 7l5 5-5 5M19 12H8" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></svg>
             </a>
           </header>
@@ -1300,12 +1334,11 @@ export function createApp({ databaseReady = false, database, env = process.env, 
             <button id="next-week" type="button" aria-label="Next week">&gt;&gt;</button>
           </nav>
           ${resetControl}
-          <a id="change-pin" class="button" href="/change-pin?returnTo=${encodeURIComponent(`/vote/${room.id}`)}">เปลี่ยน PIN / Change PIN</a>
           ${session.role === 'admin' ? `<a id="manage-users-link" class="button" href="/admin?returnTo=${encodeURIComponent(`/vote/${room.id}`)}">Manage users</a>` : ''}
-          <div class="actions"><button id="logout" type="button" class="secondary">Logout</button></div>
         </section>`,
-        script: `import { applyVoteCardPresentation, colorForDay, configureVoterNamesMarquee, createScheduledEffectController, createSocketRepairController, createVoterNamesRegion as buildVoterNamesRegion, createVoteTimelineController, formatDisplayDate, patchVoteDay } from '/vote-board.js?v=issue-34-beam-3';
+        script: `import { applyVoteCardPresentation, colorForDay, configureVoterNamesMarquee, createScheduledEffectController, createSocketRepairController, createVoterNamesRegion as buildVoterNamesRegion, createVoteTimelineController, formatDisplayDate, patchVoteDay } from '/vote-board.js?v=issue-47-voter-names-1';
           import { attachHorizontalSwipe, formatRunEventDate, getDateCardSwipeAction, getDateCardSwipePreview, getRunEventBannerSwipeAction, getRunEventBannerSwipePreview, millisecondsUntilBangkokMidnight, sortRunEventsForPresentation } from '/run-events.js?v=issue-34-beam-1';
+          import { formatBangkokRoomTime } from '/date-time.js?v=issue-47-room-time-1';
           let csrfToken = '';
           let sessionCheck = 0;
           let weekLoadSequence = 0;
@@ -1331,10 +1364,8 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           const displayName = document.querySelector('#display-name');
           const weekHeading = document.querySelector('#week-heading');
           const roomHeading = document.querySelector('#room-heading');
-          const roomVenueLine = document.querySelector('#room-venue-line');
-          const roomVenue = document.querySelector('#room-venue');
-          const roomTimeLine = document.querySelector('#room-time-line');
-          const roomTime = document.querySelector('#room-time');
+          const roomNumber = document.querySelector('#room-number');
+          const roomInformationDetails = document.querySelector('#room-information-details');
           const weekDays = document.querySelector('#week-days');
           const timelineDays = document.querySelector('#vote-timeline-days');
           const timelineRange = document.querySelector('#vote-timeline-range');
@@ -1352,15 +1383,14 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           function handleDeletedRoomResponse(response, result) { if (response.status !== 404 || result?.code !== 'ROOM_NOT_FOUND') return false; exitDeletedRoom(); return true; }
           function addText(parent, tag, text) { const element = document.createElement(tag); element.textContent = text; parent.append(element); return element; }
           function renderRoomMetadata(room) {
+            roomNumber.textContent = 'Room ' + String(room.displayNumber).padStart(2, '0') + ' : ';
             roomHeading.textContent = room.title;
             const venue = typeof room.venue === 'string' ? room.venue : '';
             const time = typeof room.time === 'string' ? room.time : '';
-            roomVenue.textContent = venue;
-            roomVenueLine.hidden = venue.length === 0;
-            roomTime.textContent = time;
-            if (time) roomTime.dateTime = time;
-            else roomTime.removeAttribute('datetime');
-            roomTimeLine.hidden = time.length === 0;
+            const details = [venue ? 'at ' + venue : '', formatBangkokRoomTime(time) ? 'on ' + formatBangkokRoomTime(time) : '']
+              .filter(Boolean).join(' ');
+            roomInformationDetails.textContent = details;
+            roomInformationDetails.hidden = details.length === 0;
           }
           function applyRoomMetadata(room) {
             if (roomUnavailable || room?.id !== roomId || typeof room.title !== 'string') return;
@@ -1874,7 +1904,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           nextWeek.addEventListener('click', () => { if (!nextWeek.disabled) loadWeek(nextWeek.dataset.monday); });
           resetWeek?.addEventListener('click', resetSelectedWeek);
           manageUser?.addEventListener('click', () => { location.href = document.querySelector('#manage-users-link')?.getAttribute('href') || '/admin?returnTo=' + encodeURIComponent('/vote/' + roomId); });
-          document.querySelector('#logout').addEventListener('click', async () => { const response = await fetch('/api/auth/logout', { method: 'POST', headers: { 'x-csrf-token': csrfToken } }); if (response.ok) location.href = '/'; });
+
           const socket = window.io({ transports: ['websocket'] });
           const socketRepair = createSocketRepairController({ loadWeek: () => loadWeek(weekMonday), patchDay });
           socket.on('vote:changed', (patch) => { if (roomUnavailable || patch.roomId !== roomId) return; socketRepair.handlePatch(patch); timelineController.patch(patch); });

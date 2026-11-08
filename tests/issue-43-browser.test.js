@@ -142,6 +142,20 @@ function seedEvent(database, { roomId, userId, date, status = 'proposed' }) {
   }).event;
 }
 
+function seedScheduledWithoutVote(database, { roomId, userId, date }) {
+  addRoomMember(database, { roomId, userId, now: () => NOW });
+  setVote(database, { roomId, userId, voteDate: date, body: { selected: true }, now: () => NOW });
+  const proposal = proposeRunEvent(database, {
+    roomId, userId, eventDate: date, requestId: randomUUID(), now: () => NOW,
+  });
+  const scheduled = setRunEventStatus(database, {
+    roomId, adminUserId: userId, eventDate: date, eventId: proposal.event.eventId,
+    revision: proposal.event.revision, status: 'scheduled', requestId: randomUUID(), now: () => NOW,
+  }).event;
+  setVote(database, { roomId, userId, voteDate: date, body: { selected: false }, now: () => NOW });
+  return scheduled;
+}
+
 async function openPage(client, url) {
   await client.send('Page.enable');
   await client.send('Runtime.enable');
@@ -333,7 +347,9 @@ test('Issue 43 room filters, metadata, icon menus, responsive cards, and board r
     const form = document.querySelector('#create-room-form');
     form.elements.title.value = 'Cafe <img src=x>';
     form.elements.venue.value = '  Harbor <b>Hall</b>  ';
-    form.elements.time.value = '07:05';
+    form.querySelector('#create-room-time-hour').value = '7';
+    form.querySelector('#create-room-time-minute').value = '05';
+    form.querySelector('#create-room-time-period').value = 'AM';
     form.querySelector('select[name=icon]').value = 'coffee';
     form.requestSubmit();
   })()`);
@@ -573,36 +589,347 @@ test('Issue 43 room filters, metadata, icon menus, responsive cards, and board r
   const boardHeader = await evaluate(client, `(() => {
     const link = document.querySelector('#back-to-rooms');
     const title = document.querySelector('#room-heading');
-    const venue = document.querySelector('#room-venue');
-    const time = document.querySelector('#room-time');
+    const details = document.querySelector('#room-information-details');
     const box = link.getBoundingClientRect();
     const headingBox = title.getBoundingClientRect();
     const overlap = box.left < headingBox.right && box.right > headingBox.left && box.top < headingBox.bottom && box.bottom > headingBox.top;
-    return { accessibleName: link.getAttribute('aria-label'), width: box.width, height: box.height, href: link.getAttribute('href'), overlap, venue: venue?.textContent, time: time?.textContent, returnLinks: [...document.querySelectorAll('#protected-content a[aria-label="Return to rooms"]')].length,
+    return { accessibleName: link.getAttribute('aria-label'), visibleText: link.querySelector('span')?.textContent, width: box.width, height: box.height, href: link.getAttribute('href'), overlap, details: details?.textContent, returnLinks: [...document.querySelectorAll('#protected-content a[aria-label="Back to rooms"]')].length,
  inHeader: Boolean(link.closest('#room-page-header')) };
   })()`);
-  assert.equal(boardHeader.accessibleName, 'Return to rooms');
+  assert.equal(boardHeader.accessibleName, 'Back to rooms');
+  assert.equal(boardHeader.visibleText, 'Back');
   assert.ok(boardHeader.width >= 44 && boardHeader.height >= 44);
   assert.equal(boardHeader.href, '/rooms');
   assert.equal(boardHeader.overlap, false);
-  assert.equal(boardHeader.venue, 'Updated place');
-  assert.equal(boardHeader.time, '18:45');
+  assert.equal(boardHeader.details, 'at Updated place on 6:45PM');
   assert.equal(boardHeader.returnLinks, 1);
   assert.equal(boardHeader.inHeader, true);
   const liveMetadata = await updateRoom(fixture.baseUrl, owner, mixed.id, { venue: 'Live <img>' });
   assert.equal(liveMetadata.response.status, 200);
-  assert.equal(await waitFor(client, `document.querySelector('#room-venue')?.textContent === 'Live <img>'`), true, 'room headers refresh metadata after an owner edit in another context');
-  const safeLiveVenue = await evaluate(client, `(() => ({ injected: Boolean(document.querySelector('#room-venue img')), html: document.querySelector('#room-venue').innerHTML, time: document.querySelector('#room-time').textContent }))()`);
+  assert.equal(await waitFor(client, `document.querySelector('#room-information-details')?.textContent === 'at Live <img> on 6:45PM'`), true, 'room headers refresh metadata after an owner edit in another context');
+  const safeLiveVenue = await evaluate(client, `(() => ({ injected: Boolean(document.querySelector('#room-information-details img')), html: document.querySelector('#room-information-details').innerHTML, text: document.querySelector('#room-information-details').textContent }))()`);
   assert.equal(safeLiveVenue.injected, false);
   assert.match(safeLiveVenue.html, /&lt;img&gt;/);
-  assert.equal(safeLiveVenue.time, '18:45', 'a venue-only edit retains the existing room time');
+  assert.equal(safeLiveVenue.text, 'at Live <img> on 6:45PM', 'a venue-only edit retains and formats the existing room time');
   const clearedTime = await updateRoom(fixture.baseUrl, owner, mixed.id, { time: '' });
   assert.equal(clearedTime.response.status, 200);
-  assert.equal(await waitFor(client, `document.querySelector('#room-time-line').hidden`), true, 'a cleared time hides only its own board header line');
-  assert.equal(await evaluate(client, `document.querySelector('#room-venue-line').hidden`), false);
+  assert.equal(await waitFor(client, `document.querySelector('#room-information-details').textContent === 'at Live <img>'`), true, 'a cleared time removes only its detail from the room information line');
+  assert.equal(await evaluate(client, `document.querySelector('#room-information-details').hidden`), false);
   const clearedVenue = await updateRoom(fixture.baseUrl, owner, mixed.id, { venue: '' });
   assert.equal(clearedVenue.response.status, 200);
-  assert.equal(await waitFor(client, `document.querySelector('#room-venue-line').hidden`), true, 'a cleared venue hides its board header line');
+  assert.equal(await waitFor(client, `document.querySelector('#room-information-details').hidden`), true, 'clearing all room metadata hides the complete details line');
   await click(client, '#back-to-rooms');
   assert.equal(await waitFor(client, `location.pathname === '/rooms'`), true, 'the header exit returns to the room list');
+});
+
+test('Issue 47 schedule voters, reconnect repair, time picker, and responsive controls work in real Chromium', async (t) => {
+  const fixture = await createFixture();
+  let profile;
+  let browser;
+  let client;
+  t.after(async () => {
+    client?.close();
+    if (browser) await stopChromium(browser);
+    if (profile) await removeProfileWithRetry(profile);
+    await fixture.close();
+  });
+  const viewer = await register(fixture.baseUrl, 'Issue 47 Browser Viewer');
+  const contributor = await register(fixture.baseUrl, 'Issue 47 Browser Contributor');
+  const viewerId = fixture.server.database.prepare('SELECT id FROM users WHERE name = ?').get('Issue 47 Browser Viewer').id;
+  const contributorId = fixture.server.database.prepare('SELECT id FROM users WHERE name = ?').get('Issue 47 Browser Contributor').id;
+  const adminId = fixture.server.database.prepare("SELECT id FROM users WHERE role = 'admin'").get().id;
+  const room = await createRoom(fixture.baseUrl, contributor, { title: 'A' });
+  addRoomMember(fixture.server.database, { roomId: room.id, userId: viewerId, now: () => NOW });
+  setVote(fixture.server.database, { roomId: room.id, userId: viewerId, voteDate: '2026-10-27', body: { selected: true }, now: () => NOW });
+  seedEvent(fixture.server.database, { roomId: room.id, userId: adminId, date: '2026-10-27', status: 'scheduled' });
+  seedEvent(fixture.server.database, { roomId: room.id, userId: adminId, date: '2026-10-28', status: 'scheduled' });
+  seedEvent(fixture.server.database, { roomId: room.id, userId: contributorId, date: '2026-10-29', status: 'scheduled' });
+  seedScheduledWithoutVote(fixture.server.database, { roomId: room.id, userId: adminId, date: '2026-10-30' });
+
+  profile = await mkdtemp(join(process.env.TMPDIR || tmpdir(), 'run-together-issue-47-chrome-'));
+  browser = spawnChromium(chromePath, [
+    '--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--no-first-run',
+    '--no-default-browser-check', '--disable-background-networking', '--remote-debugging-port=0',
+    `--user-data-dir=${profile}`, 'about:blank',
+  ]);
+  const port = await readDevToolsPort(profile, browser, { timeoutMs: chromiumReadinessTimeoutMs });
+  const target = await createTarget(port);
+  client = createCdpClient(target.webSocketDebuggerUrl);
+  await client.send('Page.enable');
+  await client.send('Runtime.enable');
+  await client.send('Network.enable');
+  await client.send('Emulation.setTimezoneOverride', { timezoneId: 'America/Los_Angeles' });
+  await client.send('Emulation.setDeviceMetricsOverride', { width: 320, height: 844, deviceScaleFactor: 2, mobile: true });
+  await client.send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => {
+    const NativeDate = Date;
+    let fixedNow = ${NOW.getTime()};
+    class FixtureDate extends NativeDate {
+      constructor(...args) { super(...(args.length ? args : [fixedNow])); }
+      static now() { return fixedNow; }
+    }
+    window.Date = FixtureDate;
+    window.__setIssue47Now = (value) => { fixedNow = value; };
+    const nativeSetTimeout = window.setTimeout.bind(window);
+    let captured = false;
+    window.setTimeout = (callback, milliseconds, ...args) => {
+      if (!captured && Number(milliseconds) > 60000) {
+        captured = true;
+        window.__fireIssue47DayRollover = () => callback(...args);
+      }
+      return nativeSetTimeout(callback, milliseconds, ...args);
+    };
+  })();` });
+  const [cookieName, cookieValue] = viewer.cookie.split('=', 2);
+  await client.send('Network.setCookie', { url: fixture.baseUrl, name: cookieName, value: cookieValue, path: '/' });
+  await openPage(client, `${fixture.baseUrl}/rooms`);
+  assert.equal(await waitFor(client, `Boolean(document.querySelector('#rooms-content') && !document.querySelector('#rooms-content').hidden)`), true);
+  assert.equal(await waitFor(client, `document.querySelectorAll('#upcoming-schedule-rows .upcoming-schedule__row').length === 4`), true,
+    'a single current-day vote qualifies today and every upcoming scheduled date in the room');
+
+  const schedule = await evaluate(client, `(() => {
+    const rows = [...document.querySelectorAll('#upcoming-schedule-rows .upcoming-schedule__row')];
+    return rows.map((link) => {
+      const names = link.querySelector('.upcoming-schedule__voters');
+      const track = names.querySelector('.vote-card__names-track');
+      const own = names.querySelectorAll('.is-current-user');
+      const date = link.querySelector('time');
+      const title = link.querySelector('.upcoming-schedule__title');
+      const nameBox = names.getBoundingClientRect();
+      const titleBox = title.getBoundingClientRect();
+      const rowBox = link.getBoundingClientRect();
+      const duration = Number.parseFloat(track.style.getPropertyValue('--vote-marquee-duration'));
+      const relativeLuminance = (color) => {
+        const canvas = document.createElement('canvas');
+        canvas.width = 1;
+        canvas.height = 1;
+        const context = canvas.getContext('2d');
+        context.fillStyle = color;
+        context.fillRect(0, 0, 1, 1);
+        const channels = [...context.getImageData(0, 0, 1, 1).data.slice(0, 3)].map((value) => {
+          const channel = value / 255;
+          return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+        });
+        return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+      };
+      const selfBackground = own[0] ? getComputedStyle(own[0]).backgroundColor : '';
+      const selfColor = own[0] ? getComputedStyle(own[0]).color : '';
+      const selfContrast = own[0]
+        ? (Math.max(relativeLuminance(selfBackground), relativeLuminance(selfColor)) + 0.05)
+          / (Math.min(relativeLuminance(selfBackground), relativeLuminance(selfColor)) + 0.05)
+        : null;
+      return {
+        href: link.getAttribute('href'), date: date.dateTime,
+        voters: [...names.querySelectorAll('.vote-card__voter-name')].map((name) => name.textContent),
+        own: own.length, fakeEmpty: Boolean(names.querySelector('.vote-card__names-empty')),
+        selfBackground, selfColor, selfContrast,
+        sameIdentityLine: Math.abs(nameBox.top - titleBox.top) < 2,
+        width: rowBox.width, height: rowBox.height,
+        speed: (names.clientWidth + track.scrollWidth) / duration,
+      };
+    });
+  })()`);
+  assert.deepEqual(schedule.map(({ date }) => date), ['2026-10-27', '2026-10-28', '2026-10-29', '2026-10-30']);
+  assert.ok(schedule.every(({ href }) => href.startsWith(`/vote/${encodeURIComponent(room.id)}?date=`)),
+    'schedule navigation and deduplication use permanent room IDs');
+  assert.deepEqual(schedule[0].voters.sort(), ['Issue 43 Browser Admin', 'Issue 47 Browser Viewer']);
+  assert.equal(schedule[0].own, 1, 'the viewer is highlighted by stable user identity only when they voted for that event');
+  assert.equal(schedule[0].selfBackground, 'rgb(255, 255, 0)');
+  assert.equal(schedule[0].selfColor, 'rgb(17, 24, 39)');
+  assert.ok(schedule[0].selfContrast >= 4.5, 'the highlighted viewer identity meets 4.5:1 text contrast');
+  assert.deepEqual(schedule[1].voters, ['Issue 43 Browser Admin']);
+  assert.equal(schedule[1].own, 0, 'the viewer is not added to dates they did not vote for');
+  assert.deepEqual(schedule[2].voters, ['Issue 47 Browser Contributor']);
+  assert.deepEqual(schedule[3].voters, [], 'a scheduled event without voters remains visible without a fake name');
+  assert.equal(schedule[3].fakeEmpty, false);
+  assert.ok(schedule.every(({ width, height }) => width >= 44 && height >= 44), 'schedule rows meet touch-target size');
+  assert.ok(schedule[0].sameIdentityLine, 'voter names follow the room title on the identity line');
+  assert.ok(schedule.slice(0, 3).every(({ speed }) => Math.abs(speed - 7.1875) < 0.1),
+    'short and long voter lists use the existing constant pixel speed');
+  assert.equal(await evaluate(client, 'document.documentElement.scrollWidth <= document.documentElement.clientWidth'), true,
+    'schedule identity content does not cause page-level horizontal scrolling at 320px');
+
+  await client.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
+  const reducedMotionNames = await evaluate(client, `(() => {
+    const region = document.querySelector('#upcoming-schedule-rows .upcoming-schedule__voters');
+    const track = region.querySelector('.vote-card__names-track');
+    return { animation: getComputedStyle(track).animationName, position: getComputedStyle(track).position,
+      whiteSpace: getComputedStyle(track).whiteSpace, copies: region.querySelectorAll('.vote-card__names-copy').length,
+      text: region.textContent, textWidth: track.scrollWidth, regionWidth: region.clientWidth };
+  })()`);
+  assert.equal(reducedMotionNames.animation, 'none');
+  assert.equal(reducedMotionNames.position, 'static');
+  assert.equal(reducedMotionNames.whiteSpace, 'normal');
+  assert.equal(reducedMotionNames.copies, 1, 'reduced motion keeps one non-duplicated accessible voter list');
+  assert.ok(reducedMotionNames.text.includes('Issue 47 Browser Viewer') && reducedMotionNames.text.includes('Issue 43 Browser Admin'));
+  assert.ok(reducedMotionNames.textWidth <= reducedMotionNames.regionWidth, 'reduced-motion names wrap within the row');
+  await client.send('Emulation.setEmulatedMedia', { features: [] });
+
+  await click(client, '#filter-my-created');
+  assert.equal(await waitFor(client, `document.querySelector('.room-card[data-room-id="${room.id}"]').hidden`), true);
+  assert.equal(await evaluate(client, `!document.querySelector('#upcoming-schedule').hidden && document.querySelectorAll('#upcoming-schedule-rows .upcoming-schedule__row').length === 4`), true,
+    'room-card filters do not change the personal schedule');
+  await click(client, '#filter-my-created');
+  const addedVoter = await fetch(`${fixture.baseUrl}/api/rooms/${room.id}/votes/2026-10-28`, {
+    method: 'PUT', headers: headers(fixture.baseUrl, contributor), body: JSON.stringify({ selected: true }),
+  });
+  assert.equal(addedVoter.status, 200);
+  assert.equal(await waitFor(client, `document.querySelector('.upcoming-schedule__row[href$="date=2026-10-28"] .upcoming-schedule__voters').textContent.includes('Issue 47 Browser Contributor')`), true,
+    'another user’s exact-date vote refreshes voter names live');
+  assert.equal(await evaluate(client, `document.querySelector('.upcoming-schedule__row[href$="date=2026-10-28"] .is-current-user') === null`), true);
+
+  await click(client, `.upcoming-schedule__row[href$="date=2026-10-28"] .vote-card__voter-name`);
+  assert.equal(await waitFor(client, `location.pathname === '/vote/${room.id}' && location.search.includes('2026-10-28')`), true,
+    'tapping a voter name follows the row’s date-targeted room navigation');
+  assert.equal(await waitFor(client, `Boolean(document.querySelector('#protected-content') && !document.querySelector('#protected-content').hidden)`), true,
+    'the vote page completes its authenticated load after navigation');
+  assert.equal(fixture.server.database.prepare('SELECT 1 FROM votes WHERE room_id = ? AND user_id = ? AND vote_date = ?').get(room.id, viewerId, '2026-10-28'), undefined,
+    'tapping a voter name does not toggle a vote');
+  assert.equal(await evaluate(client, `!document.querySelector('#change-pin') && !document.querySelector('#logout')`), true,
+    'Change PIN and Logout are absent on the vote page');
+  const initialHeader = await evaluate(client, `(() => {
+    const details = document.querySelector('#room-information-details');
+    const back = document.querySelector('#back-to-rooms');
+    const box = back.getBoundingClientRect();
+    return { hidden: details.hidden, visibleText: back.querySelector('span')?.textContent,
+      accessibleName: back.getAttribute('aria-label'), href: back.getAttribute('href'), width: box.width, height: box.height };
+  })()`);
+  assert.equal(initialHeader.hidden, true);
+  assert.equal(initialHeader.visibleText, 'Back');
+  assert.equal(initialHeader.accessibleName, 'Back to rooms');
+  assert.equal(initialHeader.href, '/rooms');
+  assert.ok(initialHeader.width >= 44 && initialHeader.height >= 44, `Back target size: ${JSON.stringify(initialHeader)}`);
+
+  await client.send('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0 });
+  await delay(150);
+  const updatedWhileOffline = await updateRoom(fixture.baseUrl, contributor, room.id, { venue: 'Venue <img>' , time: '18:40' });
+  assert.equal(updatedWhileOffline.response.status, 200);
+  await client.send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+  assert.equal(await waitFor(client, `document.querySelector('#room-information-details')?.textContent === 'at Venue <img> on 6:40PM'`), true,
+    'reconnect repair refreshes safe current room metadata');
+  assert.equal(await evaluate(client, `!document.querySelector('#room-information-details img')`), true);
+  const timeOnly = await updateRoom(fixture.baseUrl, contributor, room.id, { venue: '', time: '00:00' });
+  assert.equal(timeOnly.response.status, 200);
+  assert.equal(await waitFor(client, `document.querySelector('#room-information-details')?.textContent === 'on 12:00AM'`), true);
+  const venueOnly = await updateRoom(fixture.baseUrl, contributor, room.id, { venue: 'Riverside', time: '' });
+  assert.equal(venueOnly.response.status, 200);
+  assert.equal(await waitFor(client, `document.querySelector('#room-information-details')?.textContent === 'at Riverside'`), true);
+  const noDetails = await updateRoom(fixture.baseUrl, contributor, room.id, { venue: '' });
+  assert.equal(noDetails.response.status, 200);
+  assert.equal(await waitFor(client, `document.querySelector('#room-information-details').hidden`), true);
+  const longTitle = 'W'.repeat(30);
+  const longVenue = 'V'.repeat(30);
+  const longMetadata = await updateRoom(fixture.baseUrl, contributor, room.id, { title: longTitle, venue: longVenue, time: '23:59' });
+  assert.equal(longMetadata.response.status, 200);
+  assert.equal(await waitFor(client, `document.querySelector('#room-heading')?.textContent === '${longTitle}'`), true);
+  assert.equal(await waitFor(client, `document.querySelector('#room-information-details')?.textContent === 'at ${longVenue} on 11:59PM'`), true);
+  const longMetadataLayout = await evaluate(client, `(() => {
+    const title = document.querySelector('#room-information-heading');
+    const details = document.querySelector('#room-information-details');
+    return { titleScroll: title.scrollWidth, titleClient: title.clientWidth, titleHeight: title.scrollHeight,
+      titleLineHeight: Number.parseFloat(getComputedStyle(title).lineHeight), detailsScroll: details.scrollWidth,
+      detailsClient: details.clientWidth, rootScroll: document.documentElement.scrollWidth,
+      rootClient: document.documentElement.clientWidth };
+  })()`);
+  assert.ok(longMetadataLayout.titleScroll <= longMetadataLayout.titleClient
+    && longMetadataLayout.detailsScroll <= longMetadataLayout.detailsClient
+    && longMetadataLayout.titleHeight > longMetadataLayout.titleLineHeight
+    && longMetadataLayout.rootScroll <= longMetadataLayout.rootClient,
+  `long room titles and venues wrap without clipping or horizontal overflow: ${JSON.stringify(longMetadataLayout)}`);
+  assert.equal(await evaluate(client, `document.documentElement.scrollWidth <= document.documentElement.clientWidth`), true,
+    'long room information and the Back control fit without horizontal scrolling at 320px');
+  await click(client, '#back-to-rooms');
+  assert.equal(await waitFor(client, `location.pathname === '/rooms'`), true);
+  assert.equal(await waitFor(client, `Boolean(document.querySelector('#rooms-content') && !document.querySelector('#rooms-content').hidden)`), true,
+    'the room page completes its authenticated load after navigation');
+  assert.equal(await evaluate(client, 'Boolean(document.querySelector("#rooms-change-pin") && document.querySelector("#rooms-logout"))'), true,
+    'Change PIN and Logout remain available on the room page');
+
+  await client.send('Emulation.setDeviceMetricsOverride', { width: 160, height: 844, deviceScaleFactor: 2, mobile: true });
+  const zoomLayout = await evaluate(client, `(() => ({ rootScroll: document.documentElement.scrollWidth,
+    rootClient: document.documentElement.clientWidth, mainScroll: document.querySelector('main').scrollWidth,
+    mainClient: document.querySelector('main').clientWidth }))()`);
+  assert.ok(zoomLayout.rootScroll <= zoomLayout.rootClient,
+    `the room page remains free of horizontal overflow at 200% zoom: ${JSON.stringify(zoomLayout)}`);
+  const pickerSizes = await evaluate(client, `(() => [...document.querySelectorAll('#create-room-time-hour, #create-room-time-minute, #create-room-time-period, #create-room-time-clear')].map((element) => {
+    const box = element.getBoundingClientRect(); return [box.width, box.height];
+  }))()`);
+  assert.ok(pickerSizes.every(([width, height]) => width >= 44 && height >= 44), `picker controls meet 44px touch-target size: ${JSON.stringify(pickerSizes)}`);
+  await client.send('Emulation.setDeviceMetricsOverride', { width: 320, height: 844, deviceScaleFactor: 2, mobile: true });
+
+  async function press(key) {
+    await client.send('Input.dispatchKeyEvent', { type: 'keyDown', key, code: key });
+    await client.send('Input.dispatchKeyEvent', { type: 'keyUp', key, code: key });
+  }
+  let pickerHourFocused = false;
+  for (let index = 0; index < 32; index += 1) {
+    await press('Tab');
+    pickerHourFocused = await evaluate(client, `document.activeElement?.id === 'create-room-time-hour'`);
+    if (pickerHourFocused) break;
+  }
+  assert.equal(pickerHourFocused, true, 'Tab reaches the hour picker in normal page order');
+  const pickerFocus = await evaluate(client, `(() => { const control = document.querySelector('#create-room-time-hour'); const style = getComputedStyle(control); return { visible: control.matches(':focus-visible'), outlineStyle: style.outlineStyle, outlineWidth: Number.parseFloat(style.outlineWidth) }; })()`);
+  assert.equal(pickerFocus.visible, true, 'keyboard users receive a visible picker focus indicator');
+  assert.ok(pickerFocus.outlineStyle !== 'none' && pickerFocus.outlineWidth >= 3);
+  for (let index = 0; index < 12; index += 1) await press('ArrowDown');
+  await press('Enter');
+  await evaluate(client, `document.querySelector('#create-room-time-minute').focus()`);
+  await press('ArrowDown');
+  await press('Enter');
+  await evaluate(client, `document.querySelector('#create-room-time-period').focus()`);
+  await press('ArrowDown');
+  await press('Enter');
+  assert.equal(await evaluate(client, `document.querySelector('#create-room-form').elements.time.value`), '00:00',
+    'keyboard selection maps 12:00 AM to canonical 00:00 without typing');
+  await evaluate(client, `document.querySelector('#create-room-time-period').focus()`);
+  await press('ArrowDown');
+  await press('Enter');
+  assert.equal(await evaluate(client, `document.querySelector('#create-room-form').elements.time.value`), '12:00',
+    'keyboard selection maps 12:00 PM to canonical 12:00');
+
+  await client.send('Emulation.setTouchEmulationEnabled', { enabled: true, configuration: 'mobile' });
+  const clearBounds = await evaluate(client, `(() => { const box = document.querySelector('#create-room-time-clear').getBoundingClientRect(); return { x: box.x + box.width / 2, y: box.y + box.height / 2 }; })()`);
+  await client.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ id: 1, x: clearBounds.x, y: clearBounds.y, radiusX: 2, radiusY: 2, force: 1 }] });
+  await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  assert.equal(await waitFor(client, `document.querySelector('#create-room-form').elements.time.value === ''`), true,
+    'touch can clear a selected optional time without typing');
+  await client.send('Emulation.setTouchEmulationEnabled', { enabled: false });
+
+  await evaluate(client, `(() => { const form = document.querySelector('#create-room-form'); form.elements.title.value = 'Empty Time Room'; form.requestSubmit(); })()`);
+  assert.equal(await waitFor(client, `[...document.querySelectorAll('.room-card__title')].some((title) => title.textContent === 'Empty Time Room')`), true,
+    'the optional empty time submits successfully');
+  assert.equal(fixture.server.database.prepare('SELECT time FROM rooms WHERE title = ?').get('Empty Time Room').time, '');
+  await evaluate(client, `(() => {
+    const form = document.querySelector('#create-room-form');
+    form.elements.title.value = 'Selected Time Room';
+    form.elements.venue.value = 'x'.repeat(31);
+    form.querySelector('#create-room-time-hour').value = '6';
+    form.querySelector('#create-room-time-minute').value = '40';
+    form.querySelector('#create-room-time-period').value = 'PM';
+    ['#create-room-time-hour', '#create-room-time-minute', '#create-room-time-period'].forEach((selector) => form.querySelector(selector).dispatchEvent(new Event('change', { bubbles: true })));
+    form.requestSubmit();
+  })()`);
+  assert.equal(await waitFor(client, `document.querySelector('#rooms-message')?.textContent.includes('Venue must be 30 characters or fewer')`), true);
+  assert.equal(await evaluate(client, `document.querySelector('#create-room-form').elements.time.value`), '18:40',
+    'a failed form validation retains the selected time');
+  await evaluate(client, `(() => { const form = document.querySelector('#create-room-form'); form.elements.venue.value = ''; form.requestSubmit(); })()`);
+  assert.equal(await waitFor(client, `[...document.querySelectorAll('.room-card__title')].some((title) => title.textContent === 'Selected Time Room')`), true);
+  assert.equal(fixture.server.database.prepare('SELECT time FROM rooms WHERE title = ?').get('Selected Time Room').time, '18:40');
+
+  const resetResponse = await fetch(`${fixture.baseUrl}/api/rooms/${room.id}/votes/2026-10-27`, {
+    method: 'PUT', headers: headers(fixture.baseUrl, viewer), body: JSON.stringify({ selected: false }),
+  });
+  assert.equal(resetResponse.status, 200);
+  assert.equal(await waitFor(client, 'document.querySelector("#upcoming-schedule").hidden'), true,
+    'removing the last qualifying vote removes its room schedule rows live');
+  const restoreResponse = await fetch(`${fixture.baseUrl}/api/rooms/${room.id}/votes/2026-10-27`, {
+    method: 'PUT', headers: headers(fixture.baseUrl, viewer), body: JSON.stringify({ selected: true }),
+  });
+  assert.equal(restoreResponse.status, 200);
+  assert.equal(await waitFor(client, `!document.querySelector('#upcoming-schedule').hidden && document.querySelectorAll('#upcoming-schedule-rows .upcoming-schedule__row').length === 4`), true);
+  fixture.setNow('2026-10-27T17:00:00.000Z');
+  await evaluate(client, `window.__setIssue47Now(Date.parse('2026-10-27T17:00:00.000Z'))`);
+  assert.equal(await evaluate(client, 'typeof window.__fireIssue47DayRollover === "function"'), true);
+  await evaluate(client, 'window.__fireIssue47DayRollover()');
+  assert.equal(await waitFor(client, 'document.querySelector("#upcoming-schedule").hidden'), true,
+    'Bangkok midnight makes the last date-27 vote historical and removes schedule eligibility');
 });

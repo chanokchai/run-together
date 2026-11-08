@@ -1,5 +1,5 @@
 import { DEFAULT_ROOM_ICON, ROOM_ICONS } from './room-contract.js?v=issue-43-icons-1';
-import { createScheduledEffectController } from './vote-board.js';
+import { configureVoterNamesMarquee, createScheduledEffectController, createVoterNamesRegion } from './vote-board.js?v=issue-47-schedule-names-1';
 import { millisecondsUntilBangkokMidnight } from './run-events.js';
 import { addDays, getBangkokDate, parseIsoDate } from './calendar.js?v=issue-43-calendar-1';
 
@@ -80,6 +80,97 @@ function timeError(value) {
     return 'Time must use valid 24-hour HH:mm format. / กรุณาระบุเวลาแบบ 24 ชั่วโมง HH:mm';
   }
   return '';
+}
+
+export function roomTimeFromSegments(hour, minute, period) {
+  const values = [hour, minute, period];
+  if (values.every((value) => value === '')) return '';
+  if (values.some((value) => value === '')) return null;
+  const hour12 = Number(hour);
+  if (!Number.isInteger(hour12) || hour12 < 1 || hour12 > 12
+    || !/^[0-5]\d$/.test(minute) || !['AM', 'PM'].includes(period)) return null;
+  const hour24 = (hour12 % 12) + (period === 'PM' ? 12 : 0);
+  return `${String(hour24).padStart(2, '0')}:${minute}`;
+}
+
+function createRoomTimePicker(form) {
+  const fieldset = form.querySelector('#create-room-time-picker');
+  const hour = form.querySelector('#create-room-time-hour');
+  const minute = form.querySelector('#create-room-time-minute');
+  const period = form.querySelector('#create-room-time-period');
+  const hiddenTime = form.elements.time;
+  const clear = form.querySelector('#create-room-time-clear');
+  const error = form.querySelector('#create-room-time-error');
+  const controls = [hour, minute, period].filter(Boolean);
+  if (!fieldset || !hour || !minute || !period || !hiddenTime || !clear || !error) {
+    return { validate: () => true, focus() {}, reset() {}, showError() {} };
+  }
+  for (let hourValue = 1; hourValue <= 12; hourValue += 1) {
+    const option = addText(hour, 'option', String(hourValue));
+    option.value = String(hourValue);
+  }
+  for (let minuteValue = 0; minuteValue < 60; minuteValue += 1) {
+    const formatted = String(minuteValue).padStart(2, '0');
+    const option = addText(minute, 'option', formatted);
+    option.value = formatted;
+  }
+  ['AM', 'PM'].forEach((periodValue) => {
+    const option = addText(period, 'option', periodValue);
+    option.value = periodValue;
+  });
+
+  function readSelection() {
+    const values = [hour.value, minute.value, period.value];
+    const value = roomTimeFromSegments(hour.value, minute.value, period.value);
+    if (value === null) {
+      const focusTarget = controls[values.findIndex((segment) => segment === '')] ?? hour;
+      return { valid: false, value: '', focusTarget };
+    }
+    return { valid: true, value };
+  }
+
+  function clearError() {
+    error.textContent = '';
+    error.hidden = true;
+    controls.forEach((control) => control.removeAttribute('aria-invalid'));
+  }
+
+  function sync() {
+    const selection = readSelection();
+    hiddenTime.value = selection.value;
+    clear.disabled = selection.value === '' && selection.valid;
+    clearError();
+    return selection;
+  }
+
+  function showError(message) {
+    error.textContent = message;
+    error.hidden = false;
+    controls.forEach((control) => control.setAttribute('aria-invalid', 'true'));
+  }
+
+  controls.forEach((control) => control.addEventListener('change', sync));
+  clear.addEventListener('click', () => {
+    controls.forEach((control) => { control.value = ''; });
+    sync();
+    hour.focus();
+  });
+
+  return {
+    validate() {
+      const selection = sync();
+      if (selection.valid) return true;
+      showError('Choose an hour, minute, and AM/PM, or clear the time.');
+      selection.focusTarget?.focus();
+      return false;
+    },
+    focus() { hour.focus(); },
+    reset() {
+      controls.forEach((control) => { control.value = ''; });
+      sync();
+    },
+    showError,
+  };
 }
 
 function createIconPicker(form, pickerId, selectedIcon) {
@@ -371,6 +462,7 @@ export function startRoomListPage() {
   let rolloverTimer = null;
   let isLoading = false;
   let editDialog;
+  const timePicker = createRoomTimePicker(createForm);
 
   function announce(text) {
     message.textContent = text;
@@ -562,6 +654,11 @@ export function startRoomListPage() {
         link.className = 'upcoming-schedule__row';
         const identity = document.createElement('span');
         identity.className = 'upcoming-schedule__identity';
+        const title = document.createElement('span');
+        title.className = 'upcoming-schedule__title';
+        const voters = createVoterNamesRegion(document, [], { emptyText: '' });
+        voters.classList.add('upcoming-schedule__voters');
+        identity.append(title, voters);
         const date = document.createElement('time');
         date.className = 'upcoming-schedule__date';
         link.append(identity, date);
@@ -570,9 +667,16 @@ export function startRoomListPage() {
       }
       const link = row.firstElementChild;
       const [identity, date] = link.children;
+      const [title, previousVoters] = identity.children;
       link.href = `/vote/${encodeURIComponent(item.roomId)}?date=${encodeURIComponent(item.date)}`;
-      link.setAttribute('aria-label', `Room ${String(item.displayNumber).padStart(2, '0')}: ${item.title}, ${formatted.fullDate}`);
-      identity.textContent = `Room ${String(item.displayNumber).padStart(2, '0')}: ${item.title}`;
+      const voters = Array.isArray(item.voters) ? item.voters : [];
+      const voterNames = voters.map(({ name }) => String(name ?? '')).filter(Boolean);
+      link.setAttribute('aria-label', `Room ${String(item.displayNumber).padStart(2, '0')}: ${item.title}; ${voterNames.length ? `Voters: ${voterNames.join(', ')}` : 'No voters'}; ${formatted.fullDate}`);
+      title.textContent = `Room ${String(item.displayNumber).padStart(2, '0')}: ${item.title}`;
+      const voterRegion = createVoterNamesRegion(document, voters, { emptyText: '' });
+      voterRegion.classList.add('upcoming-schedule__voters');
+      voterRegion.setAttribute('aria-label', voterNames.length ? `Voters: ${voterNames.join(', ')}` : 'No voters for this event');
+      previousVoters.replaceWith(voterRegion);
       date.dateTime = item.date;
       date.setAttribute('aria-label', formatted.fullDate);
       date.textContent = formatted.shortDate;
@@ -582,6 +686,7 @@ export function startRoomListPage() {
       if (scheduleRows.children[index] !== row) scheduleRows.insertBefore(row, scheduleRows.children[index] ?? null);
     });
     scheduleSection.hidden = ordered.length === 0;
+    if (ordered.length) configureVoterNamesMarquee(scheduleRows);
   }
 
   filters.forEach((filter) => filter.addEventListener('change', () => renderRooms(currentRooms)));
@@ -846,6 +951,7 @@ export function startRoomListPage() {
 
   createForm.addEventListener('submit', async (event) => {
     event.preventDefault();
+    if (!timePicker.validate()) return;
     const title = createForm.elements.title.value;
     const validations = [
       [createForm.elements.title, titleError(title)],
@@ -854,8 +960,13 @@ export function startRoomListPage() {
     ];
     const invalid = validations.find(([, error]) => error);
     if (invalid) {
-      announce(invalid[1]);
-      invalid[0].focus();
+      if (invalid[0] === createForm.elements.time) {
+        timePicker.showError(invalid[1]);
+        timePicker.focus();
+      } else {
+        announce(invalid[1]);
+        invalid[0].focus();
+      }
       return;
     }
     const submit = createForm.querySelector('button[type="submit"]');
@@ -885,6 +996,7 @@ export function startRoomListPage() {
         return;
       }
       createForm.reset();
+      timePicker.reset();
       announce(`Room ${String(result.room.displayNumber).padStart(2, '0')} created. / สร้างห้องแล้ว`);
       await refreshRooms();
     } catch {

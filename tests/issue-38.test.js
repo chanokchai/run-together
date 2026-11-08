@@ -68,8 +68,7 @@ test('Issue 38 login and authenticated landing require room selection before vot
     assert.equal(roomList.status, 200);
     const roomListHtml = await roomList.text();
     assert.match(roomListHtml, /id="rooms-content"/);
-    assert.match(roomListHtml, /\/room-list\.js\?v=issue-46-room-list-1/);
-    assert.doesNotMatch(roomListHtml, /\/room-list\.js\?v=issue-38-room-list-2/);
+    assert.match(roomListHtml, /\/room-list\.js\?v=issue-47-room-list-1/);
 
     const bareVote = await fetch(`${baseUrl}/vote`, withCookie(member.cookie));
     assert.equal(bareVote.status, 302);
@@ -89,7 +88,7 @@ test('Issue 38 board URL and every board API path explicitly include the legacy 
     assert.equal(response.status, 200);
     const html = await response.text();
     assert.match(html, new RegExp(`data-room-id="${LEGACY_ROOM_ID}"`));
-    assert.match(html, /<h1 id="room-heading">Run Together<\/h1>/);
+    assert.match(html, /<h1 id="room-information-heading"><span id="room-number">Room 01 : <\/span><span id="room-heading">Run Together<\/span><\/h1>/);
     assert.match(html, /id="vote-page-identity"/);
     assert.match(html, /function roomApiPath\(_legacyPath, scopedPath\) \{ return roomApiPrefix \+ scopedPath; \}/);
     assert.match(html, new RegExp(`const roomApiPrefix = "/api/rooms/${LEGACY_ROOM_ID}"`));
