@@ -9,7 +9,8 @@ import { migrate, openDatabase } from '../src/database.js';
 import { getPersonalUpcomingSchedule, createRoom, addRoomMember, updateRoomMetadata } from '../src/room-storage.js';
 import { createServer } from '../src/server.js';
 import { formatBangkokRoomTime } from '../src/date-time.js';
-import { roomTimeFromSegments } from '../src/room-list.js';
+import { formatScheduleDate, roomTimeFromSegments } from '../src/room-list.js';
+import { marqueeDurationForDimensions, SCHEDULE_VOTER_MARQUEE_PIXELS_PER_SECOND, VOTER_MARQUEE_PIXELS_PER_SECOND } from '../src/vote-board.js';
 
 const NOW = new Date('2026-11-01T17:30:00.000Z');
 const ENV = { ADMIN_NAME: 'Issue 47 Admin', ADMIN_PIN: '4826', PIN_PEPPER: 'synthetic-pepper' };
@@ -68,6 +69,26 @@ test('Issue 47 Bangkok display and segmented time values preserve hour boundarie
   assert.equal(roomTimeFromSegments('6', '40', 'PM'), '18:40');
   assert.equal(roomTimeFromSegments('', '', ''), '');
   assert.equal(roomTimeFromSegments('6', '', 'PM'), null, 'partial selections require completion or Clear');
+});
+
+test('Issue 47 schedule dates use actual UTC calendar weekdays and exact DAY,DD-MON labels', () => {
+  assert.equal(formatScheduleDate('2026-11-20').shortDate, 'FRI,20-NOV');
+  assert.equal(formatScheduleDate('2026-11-22').shortDate, 'SUN,22-NOV');
+  assert.equal(formatScheduleDate('2024-02-29').shortDate, 'THU,29-FEB');
+  assert.equal(formatScheduleDate('2026-12-31').shortDate, 'THU,31-DEC');
+  assert.equal(formatScheduleDate('2027-01-01').shortDate, 'FRI,01-JAN');
+  assert.equal(formatScheduleDate('2026-11-20').fullDate, '20 November 2026');
+  assert.equal(formatScheduleDate('2026-02-29'), null, 'impossible dates are rejected rather than normalized');
+});
+
+test('Issue 47 schedule speed is 30% faster while the shared vote-page speed stays unchanged', () => {
+  assert.equal(VOTER_MARQUEE_PIXELS_PER_SECOND, 7.1875);
+  assert.equal(SCHEDULE_VOTER_MARQUEE_PIXELS_PER_SECOND, 9.34375);
+  assert.equal(marqueeDurationForDimensions(100, 72.5), 24, 'existing callers keep the vote-page speed');
+  assert.ok(Math.abs(marqueeDurationForDimensions(100, 72.5, SCHEDULE_VOTER_MARQUEE_PIXELS_PER_SECOND)
+    - (172.5 / 9.34375)) < 1e-12);
+  assert.ok(Math.abs(marqueeDurationForDimensions(900, 2500, SCHEDULE_VOTER_MARQUEE_PIXELS_PER_SECOND)
+    - (3400 / 9.34375)) < 1e-12, 'long lists use full distance and the same constant schedule speed');
 });
 
 test('Issue 47 personal schedule qualifies rooms by any present/future vote and lists exact-date voters', async () => {

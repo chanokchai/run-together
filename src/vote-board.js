@@ -1,6 +1,7 @@
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 export const VOTER_MARQUEE_PIXELS_PER_SECOND = 7.1875;
+export const SCHEDULE_VOTER_MARQUEE_PIXELS_PER_SECOND = VOTER_MARQUEE_PIXELS_PER_SECOND * 1.3;
 
 function finiteNonNegative(value) {
   return Number.isFinite(value) ? Math.max(0, value) : 0;
@@ -66,17 +67,20 @@ export function applyVoteCardPresentation(card, { selected = false, eligible = t
   return presentation;
 }
 
-export function marqueeDurationForDistance(loopDistance) {
+export function marqueeDurationForDistance(loopDistance, pixelsPerSecond = VOTER_MARQUEE_PIXELS_PER_SECOND) {
   const distance = finiteNonNegative(loopDistance);
-  return distance / VOTER_MARQUEE_PIXELS_PER_SECOND;
+  const speed = Number.isFinite(pixelsPerSecond) && pixelsPerSecond > 0
+    ? pixelsPerSecond
+    : VOTER_MARQUEE_PIXELS_PER_SECOND;
+  return distance / speed;
 }
 
 export function marqueeTravelDistance(containerWidth, textWidth) {
   return finiteNonNegative(containerWidth) + finiteNonNegative(textWidth);
 }
 
-export function marqueeDurationForDimensions(containerWidth, textWidth) {
-  return marqueeDurationForDistance(marqueeTravelDistance(containerWidth, textWidth));
+export function marqueeDurationForDimensions(containerWidth, textWidth, pixelsPerSecond = VOTER_MARQUEE_PIXELS_PER_SECOND) {
+  return marqueeDurationForDistance(marqueeTravelDistance(containerWidth, textWidth), pixelsPerSecond);
 }
 
 export function createVoterNamesRegion(document, names, { emptyText = '—' } = {}) {
@@ -121,7 +125,7 @@ function prefersReducedMotion(region, reducedMotion) {
   return Boolean(view?.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
 }
 
-function configureVoterNamesRegion(region, options = {}) {
+function configureVoterNamesRegion(region, { pixelsPerSecond = VOTER_MARQUEE_PIXELS_PER_SECOND, ...options } = {}) {
   const track = region.querySelector('.vote-card__names-track');
   if (!track || region.getAttribute('data-has-voters') !== 'true') return;
   if (prefersReducedMotion(region, options.reducedMotion)) {
@@ -132,7 +136,7 @@ function configureVoterNamesRegion(region, options = {}) {
   const textWidth = track.scrollWidth;
   track.style.setProperty('--vote-marquee-start', `${containerWidth}px`);
   track.style.setProperty('--vote-marquee-end', `${-textWidth}px`);
-  track.style.setProperty('--vote-marquee-duration', `${marqueeDurationForDimensions(containerWidth, textWidth)}s`);
+  track.style.setProperty('--vote-marquee-duration', `${marqueeDurationForDimensions(containerWidth, textWidth, pixelsPerSecond)}s`);
 }
 
 export function configureVoterNamesMarquee(root, options = {}) {

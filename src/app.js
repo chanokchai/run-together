@@ -129,13 +129,13 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       .room-icon-picker { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .6rem; margin: .75rem 0; padding: .65rem; border: 1px solid #94a3b8; border-radius: .5rem; }
       .room-icon-picker__label { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin: 0; }
       .room-icon-picker__select { box-sizing: border-box; min-width: min(100%, 12rem); min-height: 44px; padding: .45rem .65rem; border: 1px solid #52606d; border-radius: .4rem; background: #fff; color: #14213d; font: inherit; }
-      .create-room-time-picker { display: grid; gap: .4rem; margin: .75rem 0; padding: .65rem; border: 1px solid #94a3b8; border-radius: .5rem; }
-      .create-room-time-picker__segments { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .15rem .45rem; min-width: 0; }
-      .create-room-time-picker__segments label { min-width: 0; margin: 0; font-size: .85rem; overflow-wrap: anywhere; }
+      .create-room-time-picker { display: grid; min-width: 0; gap: .4rem; margin: .75rem 0; padding: .65rem; border: 1px solid #94a3b8; border-radius: .5rem; }
+      .create-room-time-picker__segments { display: grid; grid-template-columns: repeat(3, minmax(44px, 1fr)); gap: .15rem .3rem; min-width: 0; }
+      .create-room-time-picker__segments label { display: block; min-width: 0; margin: 0; font-size: 1rem; }
       .create-room-time-picker__segments select { box-sizing: border-box; width: 100%; min-width: 0; min-height: 44px; margin: 0; padding: .4rem .3rem; border: 1px solid #52606d; border-radius: .4rem; background: #fff; color: #14213d; font: inherit; }
       .create-room-time-picker__segments select:focus-visible, #create-room-time-clear:focus-visible { outline: 3px solid #145da0; outline-offset: 2px; }
-      #create-room-time-clear { width: auto; min-width: 44px; min-height: 44px; margin: 0; padding-inline: .8rem; }
-      #create-room-time-help, #create-room-time-error { margin: 0; font-size: .9rem; line-height: 1.35; }
+      #create-room-time-clear { width: auto; max-width: 100%; min-width: 44px; min-height: 44px; margin: 0; padding-inline: .8rem; white-space: normal; overflow-wrap: anywhere; }
+      #create-room-time-error { margin: 0; font-size: .9rem; line-height: 1.35; }
       #create-room-time-error { color: #7f1d1d; font-weight: 700; }
       #room-filters { display: flex; flex-wrap: wrap; gap: .35rem .75rem; margin: 1rem 0; padding: .5rem .75rem; border: 1px solid #94a3b8; border-radius: .5rem; }
       #room-filters .room-filter { display: inline-flex; flex: 0 1 auto; min-width: 0; min-height: 44px; align-items: center; gap: .45rem; margin: 0; padding: .15rem .25rem; cursor: pointer; }
@@ -152,15 +152,15 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       .your-upcoming-schedule h2 { margin: 0 0 .45rem; font-size: 1.05rem; }
       .upcoming-schedule__rows { display: grid; grid-template-columns: minmax(0, 1fr); gap: .35rem; margin: 0; padding: 0; list-style: none; }
       .upcoming-schedule__rows > li { min-width: 0; }
-      .upcoming-schedule__row { display: flex; box-sizing: border-box; width: 100%; min-width: 0; min-height: 44px; align-items: center; justify-content: space-between; gap: .6rem; padding: .45rem .65rem; border: 1px solid #94a3b8; border-radius: .45rem; background: #fff; color: #14213d; text-decoration: none; }
+      .upcoming-schedule__row { display: flex; box-sizing: border-box; width: 100%; min-width: 0; min-height: 44px; flex-direction: column; align-items: stretch; justify-content: flex-start; gap: .2rem; padding: .45rem .65rem; border: 1px solid #94a3b8; border-radius: .45rem; background: #fff; color: #14213d; text-decoration: none; }
       .upcoming-schedule__row:hover { background: #f1f5f9; }
       .upcoming-schedule__row:focus-visible { outline: 3px solid #145da0; outline-offset: 2px; }
-      .upcoming-schedule__identity { display: flex; flex: 1 1 auto; flex-wrap: wrap; align-items: center; gap: .15rem .35rem; min-width: 0; overflow-wrap: anywhere; }
-      .upcoming-schedule__title { min-width: 0; overflow-wrap: anywhere; }
-      .upcoming-schedule__identity > .upcoming-schedule__voters { position: relative; flex: 1 1 0; min-width: 0; max-width: 100%; min-height: 1.3rem; overflow: clip; contain: paint; }
+      .upcoming-schedule__details { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: .15rem .6rem; min-width: 0; }
+      .upcoming-schedule__title { flex: 1 1 5rem; min-width: 0; overflow-wrap: anywhere; }
+      .upcoming-schedule__row > .upcoming-schedule__voters { position: relative; display: block; flex: 0 0 auto; width: 100%; min-width: 0; max-width: 100%; min-height: 1.3rem; overflow: clip; contain: paint; }
       .upcoming-schedule__voters .vote-card__names-track { position: absolute; top: 0; left: 0; height: 100%; max-width: max-content; align-items: center; }
       .upcoming-schedule__voters .vote-card__voter-name.is-current-user { border-radius: .15rem; background: #ffff00; color: #111827; }
-      .upcoming-schedule__date { flex: 0 0 auto; color: #14213d; font-variant-numeric: tabular-nums; font-weight: 700; white-space: nowrap; }
+      .upcoming-schedule__date { flex: 0 0 auto; color: #14213d; font-size: .9rem; font-variant-numeric: tabular-nums; font-weight: 700; white-space: nowrap; }
       #rooms-no-matches { margin: 1rem 0; }
       .room-edit-dialog { width: min(32rem, calc(100vw - 2rem)); }
       .room-edit-dialog input[name="title"], .room-edit-dialog input[name="venue"], .room-edit-dialog input[name="time"] { width: 100%; }
@@ -268,9 +268,6 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       @media (max-width: 44rem) {
         .vote-page-main { padding-inline: .75rem; }
         .rooms-page-main { padding-inline: .65rem; }
-        .upcoming-schedule__row { flex-wrap: wrap; }
-        .upcoming-schedule__identity, .upcoming-schedule__date { flex: 1 1 100%; }
-        .upcoming-schedule__date { text-align: right; }
         .room-cards { gap: .65rem; }
         .vote-page-main > section { padding: .55rem .75rem; }
         .vote-page-main h1 { margin: .2rem 0; font-size: 1.35rem; }
@@ -295,7 +292,12 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
         .run-event-actions button { flex: 1 1 8rem; }
       }
       @media (max-width: 380px) { .vote-page-main { padding-inline: .5rem; } .vote-page-main > section { padding-inline: .5rem; } }
-      @media (max-width: 22rem) { .create-room-time-picker__segments { grid-template-columns: minmax(0, 1fr); } }
+      @media (max-width: 11rem) {
+        .rooms-page-main { padding-inline: .1rem; }
+        .rooms-page-main > #rooms-content, #rooms-content > section[aria-labelledby="create-room-heading"] { padding: .125rem; }
+        .create-room-time-picker { padding: .1rem; }
+        .create-room-time-picker__segments { gap: .1rem; }
+      }
     </style>
   </head>
   <body><main${mainClass ? ` class="${mainClass}"` : ''}>${content}</main>${scriptSrc ? `<script src="${scriptSrc}"></script>` : ''}${script ? `<script type="module">${script}</script>` : ''}</body>
@@ -444,19 +446,15 @@ const roomListPage = () => page({
         <input id="create-room-title" name="title" type="text" required maxlength="60" autocomplete="off" aria-describedby="rooms-message">
         <label for="create-room-venue">Venue / สถานที่ (optional)</label>
         <input id="create-room-venue" name="venue" type="text" maxlength="60" autocomplete="off">
-        <fieldset id="create-room-time-picker" class="create-room-time-picker" aria-describedby="create-room-time-help create-room-time-error rooms-message">
-          <legend>Time in Bangkok / เวลา (optional)</legend>
+        <fieldset id="create-room-time-picker" class="create-room-time-picker" aria-describedby="create-room-time-error rooms-message">
+          <legend>Time / เวลา (optional)</legend>
           <div class="create-room-time-picker__segments">
-            <label for="create-room-time-hour">Hour</label>
-            <select id="create-room-time-hour" aria-label="Hour"><option value="">Hour</option></select>
-            <label for="create-room-time-minute">Minute</label>
-            <select id="create-room-time-minute" aria-label="Minute"><option value="">Minute</option></select>
-            <label for="create-room-time-period">AM/PM</label>
-            <select id="create-room-time-period" aria-label="AM or PM"><option value="">AM/PM</option></select>
+            <label for="create-room-time-hour"><span class="visually-hidden">Hour</span><select id="create-room-time-hour" aria-label="Hour"><option value="">—</option></select></label>
+            <label for="create-room-time-minute"><span class="visually-hidden">Minute</span><select id="create-room-time-minute" aria-label="Minute"><option value="">—</option></select></label>
+            <label for="create-room-time-period"><span class="visually-hidden">AM/PM</span><select id="create-room-time-period" aria-label="AM or PM"><option value="">—</option></select></label>
           </div>
           <button id="create-room-time-clear" type="button" class="secondary" disabled>Clear time / ล้างเวลา</button>
           <input id="create-room-time" name="time" type="hidden" value="">
-          <p id="create-room-time-help">Choose an hour, minute, and AM/PM. You can leave this blank.</p>
           <p id="create-room-time-error" class="message" role="alert" hidden></p>
         </fieldset>
         <fieldset class="room-icon-picker" id="create-icon-picker"></fieldset>
@@ -465,7 +463,7 @@ const roomListPage = () => page({
       <p id="rooms-message" class="message" role="status" aria-live="polite"></p>
     </section>
   </section>`,
-  script: `import { startRoomListPage } from '/room-list.js?v=issue-47-room-list-1'; startRoomListPage();`,
+  script: `import { startRoomListPage } from '/room-list.js?v=issue-47-room-list-2'; startRoomListPage();`,
 });
 
 const changePinPage = (returnTo = '/rooms') => page({
@@ -1336,7 +1334,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           ${resetControl}
           ${session.role === 'admin' ? `<a id="manage-users-link" class="button" href="/admin?returnTo=${encodeURIComponent(`/vote/${room.id}`)}">Manage users</a>` : ''}
         </section>`,
-        script: `import { applyVoteCardPresentation, colorForDay, configureVoterNamesMarquee, createScheduledEffectController, createSocketRepairController, createVoterNamesRegion as buildVoterNamesRegion, createVoteTimelineController, formatDisplayDate, patchVoteDay } from '/vote-board.js?v=issue-47-voter-names-1';
+        script: `import { applyVoteCardPresentation, colorForDay, configureVoterNamesMarquee, createScheduledEffectController, createSocketRepairController, createVoterNamesRegion as buildVoterNamesRegion, createVoteTimelineController, formatDisplayDate, patchVoteDay } from '/vote-board.js?v=issue-47-voter-names-2';
           import { attachHorizontalSwipe, formatRunEventDate, getDateCardSwipeAction, getDateCardSwipePreview, getRunEventBannerSwipeAction, getRunEventBannerSwipePreview, millisecondsUntilBangkokMidnight, sortRunEventsForPresentation } from '/run-events.js?v=issue-34-beam-1';
           import { formatBangkokRoomTime } from '/date-time.js?v=issue-47-room-time-1';
           let csrfToken = '';

@@ -623,6 +623,10 @@ test('Issue 43 room filters, metadata, icon menus, responsive cards, and board r
 });
 
 test('Issue 47 schedule voters, reconnect repair, time picker, and responsive controls work in real Chromium', async (t) => {
+  const correctionFailures = [];
+  const recordCorrectionResult = (passed, description, actual) => {
+    if (!passed) correctionFailures.push(`${description}: ${JSON.stringify(actual)}`);
+  };
   const fixture = await createFixture();
   let profile;
   let browser;
@@ -694,8 +698,10 @@ test('Issue 47 schedule voters, reconnect repair, time picker, and responsive co
       const own = names.querySelectorAll('.is-current-user');
       const date = link.querySelector('time');
       const title = link.querySelector('.upcoming-schedule__title');
+      const details = link.querySelector('.upcoming-schedule__details');
       const nameBox = names.getBoundingClientRect();
       const titleBox = title.getBoundingClientRect();
+      const detailsBox = details?.getBoundingClientRect();
       const rowBox = link.getBoundingClientRect();
       const duration = Number.parseFloat(track.style.getPropertyValue('--vote-marquee-duration'));
       const relativeLuminance = (color) => {
@@ -718,17 +724,25 @@ test('Issue 47 schedule voters, reconnect repair, time picker, and responsive co
           / (Math.min(relativeLuminance(selfBackground), relativeLuminance(selfColor)) + 0.05)
         : null;
       return {
-        href: link.getAttribute('href'), date: date.dateTime,
+        href: link.getAttribute('href'), date: date.dateTime, dateLabel: date.textContent,
+        accessibleDate: date.getAttribute('aria-label'), dateOnDetailsLine: date.parentElement === details,
         voters: [...names.querySelectorAll('.vote-card__voter-name')].map((name) => name.textContent),
         own: own.length, fakeEmpty: Boolean(names.querySelector('.vote-card__names-empty')),
         selfBackground, selfColor, selfContrast,
-        sameIdentityLine: Math.abs(nameBox.top - titleBox.top) < 2,
+        namesOnSecondLine: Boolean(detailsBox && nameBox.top >= detailsBox.bottom - 1),
+        titleAndDateFirstLine: Boolean(detailsBox && titleBox.top < nameBox.top && date.getBoundingClientRect().top < nameBox.top),
         width: rowBox.width, height: rowBox.height,
         speed: (names.clientWidth + track.scrollWidth) / duration,
       };
     });
   })()`);
   assert.deepEqual(schedule.map(({ date }) => date), ['2026-10-27', '2026-10-28', '2026-10-29', '2026-10-30']);
+  recordCorrectionResult(
+    JSON.stringify(schedule.map(({ dateLabel }) => dateLabel)) === JSON.stringify(['TUE,27-OCT', 'WED,28-OCT', 'THU,29-OCT', 'FRI,30-OCT']),
+    'scheduled date labels use actual uppercase weekday and DAY,DD-MON format', schedule.map(({ dateLabel, date }) => [date, dateLabel]),
+  );
+  recordCorrectionResult(schedule.every(({ accessibleDate }) => /2026/.test(accessibleDate ?? '')),
+    'accessible date retains the complete scheduled date', schedule.map(({ accessibleDate }) => accessibleDate));
   assert.ok(schedule.every(({ href }) => href.startsWith(`/vote/${encodeURIComponent(room.id)}?date=`)),
     'schedule navigation and deduplication use permanent room IDs');
   assert.deepEqual(schedule[0].voters.sort(), ['Issue 43 Browser Admin', 'Issue 47 Browser Viewer']);
@@ -742,11 +756,25 @@ test('Issue 47 schedule voters, reconnect repair, time picker, and responsive co
   assert.deepEqual(schedule[3].voters, [], 'a scheduled event without voters remains visible without a fake name');
   assert.equal(schedule[3].fakeEmpty, false);
   assert.ok(schedule.every(({ width, height }) => width >= 44 && height >= 44), 'schedule rows meet touch-target size');
-  assert.ok(schedule[0].sameIdentityLine, 'voter names follow the room title on the identity line');
-  assert.ok(schedule.slice(0, 3).every(({ speed }) => Math.abs(speed - 7.1875) < 0.1),
-    'short and long voter lists use the existing constant pixel speed');
+  recordCorrectionResult(schedule.every(({ namesOnSecondLine, titleAndDateFirstLine, dateOnDetailsLine }) => (
+    namesOnSecondLine && titleAndDateFirstLine && dateOnDetailsLine
+  )), 'room information and date stay on the first line with voters on the separate second line',
+  schedule.map(({ namesOnSecondLine, titleAndDateFirstLine, dateOnDetailsLine }) => ({ namesOnSecondLine, titleAndDateFirstLine, dateOnDetailsLine })));
+  recordCorrectionResult(schedule.slice(0, 3).every(({ speed }) => Math.abs(speed - 9.34375) < 0.1),
+    'short and long schedule voter lists travel at the schedule-only 30% faster constant pixel speed', schedule.slice(0, 3).map(({ speed }) => speed));
   assert.equal(await evaluate(client, 'document.documentElement.scrollWidth <= document.documentElement.clientWidth'), true,
     'schedule identity content does not cause page-level horizontal scrolling at 320px');
+
+  await client.send('Emulation.setDeviceMetricsOverride', { width: 375, height: 844, deviceScaleFactor: 2, mobile: true });
+  await delay(100);
+  const resizedScheduleSpeed = await evaluate(client, `(() => {
+    const names = document.querySelector('#upcoming-schedule-rows .upcoming-schedule__voters');
+    const track = names.querySelector('.vote-card__names-track');
+    return (names.clientWidth + track.scrollWidth) / Number.parseFloat(track.style.getPropertyValue('--vote-marquee-duration'));
+  })()`);
+  recordCorrectionResult(Math.abs(resizedScheduleSpeed - 9.34375) < 0.1,
+    'schedule speed remains constant after viewport resize', resizedScheduleSpeed);
+  await client.send('Emulation.setDeviceMetricsOverride', { width: 320, height: 844, deviceScaleFactor: 2, mobile: true });
 
   await client.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
   const reducedMotionNames = await evaluate(client, `(() => {
@@ -775,6 +803,12 @@ test('Issue 47 schedule voters, reconnect repair, time picker, and responsive co
   assert.equal(addedVoter.status, 200);
   assert.equal(await waitFor(client, `document.querySelector('.upcoming-schedule__row[href$="date=2026-10-28"] .upcoming-schedule__voters').textContent.includes('Issue 47 Browser Contributor')`), true,
     'another user’s exact-date vote refreshes voter names live');
+  const reconnectedScheduleSpeed = await evaluate(client, `(() => [...document.querySelectorAll('#upcoming-schedule-rows .upcoming-schedule__voters')]
+    .filter((names) => names.querySelector('.vote-card__names-track')?.scrollWidth)
+    .map((names) => (names.clientWidth + names.querySelector('.vote-card__names-track').scrollWidth)
+      / Number.parseFloat(names.querySelector('.vote-card__names-track').style.getPropertyValue('--vote-marquee-duration'))))()`);
+  recordCorrectionResult(reconnectedScheduleSpeed.length >= 2 && reconnectedScheduleSpeed.every((speed) => Math.abs(speed - 9.34375) < 0.1),
+    'schedule speed is recomputed consistently after live reconnect repair', reconnectedScheduleSpeed);
   assert.equal(await evaluate(client, `document.querySelector('.upcoming-schedule__row[href$="date=2026-10-28"] .is-current-user') === null`), true);
 
   await click(client, `.upcoming-schedule__row[href$="date=2026-10-28"] .vote-card__voter-name`);
@@ -845,6 +879,67 @@ test('Issue 47 schedule voters, reconnect repair, time picker, and responsive co
     'Change PIN and Logout remain available on the room page');
 
   await client.send('Emulation.setDeviceMetricsOverride', { width: 160, height: 844, deviceScaleFactor: 2, mobile: true });
+  const pickerPresentation = await evaluate(client, `(() => {
+    const fieldset = document.querySelector('#create-room-time-picker');
+    const selects = ['hour', 'minute', 'period'].map((segment) => document.querySelector('#create-room-time-' + segment));
+    const labels = ['hour', 'minute', 'period'].map((segment) => fieldset.querySelector('label[for="create-room-time-' + segment + '"] .visually-hidden'));
+    const boxes = selects.map((control) => control.getBoundingClientRect());
+    const placeholders = selects.map((control) => control.options[0]?.textContent ?? '');
+    return {
+      legend: fieldset.querySelector('legend').textContent,
+      visibleText: fieldset.innerText,
+      hasHelper: Boolean(document.querySelector('#create-room-time-help')),
+      placeholders,
+      accessibleNames: selects.map((control) => control.getAttribute('aria-label')),
+      labelsHidden: labels.every((label) => label && getComputedStyle(label).position === 'absolute'
+        && label.getBoundingClientRect().width <= 1 && label.getBoundingClientRect().height <= 1),
+      horizontal: boxes.every((box) => box.width >= 44 && box.height >= 44)
+        && boxes.every((box) => Math.abs(box.top - boxes[0].top) <= 2)
+        && boxes[0].left < boxes[1].left && boxes[1].left < boxes[2].left,
+      boxes: boxes.map(({ x, y, width, height }) => ({ x, y, width, height })),
+      pageWidth: document.documentElement.scrollWidth, viewportWidth: document.documentElement.clientWidth,
+    };
+  })()`);
+  recordCorrectionResult(pickerPresentation.legend === 'Time / เวลา (optional)',
+    'Create room time picker has the requested main label and keeps its optional indicator', pickerPresentation.legend);
+  recordCorrectionResult(pickerPresentation.placeholders.every((text) => !/\bHour\b|\bMinute\b|\bAM\/PM\b/.test(text))
+    && !pickerPresentation.hasHelper,
+  'visible segment labels and helper text are removed', { visibleText: pickerPresentation.visibleText, placeholders: pickerPresentation.placeholders, hasHelper: pickerPresentation.hasHelper });
+  recordCorrectionResult(pickerPresentation.labelsHidden
+    && JSON.stringify(pickerPresentation.accessibleNames) === JSON.stringify(['Hour', 'Minute', 'AM or PM']),
+  'segment names remain accessible while visible labels are hidden', { labelsHidden: pickerPresentation.labelsHidden, accessibleNames: pickerPresentation.accessibleNames });
+  recordCorrectionResult(pickerPresentation.horizontal && pickerPresentation.pageWidth <= pickerPresentation.viewportWidth,
+    'all 44px time controls stay left-to-right on one line without page overflow at narrow zoom', pickerPresentation);
+  const zoomScheduleLayout = await evaluate(client, `(() => {
+    const rows = [...document.querySelectorAll('#upcoming-schedule-rows .upcoming-schedule__row')];
+    return {
+      rows: rows.map((link) => {
+        const details = link.querySelector('.upcoming-schedule__details');
+        const title = link.querySelector('.upcoming-schedule__title');
+        const date = link.querySelector('.upcoming-schedule__date');
+        const voters = link.querySelector('.upcoming-schedule__voters');
+        const detailsBox = details.getBoundingClientRect();
+        const votersBox = voters.getBoundingClientRect();
+        const titleStyle = getComputedStyle(title);
+        return {
+          firstLine: date.parentElement === details,
+          namesSecond: votersBox.top >= detailsBox.bottom - 1,
+          titleWrapsSafely: title.scrollWidth <= title.clientWidth && details.scrollWidth <= details.clientWidth,
+          titleScroll: title.scrollWidth, titleClient: title.clientWidth, titleHeight: title.scrollHeight,
+          detailsScroll: details.scrollWidth, detailsClient: details.clientWidth,
+          overflowWrap: titleStyle.overflowWrap, whiteSpace: titleStyle.whiteSpace, fontSize: titleStyle.fontSize,
+          rowWidth: link.getBoundingClientRect().width, rowHeight: link.getBoundingClientRect().height,
+        };
+      }),
+      pageWidth: document.documentElement.scrollWidth, viewportWidth: document.documentElement.clientWidth,
+    };
+  })()`);
+  recordCorrectionResult(zoomScheduleLayout.rows.length === 4
+    && zoomScheduleLayout.rows.every(({ firstLine, namesSecond, titleWrapsSafely, rowWidth, rowHeight }) => (
+      firstLine && namesSecond && titleWrapsSafely && rowWidth >= 44 && rowHeight >= 44
+    ))
+    && zoomScheduleLayout.pageWidth <= zoomScheduleLayout.viewportWidth,
+  'long room titles, first-line dates, second-line voters and tappable rows remain usable at 200% zoom', zoomScheduleLayout);
   const zoomLayout = await evaluate(client, `(() => ({ rootScroll: document.documentElement.scrollWidth,
     rootClient: document.documentElement.clientWidth, mainScroll: document.querySelector('main').scrollWidth,
     mainClient: document.querySelector('main').clientWidth }))()`);
@@ -932,4 +1027,5 @@ test('Issue 47 schedule voters, reconnect repair, time picker, and responsive co
   await evaluate(client, 'window.__fireIssue47DayRollover()');
   assert.equal(await waitFor(client, 'document.querySelector("#upcoming-schedule").hidden'), true,
     'Bangkok midnight makes the last date-27 vote historical and removes schedule eligibility');
+  assert.deepEqual(correctionFailures, [], 'all Issue #47 owner FAIL correction regressions pass');
 });

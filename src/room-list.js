@@ -1,5 +1,5 @@
 import { DEFAULT_ROOM_ICON, ROOM_ICONS } from './room-contract.js?v=issue-43-icons-1';
-import { configureVoterNamesMarquee, createScheduledEffectController, createVoterNamesRegion } from './vote-board.js?v=issue-47-schedule-names-1';
+import { configureVoterNamesMarquee, createScheduledEffectController, createVoterNamesRegion, SCHEDULE_VOTER_MARQUEE_PIXELS_PER_SECOND } from './vote-board.js?v=issue-47-schedule-names-2';
 import { millisecondsUntilBangkokMidnight } from './run-events.js';
 import { addDays, getBangkokDate, parseIsoDate } from './calendar.js?v=issue-43-calendar-1';
 
@@ -48,17 +48,22 @@ function formatDates(values) {
     : '';
 }
 
-function formatScheduleDate(value) {
+export function formatScheduleDate(value) {
   try {
     parseIsoDate(value);
   } catch {
     return null;
   }
-  const [, , month, day] = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  const date = new Date(`${value}T00:00:00Z`);
+  const weekday = new Intl.DateTimeFormat('en-US', { weekday: 'short', timeZone: 'UTC' })
+    .format(date).toUpperCase();
+  const month = new Intl.DateTimeFormat('en-US', { month: 'short', timeZone: 'UTC' })
+    .format(date).toUpperCase();
+  const [, , , day] = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
   const fullDate = new Intl.DateTimeFormat('en-GB', {
     day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC',
-  }).format(new Date(`${value}T00:00:00Z`));
-  return { shortDate: `${day}-${month}`, fullDate };
+  }).format(date);
+  return { shortDate: `${weekday},${day}-${month}`, fullDate };
 }
 
 function titleError(value) {
@@ -160,7 +165,7 @@ function createRoomTimePicker(form) {
     validate() {
       const selection = sync();
       if (selection.valid) return true;
-      showError('Choose an hour, minute, and AM/PM, or clear the time.');
+      showError('Select all time fields or clear the time.');
       selection.focusTarget?.focus();
       return false;
     },
@@ -652,22 +657,22 @@ export function startRoomListPage() {
         row = document.createElement('li');
         const link = document.createElement('a');
         link.className = 'upcoming-schedule__row';
-        const identity = document.createElement('span');
-        identity.className = 'upcoming-schedule__identity';
+        const details = document.createElement('span');
+        details.className = 'upcoming-schedule__details';
         const title = document.createElement('span');
         title.className = 'upcoming-schedule__title';
         const voters = createVoterNamesRegion(document, [], { emptyText: '' });
         voters.classList.add('upcoming-schedule__voters');
-        identity.append(title, voters);
         const date = document.createElement('time');
         date.className = 'upcoming-schedule__date';
-        link.append(identity, date);
+        details.append(title, date);
+        link.append(details, voters);
         row.append(link);
         scheduleNodes.set(key, row);
       }
       const link = row.firstElementChild;
-      const [identity, date] = link.children;
-      const [title, previousVoters] = identity.children;
+      const [details, previousVoters] = link.children;
+      const [title, date] = details.children;
       link.href = `/vote/${encodeURIComponent(item.roomId)}?date=${encodeURIComponent(item.date)}`;
       const voters = Array.isArray(item.voters) ? item.voters : [];
       const voterNames = voters.map(({ name }) => String(name ?? '')).filter(Boolean);
@@ -686,10 +691,19 @@ export function startRoomListPage() {
       if (scheduleRows.children[index] !== row) scheduleRows.insertBefore(row, scheduleRows.children[index] ?? null);
     });
     scheduleSection.hidden = ordered.length === 0;
-    if (ordered.length) configureVoterNamesMarquee(scheduleRows);
+    if (ordered.length) configureScheduleMarquees();
+  }
+
+  function configureScheduleMarquees() {
+    if (!scheduleSection?.hidden && scheduleRows) {
+      configureVoterNamesMarquee(scheduleRows, {
+        pixelsPerSecond: SCHEDULE_VOTER_MARQUEE_PIXELS_PER_SECOND,
+      });
+    }
   }
 
   filters.forEach((filter) => filter.addEventListener('change', () => renderRooms(currentRooms)));
+  window.addEventListener('resize', configureScheduleMarquees, { passive: true });
 
   createNavigation?.addEventListener('click', () => {
     const firstInput = createForm.querySelector('input[name="title"]');
