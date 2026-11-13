@@ -9,6 +9,7 @@ import {
   marqueeDurationForDistance,
   marqueeDurationForDimensions,
   marqueeTravelDistance,
+  SCHEDULE_VOTER_MARQUEE_PIXELS_PER_SECOND,
   VOTER_MARQUEE_PIXELS_PER_SECOND,
   createSocketRepairController,
   getVoteCardPresentation,
@@ -49,7 +50,7 @@ test('keeps the board one-row, accessible, safe, and read-only', () => {
   assert.match(appSource, /pointerdown/);
   assert.match(appSource, /prefers-reduced-motion/);
   assert.match(appSource, /state\.days\.map/);
-  assert.match(appSource, /import \{ applyVoteCardPresentation, colorForDay, configureVoterNamesMarquee, createScheduledEffectController, createSocketRepairController, createVoterNamesRegion as buildVoterNamesRegion, createVoteTimelineController, formatDisplayDate, patchVoteDay \} from '\/vote-board\.js\?v=issue-34-beam-3'/);
+  assert.match(appSource, /import \{ applyVoteCardPresentation, colorForDay, configureVoterNamesMarquee, createScheduledEffectController, createSocketRepairController, createVoterNamesRegion as buildVoterNamesRegion, createVoteTimelineController, formatDisplayDate, patchVoteDay \} from '\/vote-board\.js\?v=issue-47-voter-names-2'/);
   assert.match(appSource, /aria-busy/);
   assert.match(appSource, /fetch\(roomApiPath\('\/api\/votes\//);
   assert.equal(appSource.includes('.innerHTML'), false);
@@ -141,8 +142,19 @@ test('derives single-pass marquee geometry and duration at a calibrated fixed sp
   assert.match(appSource, /animation:\s*voter-name-loop\s*var\(--vote-marquee-duration,\s*0s\)/);
   assert.match(voteBoardSource, /setProperty\('--vote-marquee-start'/);
   assert.match(voteBoardSource, /setProperty\('--vote-marquee-end'/);
-  assert.match(voteBoardSource, /marqueeDurationForDimensions\(containerWidth, textWidth\)/);
+  assert.match(voteBoardSource, /marqueeDurationForDimensions\(containerWidth, textWidth, pixelsPerSecond\)/);
   assert.match(appSource, /weekDays\.replaceChildren\(\.\.\.rows\);[\s\S]*configureVoterNamesMarquee\(weekDays\)/);
+});
+
+test('supports a faster schedule-only marquee speed without changing vote-page defaults', () => {
+  assert.equal(VOTER_MARQUEE_PIXELS_PER_SECOND, 7.1875);
+  assert.equal(SCHEDULE_VOTER_MARQUEE_PIXELS_PER_SECOND, 9.34375);
+  assert.equal(marqueeDurationForDimensions(100, 72.5), 24);
+  assert.equal(marqueeTravelDistance(100, 72.5), 172.5);
+  assert.ok(Math.abs(marqueeDurationForDimensions(100, 72.5, SCHEDULE_VOTER_MARQUEE_PIXELS_PER_SECOND)
+    - (172.5 / 9.34375)) < 1e-12);
+  assert.ok(Math.abs(marqueeDurationForDimensions(280, 610, SCHEDULE_VOTER_MARQUEE_PIXELS_PER_SECOND)
+    - (890 / 9.34375)) < 1e-12, 'duration uses full travel distance at the same pixel speed for long names');
 });
 
 const Node = typeof window !== 'undefined' ? window.Node : {

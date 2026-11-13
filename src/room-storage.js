@@ -186,17 +186,38 @@ export function listRooms(database, { now = () => new Date(), currentUserId } = 
 export function getPersonalUpcomingSchedule(database, { currentUserId, now = () => new Date() } = {}) {
   if (!Number.isSafeInteger(currentUserId) || currentUserId < 1) return [];
   const today = getBangkokDate(now);
-  return database.prepare(`
+  const events = database.prepare(`
     SELECT rooms.id AS roomId, rooms.display_number AS displayNumber, rooms.title,
       run_events.event_date AS date
     FROM run_events
     JOIN rooms ON rooms.id = run_events.room_id
-    JOIN votes ON votes.room_id = run_events.room_id
-      AND votes.vote_date = run_events.event_date
-      AND votes.user_id = ?
     WHERE run_events.status = 'scheduled' AND run_events.event_date >= ?
+      AND EXISTS (
+        SELECT 1 FROM votes AS qualifying_votes
+        WHERE qualifying_votes.room_id = rooms.id
+          AND qualifying_votes.user_id = ?
+          AND qualifying_votes.vote_date >= ?
+      )
     ORDER BY run_events.event_date ASC, rooms.display_number ASC, rooms.title ASC, rooms.id ASC
-  `).all(currentUserId, today);
+  `).all(today, currentUserId, today);
+  const voterRows = database.prepare(`
+    SELECT users.id AS userId, users.name
+    FROM room_memberships AS viewer_membership
+    JOIN votes ON votes.room_id = viewer_membership.room_id AND votes.vote_date = ?
+    JOIN users ON users.id = votes.user_id
+    WHERE viewer_membership.room_id = ? AND viewer_membership.user_id = ?
+    ORDER BY users.name_key ASC, users.name ASC, users.id ASC
+  `);
+  return events.map((event) => {
+    const canViewVoters = Boolean(database.prepare(
+      'SELECT 1 FROM room_memberships WHERE room_id = ? AND user_id = ?',
+    ).get(event.roomId, currentUserId));
+    const voters = canViewVoters
+      ? voterRows.all(event.date, event.roomId, currentUserId)
+        .map(({ userId, name }) => ({ name, isCurrentUser: userId === currentUserId }))
+      : [];
+    return { ...event, voters };
+  });
 }
 
 export function updateRoomMetadata(database, { roomId, title, icon, venue, time } = {}) {

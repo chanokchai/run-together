@@ -75,7 +75,7 @@ test('Issue 46 migration preserves old room data without guessing creators and r
   }
 });
 
-test('Issue 46 room API scopes creator flags and exact scheduled-vote pairs to the signed-in viewer', async () => {
+test('Issue 47 room API scopes creator flags and room-wide upcoming schedule to the signed-in viewer', async () => {
   const directory = await mkdtemp(join(process.env.TMPDIR || tmpdir(), 'run-together-issue-46-api-'));
   const server = createServer({ databasePath: join(directory, 'api.sqlite'), env: ENV, now: () => NOW });
   server.listen(0, '127.0.0.1');
@@ -126,10 +126,12 @@ test('Issue 46 room API scopes creator flags and exact scheduled-vote pairs to t
     assert.deepEqual(viewerRooms.upcomingSchedule.map(({ roomId, date }) => [roomId, date]), [
       [viewerCreated.id, '2026-11-02'],
       [otherCreated.id, '2026-11-02'],
-    ], 'summary includes only scheduled dates with this viewer’s exact saved vote and stable room ties');
-    assert.deepEqual(otherRooms.upcomingSchedule.map(({ roomId, date }) => [roomId, date]), [
       [viewerCreated.id, '2026-11-05'],
-    ], 'the other viewer sees only the different exact room/date pair they voted for');
+    ], 'one present vote qualifies every scheduled date in that room, with stable date and room ties');
+    assert.deepEqual(otherRooms.upcomingSchedule.map(({ roomId, date }) => [roomId, date]), [
+      [viewerCreated.id, '2026-11-02'],
+      [viewerCreated.id, '2026-11-05'],
+    ], 'the other viewer receives a separately computed schedule for rooms they have voted in');
     assert.equal(Object.hasOwn(await fetch(`${baseUrl}/api/rooms`).then((response) => response.json()), 'upcomingSchedule'), false,
       'unauthenticated requests do not receive personal data');
   } finally {
