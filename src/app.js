@@ -36,6 +36,7 @@ const dateTimeScript = readFileSync(new URL('./date-time.js', import.meta.url), 
 const runEventsScript = readFileSync(new URL('./run-events.js', import.meta.url), 'utf8');
 const roomContractScript = readFileSync(new URL('./room-contract.js', import.meta.url), 'utf8');
 const roomListScript = readFileSync(new URL('./room-list.js', import.meta.url), 'utf8');
+const profileMenuScript = readFileSync(new URL('./profile-menu.js', import.meta.url), 'utf8');
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (character) => ({
@@ -84,11 +85,29 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       .message { min-height: 1.5rem; margin-top: 1rem; }
       .rooms-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem 1rem; }
       .rooms-toolbar h1 { min-width: 0; margin: 0; overflow-wrap: anywhere; }
-      .rooms-toolbar__account { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .8rem; margin: .4rem 0 0; }
-      .rooms-toolbar__account button, .rooms-toolbar__account .button { width: auto; min-width: 44px; margin: 0; }
+      .profile-menu { position: relative; flex: 0 0 auto; }
+      .profile-menu__trigger { display: inline-flex; box-sizing: border-box; width: auto; min-width: 44px; min-height: 44px; align-items: center; justify-content: center; gap: .55rem; margin: 0; padding: .3rem .65rem .3rem .35rem; border: 1px solid #b8c6d6; border-radius: 999px; background: #fff; color: #14213d; }
+      .profile-menu__trigger:hover, .profile-menu__action:hover { background: #f1f5f9; }
+      .profile-menu__trigger:focus-visible, .profile-menu__action:focus-visible { outline: 3px solid #145da0; outline-offset: 2px; }
+      .profile-menu__avatar { display: inline-flex; box-sizing: border-box; flex: 0 0 2.25rem; width: 2.25rem; height: 2.25rem; align-items: center; justify-content: center; overflow: hidden; border: 1px solid #145da0; border-radius: 50%; background: #e8f1fa; color: #123d63; font-weight: 800; line-height: 1; }
+      .profile-menu__avatar svg { width: 1.25rem; height: 1.25rem; }
+      .profile-menu__trigger-name { display: block; max-width: min(14rem, 28vw); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .profile-menu__chevron { display: inline-flex; width: 1.15rem; height: 1.15rem; align-items: center; justify-content: center; }
+      .profile-menu__chevron svg { width: 1.15rem; height: 1.15rem; }
+      .profile-menu__panel { position: absolute; z-index: 20; top: calc(100% + 10px); right: 0; box-sizing: border-box; width: min(18rem, calc(100vw - 2rem)); max-height: min(32rem, calc(100dvh - 5rem)); overflow: auto; overscroll-behavior: contain; padding: .55rem; border: 1px solid #cbd5e1; border-radius: 14px; background: #fff; color: #14213d; box-shadow: 0 .5rem 1.5rem #14213d30; }
+      .profile-menu__panel[hidden], .profile-menu__status-group[hidden] { display: none; }
+      .profile-menu__identity { display: grid; min-width: 0; gap: .12rem; padding: .65rem .7rem .75rem; }
+      .profile-menu__identity-label, .profile-menu__identity-role { color: #52606d; font-size: .875rem; }
+      .profile-menu__identity-name { min-width: 0; overflow-wrap: anywhere; }
+      .profile-menu__separator { height: 1px; margin: .35rem .45rem; background: #d9e2ec; }
+      .profile-menu__action { display: flex; box-sizing: border-box; width: 100%; min-width: 0; min-height: 48px; align-items: center; gap: .7rem; margin: 0; padding: .55rem .7rem; border: 0; border-radius: .45rem; background: #fff; color: #14213d; font: inherit; font-weight: 600; text-align: left; text-decoration: none; }
+      .profile-menu__action svg { flex: 0 0 1.25rem; width: 1.25rem; height: 1.25rem; }
+      .profile-menu__logout { cursor: pointer; }
+      .profile-menu__status { max-width: 18rem; margin: .4rem 0 0; padding: .45rem .6rem; border: 1px solid #b91c1c; border-radius: .4rem; background: #fff; color: #7f1d1d; font-size: .9rem; font-weight: 600; }
       .room-page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: .5rem; min-width: 0; }
       .room-page-header__identity { flex: 1 1 auto; min-width: 0; }
       .room-page-header__identity h1 { margin-top: 0; overflow-wrap: anywhere; }
+      .room-page-header__actions { display: flex; flex: 0 0 auto; align-items: center; gap: .4rem; }
       .room-page-metadata { max-width: 100%; margin: .15rem 0; font-size: .9rem; line-height: 1.25; overflow-wrap: anywhere; }
       .room-page-header a.button { display: inline-flex; flex: 0 0 auto; width: auto; min-width: 44px; min-height: 44px; align-items: center; justify-content: center; gap: .35rem; margin: 0; padding: .45rem .7rem; background: #e8eef5; color: #14213d; white-space: nowrap; }
       .room-page-header a.button:focus-visible { outline: 3px solid #145da0; outline-offset: 2px; }
@@ -266,6 +285,8 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       @keyframes voter-name-loop { from { transform: translateX(var(--vote-marquee-start, 100%)); } to { transform: translateX(var(--vote-marquee-end, -100%)); } }
       @media (prefers-reduced-motion: reduce) { .vote-card__names-track { animation: none; display: block; white-space: normal; overflow-wrap: anywhere; } .vote-card__names-copy--canonical { display: block; } .upcoming-schedule__voters .vote-card__names-track { position: static; height: auto; max-width: 100%; } }
       @media (max-width: 44rem) {
+        .profile-menu__trigger { width: 44px; height: 44px; padding: .2rem; }
+        .profile-menu__trigger-name, .profile-menu__chevron { display: none; }
         .vote-page-main { padding-inline: .75rem; }
         .rooms-page-main { padding-inline: .65rem; }
         .room-cards { gap: .65rem; }
@@ -417,12 +438,7 @@ const roomListPage = () => page({
   content: `<section id="rooms-content" hidden aria-labelledby="rooms-heading">
     <header class="rooms-toolbar">
       <h1 id="rooms-heading">Choose a room / เลือกห้อง</h1>
-      <div class="rooms-toolbar__account">
-        <span>Signed in as <strong id="rooms-display-name"></strong></span>
-        <a id="rooms-change-pin" class="button" href="/change-pin?returnTo=%2Frooms">Change PIN</a>
-        <a id="rooms-manage-users" class="button" href="/admin?returnTo=%2Frooms" hidden>Manage users</a>
-        <button id="rooms-logout" type="button" class="secondary">Logout</button>
-      </div>
+      <div id="rooms-profile-menu" data-return-to="/rooms"></div>
     </header>
     <section id="upcoming-schedule" class="your-upcoming-schedule" aria-labelledby="upcoming-schedule-heading" hidden>
       <h2 id="upcoming-schedule-heading">Your upcoming schedule</h2>
@@ -463,7 +479,7 @@ const roomListPage = () => page({
       <p id="rooms-message" class="message" role="status" aria-live="polite"></p>
     </section>
   </section>`,
-  script: `import { startRoomListPage } from '/room-list.js?v=issue-47-room-list-2'; startRoomListPage();`,
+  script: `import { startRoomListPage } from '/room-list.js?v=issue-50-profile-menu-1'; startRoomListPage();`,
 });
 
 const changePinPage = (returnTo = '/rooms') => page({
@@ -735,6 +751,8 @@ export function createApp({ databaseReady = false, database, env = process.env, 
   app.get('/room-contract.js', (_request, response) => response.type('application/javascript').send(roomContractScript));
 
   app.get('/room-list.js', (_request, response) => response.type('application/javascript').send(roomListScript));
+
+  app.get('/profile-menu.js', (_request, response) => response.type('application/javascript').send(profileMenuScript));
 
   if (auth) {
     app.get('/rooms', (request, response) => {
@@ -1288,7 +1306,6 @@ export function createApp({ databaseReady = false, database, env = process.env, 
         sendError(response, new AuthError(403, 'ROOM_MEMBERSHIP_REQUIRED', 'Enter this room before opening its board.'));
         return;
       }
-      const displayName = escapeHtml(session.name);
       const currentWeek = getCurrentWeekMonday(now);
       const initialNavigation = requestedRoomNavigation(request.query.date, now);
       const canManageRoom = session.role === 'admin' || room.ownerUserId === session.user_id;
@@ -1297,7 +1314,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
         room.venue ? `at ${room.venue}` : '',
         formatBangkokRoomTime(room.time) ? `on ${formatBangkokRoomTime(room.time)}` : '',
       ].filter(Boolean).join(' ');
-      const roomControls = `${canManageRoom ? '<button id="reset-week" type="button" class="admin-action" hidden>Reset votes</button>' : ''}${session.role === 'admin' ? '<button id="manage-user" type="button" class="admin-action">manage user</button>' : ''}`;
+      const roomControls = `${canManageRoom ? '<button id="reset-week" type="button" class="admin-action" hidden>Reset votes</button>' : ''}`;
       const resetControl = roomControls ? `<div class="actions">${roomControls}</div>` : '';
       response.type('html').send(page({
         title: `Run Together | ${escapeHtml(room.title)}`,
@@ -1309,18 +1326,20 @@ export function createApp({ databaseReady = false, database, env = process.env, 
               <h1 id="room-information-heading"><span id="room-number">Room ${String(room.displayNumber).padStart(2, '0')} : </span><span id="room-heading">${escapeHtml(room.title)}</span></h1>
               <p id="room-information-details" class="room-page-metadata" aria-label="Room venue and Bangkok time"${roomDetails ? '' : ' hidden'}>${escapeHtml(roomDetails)}</p>
             </div>
-            <a id="back-to-rooms" class="button" href="/rooms" aria-label="Back to rooms">
-              <span>Back</span>
-              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M10 3H4v18h6M14 7l5 5-5 5M19 12H8" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></svg>
-            </a>
+            <div class="room-page-header__actions">
+              <a id="back-to-rooms" class="button" href="/rooms" aria-label="Back to rooms">
+                <span>Back</span>
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M10 3H4v18h6M14 7l5 5-5 5M19 12H8" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></svg>
+              </a>
+              <div id="vote-profile-menu" data-return-to="/vote/${room.id}"></div>
+            </div>
           </header>
           <section id="vote-timeline" class="vote-timeline" aria-labelledby="vote-timeline-heading">
             <h2 id="vote-timeline-heading">Vote timeline</h2>
             <p id="vote-timeline-range" class="vote-timeline__range" role="status">Loading vote totals…</p>
             <ol id="vote-timeline-days" class="vote-timeline__days" aria-label="Daily vote totals in chronological order"></ol>
           </section>
-          <div id="vote-page-identity" class="vote-page-identity" aria-label="Signed-in user and selected week">
-            <span><strong id="display-name">${displayName}</strong></span>
+          <div id="vote-page-identity" class="vote-page-identity" aria-label="Selected week">
             <span id="week-heading">Week</span>
           </div>
           <p id="message" class="message" role="status"></p>
@@ -1332,9 +1351,9 @@ export function createApp({ databaseReady = false, database, env = process.env, 
             <button id="next-week" type="button" aria-label="Next week">&gt;&gt;</button>
           </nav>
           ${resetControl}
-          ${session.role === 'admin' ? `<a id="manage-users-link" class="button" href="/admin?returnTo=${encodeURIComponent(`/vote/${room.id}`)}">Manage users</a>` : ''}
         </section>`,
-        script: `import { applyVoteCardPresentation, colorForDay, configureVoterNamesMarquee, createScheduledEffectController, createSocketRepairController, createVoterNamesRegion as buildVoterNamesRegion, createVoteTimelineController, formatDisplayDate, patchVoteDay } from '/vote-board.js?v=issue-47-voter-names-2';
+        script: `import { mountProfileMenu } from '/profile-menu.js?v=issue-50-profile-menu-1';
+          import { applyVoteCardPresentation, colorForDay, configureVoterNamesMarquee, createScheduledEffectController, createSocketRepairController, createVoterNamesRegion as buildVoterNamesRegion, createVoteTimelineController, formatDisplayDate, patchVoteDay } from '/vote-board.js?v=issue-47-voter-names-2';
           import { attachHorizontalSwipe, formatRunEventDate, getDateCardSwipeAction, getDateCardSwipePreview, getRunEventBannerSwipeAction, getRunEventBannerSwipePreview, millisecondsUntilBangkokMidnight, sortRunEventsForPresentation } from '/run-events.js?v=issue-34-beam-1';
           import { formatBangkokRoomTime } from '/date-time.js?v=issue-47-room-time-1';
           let csrfToken = '';
@@ -1359,7 +1378,8 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           const roomApiPrefix = ${JSON.stringify(roomApiPrefix)};
           let weekMonday = initialWeekMonday;
           const protectedContent = document.querySelector('#protected-content');
-          const displayName = document.querySelector('#display-name');
+          const profileRoot = document.querySelector('#vote-profile-menu');
+          let profileMenu;
           const weekHeading = document.querySelector('#week-heading');
           const roomHeading = document.querySelector('#room-heading');
           const roomNumber = document.querySelector('#room-number');
@@ -1371,11 +1391,11 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           const currentWeekButton = document.querySelector('#current-week');
           const nextWeek = document.querySelector('#next-week');
           const resetWeek = document.querySelector('#reset-week');
-          const manageUser = document.querySelector('#manage-user');
+
           const message = document.querySelector('#message');
           const runEvents = document.querySelector('#run-events');
           function roomApiPath(_legacyPath, scopedPath) { return roomApiPrefix + scopedPath; }
-          function guardProtectedContent() { weekLoadSequence += 1; roomMetadataSequence += 1; window.clearTimeout(rolloverTimer); pendingEventDates.clear(); protectedContent.hidden = true; csrfToken = ''; displayName.textContent = ''; weekDays.replaceChildren(); runEvents.replaceChildren(); timelineDays.replaceChildren(); scheduledEffects.sync('banner', []); scheduledEffects.sync('date-card', []); scheduledEffects.sync('timeline', []); runEventHandlers.forEach(({ abort, disposeSwipe }) => { abort.abort(); disposeSwipe?.(); }); runEventHandlers.clear(); runEventElements.clear(); weekState = null; eventsByDate = new Map(); message.textContent = ''; }
+          function guardProtectedContent() { weekLoadSequence += 1; roomMetadataSequence += 1; window.clearTimeout(rolloverTimer); pendingEventDates.clear(); protectedContent.hidden = true; csrfToken = ''; profileMenu?.destroy(); profileMenu = null; weekDays.replaceChildren(); runEvents.replaceChildren(); timelineDays.replaceChildren(); scheduledEffects.sync('banner', []); scheduledEffects.sync('date-card', []); scheduledEffects.sync('timeline', []); runEventHandlers.forEach(({ abort, disposeSwipe }) => { abort.abort(); disposeSwipe?.(); }); runEventHandlers.clear(); runEventElements.clear(); weekState = null; eventsByDate = new Map(); message.textContent = ''; }
           function redirectToLogin() { guardProtectedContent(); location.replace('/'); }
           function exitDeletedRoom() { if (roomUnavailable) return; roomUnavailable = true; guardProtectedContent(); if (socket.connected) socket.emit('room:unsubscribe', { roomId }); location.replace('/rooms'); }
           function handleDeletedRoomResponse(response, result) { if (response.status !== 404 || result?.code !== 'ROOM_NOT_FOUND') return false; exitDeletedRoom(); return true; }
@@ -1896,12 +1916,12 @@ export function createApp({ databaseReady = false, database, env = process.env, 
               scheduleBangkokDayRefresh();
             }, millisecondsUntilBangkokMidnight());
           }
-          async function loadSession() { const currentCheck = ++sessionCheck; guardProtectedContent(); try { const response = await fetch('/api/session', { cache: 'no-store' }); if (currentCheck !== sessionCheck) return; if (!response.ok) { redirectToLogin(); return; } const session = await response.json(); if (currentCheck !== sessionCheck) return; csrfToken = session.csrfToken; isAdmin = session.role === 'admin'; displayName.textContent = session.displayName; protectedContent.hidden = false; await Promise.all([loadWeek(weekMonday), loadTimeline(), refreshRoomMetadata()]); scheduleBangkokDayRefresh(); } catch { if (currentCheck === sessionCheck) redirectToLogin(); } }
+          async function loadSession() { const currentCheck = ++sessionCheck; guardProtectedContent(); try { const response = await fetch('/api/session', { cache: 'no-store' }); if (currentCheck !== sessionCheck) return; if (!response.ok) { redirectToLogin(); return; } const session = await response.json(); if (currentCheck !== sessionCheck) return; csrfToken = session.csrfToken; isAdmin = session.role === 'admin'; profileMenu = mountProfileMenu(profileRoot, { displayName: session.displayName, role: session.role, returnTo: '/vote/' + roomId }); profileMenu.setCsrfToken(csrfToken); protectedContent.hidden = false; await Promise.all([loadWeek(weekMonday), loadTimeline(), refreshRoomMetadata()]); scheduleBangkokDayRefresh(); } catch { if (currentCheck === sessionCheck) redirectToLogin(); } }
           previousWeek.addEventListener('click', () => loadWeek(previousWeek.dataset.monday));
           currentWeekButton.addEventListener('click', () => loadWeek(currentWeekMonday));
           nextWeek.addEventListener('click', () => { if (!nextWeek.disabled) loadWeek(nextWeek.dataset.monday); });
           resetWeek?.addEventListener('click', resetSelectedWeek);
-          manageUser?.addEventListener('click', () => { location.href = document.querySelector('#manage-users-link')?.getAttribute('href') || '/admin?returnTo=' + encodeURIComponent('/vote/' + roomId); });
+
 
           const socket = window.io({ transports: ['websocket'] });
           const socketRepair = createSocketRepairController({ loadWeek: () => loadWeek(weekMonday), patchDay });
@@ -1928,6 +1948,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           socket.on('auth:revoked', redirectToLogin);
           socket.on('connect_error', (error) => { if (error.message === 'unauthenticated') redirectToLogin(); });
           window.addEventListener('pageshow', loadSession);
+          window.addEventListener('pagehide', guardProtectedContent);
           loadSession();`,
       }));
     });

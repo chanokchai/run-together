@@ -875,8 +875,9 @@ test('Issue 47 schedule voters, reconnect repair, time picker, and responsive co
   assert.equal(await waitFor(client, `location.pathname === '/rooms'`), true);
   assert.equal(await waitFor(client, `Boolean(document.querySelector('#rooms-content') && !document.querySelector('#rooms-content').hidden)`), true,
     'the room page completes its authenticated load after navigation');
-  assert.equal(await evaluate(client, 'Boolean(document.querySelector("#rooms-change-pin") && document.querySelector("#rooms-logout"))'), true,
-    'Change PIN and Logout remain available on the room page');
+  await click(client, '#rooms-profile-menu .profile-menu__trigger');
+  assert.deepEqual(await evaluate(client, '[...document.querySelectorAll("#rooms-profile-menu [role=menuitem]")].map((item) => item.textContent.trim())'),
+    ['Change PIN', 'Logout'], 'Change PIN and Logout remain available inside the member profile menu');
 
   await client.send('Emulation.setDeviceMetricsOverride', { width: 160, height: 844, deviceScaleFactor: 2, mobile: true });
   const pickerPresentation = await evaluate(client, `(() => {

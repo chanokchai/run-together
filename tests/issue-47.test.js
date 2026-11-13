@@ -180,15 +180,16 @@ test('Issue 47 vote header, Back/account controls, and room-create time picker a
     'missing metadata produces no labels or empty detail lines');
   assert.match(page, /id="back-to-rooms"[^>]*aria-label="[^"]*Back[^"]*"/, 'Back is included in the accessible name');
   assert.match(page, />Back<\/span>/, 'Back text appears before the existing exit icon');
-  assert.doesNotMatch(page, /id="change-pin"|id="logout"/, 'account controls are absent from the vote page');
+  assert.match(page, /id="vote-profile-menu"/, 'account actions are grouped in the profile-menu mount point');
+  assert.doesNotMatch(page, /id="display-name"|id="manage-user"|id="manage-users-link"/, 'standalone identity and Manage users controls are absent from the vote page');
 
   updateRoomMetadata(server.database, { roomId: room.id, venue: 'Riverside', time: '18:40' });
   page = await fetch(roomUrl, { headers: { cookie: viewer.cookie } }).then((response) => response.text());
   assert.match(page, /at Riverside on 6:40PM/, 'venue and time use the compact 12-hour Bangkok display');
 
   const roomsPage = await fetch(`${baseUrl}/rooms`, { headers: { cookie: viewer.cookie } }).then((response) => response.text());
-  assert.match(roomsPage, /id="rooms-change-pin"/, 'Change PIN remains available on the room page');
-  assert.match(roomsPage, /id="rooms-logout"/, 'Logout remains available on the room page');
+  assert.match(roomsPage, /id="rooms-profile-menu"[^>]+data-return-to="\/rooms"/, 'account actions are grouped in the Rooms profile-menu mount point');
+  assert.doesNotMatch(roomsPage, /rooms-change-pin|rooms-logout|rooms-manage-users|rooms-toolbar__account/, 'standalone room-page account controls are removed');
   assert.match(roomsPage, /id="create-room-time-hour"/, 'Create room has a non-typing hour picker');
   assert.match(roomsPage, /id="create-room-time-minute"/, 'Create room has a non-typing minute picker');
   assert.match(roomsPage, /id="create-room-time-period"/, 'Create room has a non-typing AM/PM picker');
