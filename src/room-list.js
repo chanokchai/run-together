@@ -2,6 +2,7 @@ import { DEFAULT_ROOM_ICON, ROOM_ICONS } from './room-contract.js?v=issue-43-ico
 import { configureVoterNamesMarquee, createScheduledEffectController, createVoterNamesRegion, SCHEDULE_VOTER_MARQUEE_PIXELS_PER_SECOND } from './vote-board.js?v=issue-47-schedule-names-2';
 import { millisecondsUntilBangkokMidnight } from './run-events.js';
 import { addDays, getBangkokDate, parseIsoDate } from './calendar.js?v=issue-43-calendar-1';
+import { mountProfileMenu } from './profile-menu.js?v=issue-50-profile-menu-3';
 
 const ICONS = Object.freeze({
   running: { glyph: '🏃', label: 'Running' },
@@ -448,10 +449,7 @@ export function startRoomListPage() {
   const emptyState = document.querySelector('#rooms-empty');
   const noMatches = document.querySelector('#rooms-no-matches');
   const filters = [...document.querySelectorAll('#room-filters input[type="checkbox"]')];
-  const displayName = document.querySelector('#rooms-display-name');
-  const manageUsers = document.querySelector('#rooms-manage-users');
-  const changePin = document.querySelector('#rooms-change-pin');
-  const logout = document.querySelector('#rooms-logout');
+  const profileRoot = document.querySelector('#rooms-profile-menu');
   if (!content || !cards || !createForm || !message || !emptyState) return;
 
   createIconPicker(createForm, 'create-icon-picker', DEFAULT_ROOM_ICON);
@@ -462,6 +460,7 @@ export function startRoomListPage() {
   let currentRooms = [];
   const deletedRoomIds = new Set();
   let csrfToken = '';
+  let profileMenu;
   let sessionCheck = 0;
   let refreshSequence = 0;
   let rolloverTimer = null;
@@ -478,6 +477,8 @@ export function startRoomListPage() {
     window.clearTimeout(rolloverTimer);
     content.hidden = true;
     csrfToken = '';
+    profileMenu?.destroy();
+    profileMenu = null;
     cards.replaceChildren();
     cardNodes.clear();
     scheduledEffects.sync('room-card', []);
@@ -835,8 +836,13 @@ export function startRoomListPage() {
       const session = await response.json();
       if (currentCheck !== sessionCheck) return;
       csrfToken = session.csrfToken;
-      displayName.textContent = session.displayName;
-      manageUsers.hidden = session.role !== 'admin';
+      profileMenu?.destroy();
+      profileMenu = mountProfileMenu(profileRoot, {
+        displayName: session.displayName,
+        role: session.role,
+        returnTo: '/rooms',
+      });
+      profileMenu.setCsrfToken(csrfToken);
       content.hidden = false;
       await refreshRooms();
       scheduleBangkokDayRefresh();
@@ -1022,15 +1028,6 @@ export function startRoomListPage() {
     }
   });
 
-  logout?.addEventListener('click', async () => {
-    try {
-      const response = await fetch('/api/auth/logout', { method: 'POST', headers: { 'x-csrf-token': csrfToken } });
-      if (response.ok) location.replace('/');
-      else announce('Could not log out. / ออกจากระบบไม่สำเร็จ');
-    } catch {
-      announce('Could not log out. / ออกจากระบบไม่สำเร็จ');
-    }
-  });
   const socket = window.io({ transports: ['websocket'] });
   socket.on('rooms:summary-changed', () => { void refreshRooms(); });
   socket.on('rooms:summary-state', () => { void refreshRooms(); });
@@ -1042,7 +1039,12 @@ export function startRoomListPage() {
   socket.on('auth:revoked', redirectToLogin);
   socket.on('connect_error', (error) => { if (error.message === 'unauthenticated') redirectToLogin(); });
   window.addEventListener('pageshow', loadSession);
-  window.addEventListener('pagehide', () => window.clearTimeout(rolloverTimer));
+  window.addEventListener('pagehide', () => {
+    window.clearTimeout(rolloverTimer);
+    content.hidden = true;
+    profileMenu?.destroy();
+    profileMenu = null;
+  });
   loadSession();
 }
 

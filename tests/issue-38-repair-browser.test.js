@@ -214,8 +214,15 @@ test('Issue 38 room-list cards stay readable, scrollable, editable, keyed, and s
     client = await makeClient(port, fixture.baseUrl, owner.cookie, { width: 1280, height: 1000, prelude: captureDayRollover });
     await client.send('Page.navigate', { url: `${fixture.baseUrl}/rooms` });
     assert.equal(await waitFor(client, `Boolean(document.querySelector('#rooms-content') && !document.querySelector('#rooms-content').hidden)`), true, 'loads the authenticated room-list page');
-    const manageVisibility = await evaluate(client, `(() => { const button = document.querySelector('#rooms-manage-users'); const box = button.getBoundingClientRect(); return { hidden: button.hidden, display: getComputedStyle(button).display, width: box.width, height: box.height }; })()`);
-    assert.deepEqual(manageVisibility, { hidden: true, display: 'none', width: 0, height: 0 }, 'ordinary room owners do not see Manage users after CSS cascade');
+    await clickSelector(client, '#rooms-profile-menu .profile-menu__trigger');
+    const manageVisibility = await evaluate(client, `(() => ({
+      actions: [...document.querySelectorAll('#rooms-profile-menu [role=menuitem]')].map((item) => item.textContent.trim()),
+      hasManageRow: Boolean(document.querySelector('#rooms-profile-menu a[href^="/admin"]')),
+      standalone: Boolean(document.querySelector('#rooms-manage-users, #rooms-change-pin, #rooms-logout')),
+    }))()`);
+    assert.deepEqual(manageVisibility, { actions: ['Change PIN', 'Logout'], hasManageRow: false, standalone: false },
+      'ordinary room owners do not receive an admin action or separate account controls');
+    await clickSelector(client, '#rooms-profile-menu .profile-menu__trigger');
     assert.equal((await fetch(`${fixture.baseUrl}/api/admin/users`, { headers: { cookie: owner.cookie } })).status, 403, 'a room owner still cannot use application-wide user management');
 
     const longTitle = '🏃'.repeat(30);
@@ -465,12 +472,16 @@ test('Issue 38 room-list cards stay readable, scrollable, editable, keyed, and s
     memberClient = await makeClient(port, fixture.baseUrl, member.cookie, { width: 1280, height: 900 });
     await memberClient.send('Page.navigate', { url: `${fixture.baseUrl}/rooms` });
     assert.equal(await waitFor(memberClient, `Boolean(document.querySelector('#rooms-content') && !document.querySelector('#rooms-content').hidden && document.querySelector('.room-card[data-room-id="${stressCard.id}"]'))`), true, 'loads the room list for a real nonowner member');
-    const nonownerState = await evaluate(memberClient, `(() => { const card = document.querySelector('.room-card[data-room-id="${stressCard.id}"]'); const edit = card.querySelector('.room-card__edit'); const manage = document.querySelector('#rooms-manage-users'); return { editHidden: edit.hidden, editDisplay: getComputedStyle(edit).display, manageHidden: manage.hidden, manageDisplay: getComputedStyle(manage).display, manageRect: manage.getBoundingClientRect().toJSON() }; })()`);
+    const nonownerState = await evaluate(memberClient, `(() => { const card = document.querySelector('.room-card[data-room-id="${stressCard.id}"]'); const edit = card.querySelector('.room-card__edit'); return { editHidden: edit.hidden, editDisplay: getComputedStyle(edit).display }; })()`);
     assert.equal(nonownerState.editHidden, true);
     assert.equal(nonownerState.editDisplay, 'none', 'hides room editing from a real nonowner in rendered CSS');
-    assert.equal(nonownerState.manageHidden, true);
-    assert.equal(nonownerState.manageDisplay, 'none', 'hides app-user-management from an ordinary member in rendered CSS');
-    assert.equal(nonownerState.manageRect.width, 0);
+    await clickSelector(memberClient, '#rooms-profile-menu .profile-menu__trigger');
+    const nonownerMenu = await evaluate(memberClient, `({
+      actions: [...document.querySelectorAll('#rooms-profile-menu [role=menuitem]')].map((item) => item.textContent.trim()),
+      hasManageUsers: Boolean(document.querySelector('#rooms-profile-menu a[href^="/admin"]')),
+    })`);
+    assert.deepEqual(nonownerMenu, { actions: ['Change PIN', 'Logout'], hasManageUsers: false },
+      'keeps ordinary account actions while withholding application-admin access');
     assert.equal((await fetch(`${fixture.baseUrl}/api/admin/users`, { headers: { cookie: member.cookie } })).status, 403, 'keeps server-side application-admin protection for a room nonowner');
 
     const pastSummaryBefore = await evaluate(client, `document.querySelector('.room-card[data-room-id="${pastOnly.id}"] .room-card__dates--scheduled .room-card__date-values').textContent`);
@@ -489,7 +500,7 @@ test('Issue 38 room-list cards stay readable, scrollable, editable, keyed, and s
   }
 });
 
-test('Issue 38 board metadata repairs on reconnect/pageshow and both admin paths preserve safe room return', async (t) => {
+test('Issue 38 board metadata repairs on reconnect/pageshow and profile-menu admin access preserves safe room return', async (t) => {
   const fixture = await createFixture();
   const owner = await register(fixture.baseUrl, 'Issue 38 Board Owner');
   assert.equal(owner.response.status, 201);
@@ -553,22 +564,27 @@ test('Issue 38 board metadata repairs on reconnect/pageshow and both admin paths
     await evaluate(client, "dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }))");
     assert.equal(await waitFor(client, `window.__roomMetadataFetchCount > ${fetchCountBeforeBfcache} && document.querySelector('#room-heading')?.textContent === 'Newer live title'`), true, 'refreshes metadata on a BFCache-style persisted pageshow');
 
-    await clickSelector(client, '#manage-user');
-    assert.equal(await waitFor(client, `location.pathname === '/admin' && document.querySelector('#admin-return')`), true, 'opens Manage users from the original board button');
-    assert.equal(await evaluate(client, `document.querySelector('#admin-return').getAttribute('href')`), `/vote/${room.id}`, 'the primary manage user button returns to the selected room');
+    await clickSelector(client, '#vote-profile-menu .profile-menu__trigger');
+    assert.equal(await evaluate(client, `document.querySelectorAll('#vote-profile-menu a[href^="/admin"]').length`), 1,
+      'the shared profile menu provides one admin-only Manage users action');
+    assert.equal(await evaluate(client, `document.querySelector('#vote-profile-menu a[href^="/admin"]').getAttribute('href')`),
+      `/admin?returnTo=${encodeURIComponent(`/vote/${room.id}`)}`, 'Manage users keeps the selected room as its safe return');
+    await evaluate(client, 'document.querySelector("#vote-profile-menu a[href^=\\\"/admin\\\"]").click()');
+    assert.equal(await waitFor(client, `location.pathname === '/admin' && document.querySelector('#admin-return')`), true, 'opens Manage users from the profile menu');
+    assert.equal(await evaluate(client, `document.querySelector('#admin-return').getAttribute('href')`), `/vote/${room.id}`, 'the profile-menu action returns to the selected room');
     await clickSelector(client, '#admin-return');
     assert.equal(await waitFor(client, `location.pathname === '/vote/${room.id}' && document.querySelector('#room-heading')`), true, 'returns from the primary Manage users route to the same room');
-    assert.equal(await evaluate(client, `document.querySelector('#manage-users-link').getAttribute('href')`), `/admin?returnTo=${encodeURIComponent(`/vote/${room.id}`)}`, 'keeps the secondary link on the same safe room context');
-    await evaluate(client, "document.querySelector('#manage-users-link').click()");
-    const secondaryAdminReady = await waitFor(client, `location.pathname === '/admin' && document.querySelector('#admin-return')?.getAttribute('href') === '/vote/${room.id}'`);
-    if (!secondaryAdminReady) t.diagnostic(JSON.stringify(await evaluate(client, `({ path: location.pathname, href: location.href, pageTitle: document.title, returnTo: document.querySelector('#admin-return')?.getAttribute('href'), boardLink: document.querySelector('#manage-users-link')?.getAttribute('href') })`)));
-    assert.equal(secondaryAdminReady, true, 'the secondary Manage users link returns to the selected room too');
 
     await client.send('Page.navigate', { url: `${fixture.baseUrl}/rooms` });
-    assert.equal(await waitFor(client, `document.querySelector('#rooms-content') && !document.querySelector('#rooms-content').hidden && document.querySelector('#rooms-manage-users')`), true, 'loads the admin room list without a selected-room context');
-    const adminListControl = await evaluate(client, `(() => { const link = document.querySelector('#rooms-manage-users'); return { hidden: link.hidden, display: getComputedStyle(link).display, href: link.getAttribute('href') }; })()`);
-    assert.deepEqual(adminListControl, { hidden: false, display: 'block', href: '/admin?returnTo=%2Frooms' }, 'shows the Manage users control to an application admin with the safe rooms fallback');
-    await clickSelector(client, '#rooms-manage-users');
+    assert.equal(await waitFor(client, `document.querySelector('#rooms-content') && !document.querySelector('#rooms-content').hidden && document.querySelector('#rooms-profile-menu .profile-menu__trigger')`), true, 'loads the admin room list without a selected-room context');
+    await clickSelector(client, '#rooms-profile-menu .profile-menu__trigger');
+    const adminListControl = await evaluate(client, `(() => ({
+      actions: [...document.querySelectorAll('#rooms-profile-menu [role=menuitem]')].map((item) => item.textContent.trim()),
+      href: document.querySelector('#rooms-profile-menu a[href^="/admin"]')?.getAttribute('href'),
+    }))()`);
+    assert.deepEqual(adminListControl, { actions: ['Change PIN', 'Manage users', 'Logout'], href: '/admin?returnTo=%2Frooms' },
+      'shows the single Manage users menu action with the safe Rooms return');
+    await evaluate(client, 'document.querySelector("#rooms-profile-menu a[href^=\\\"/admin\\\"]").click()');
     assert.equal(await waitFor(client, `location.pathname === '/admin' && document.querySelector('#admin-return')?.getAttribute('href') === '/rooms'`), true, 'the no-room admin path returns to the rooms list');
   } finally {
     client?.close();

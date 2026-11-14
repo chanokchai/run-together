@@ -77,7 +77,7 @@ test('Issue 21 moves PIN change behind a protected dedicated page', async () => 
   });
 });
 
-test('Issue 21 gives administrators ordered blue reset and manage-user actions only', async () => {
+test('Issue 21 keeps reset votes as an admin page action and moves Manage users into the profile menu', async () => {
   await withServer(async (baseUrl) => {
     const member = await register(baseUrl, 'Issue 21 Member');
     const memberPage = await fetch(`${baseUrl}/vote/${LEGACY_ROOM_ID}`, { headers: { cookie: cookieFrom(member) } });
@@ -93,12 +93,12 @@ test('Issue 21 gives administrators ordered blue reset and manage-user actions o
     assert.doesNotMatch(adminBody, /id="pin-form"/);
     assert.doesNotMatch(adminBody, /name="currentPin"/);
     assert.ok(resetIndex >= 0);
-    assert.ok(manageIndex > resetIndex);
-    assert.match(adminBody, /<button id="manage-user"[^>]*>manage user<\/button>/);
-    assert.match(adminBody, /id="manage-user"[^>]+class="admin-action"/);
+    assert.equal(manageIndex, -1, 'the old standalone Manage users action is removed');
+    assert.match(adminBody, /id="vote-profile-menu"/);
+    assert.match(adminBody, /mountProfileMenu/);
     assert.match(adminBody, /id="reset-week"[^>]+class="admin-action"/);
     assert.match(adminBody, /\.admin-action\s*\{\s*background:\s*#1769aa;/);
-    assert.match(adminBody, /manageUser\??\.addEventListener\('click'/);
-    assert.match(adminBody, /location\.href = document\.querySelector\('#manage-users-link'\)\?\.getAttribute\('href'\) \|\| '\/admin\?returnTo='/);
+    const profileMenu = await fetch(`${baseUrl}/profile-menu.js?v=issue-50-profile-menu-3`).then((response) => response.text());
+    assert.match(profileMenu, /if \(role === 'admin'\)\s*\{\s*panel\.append\(createLink\('Manage users'/);
   });
 });

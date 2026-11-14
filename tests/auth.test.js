@@ -115,7 +115,9 @@ test('registration immediately authenticates and session response is safe', asyn
     assert.equal('rawToken' in session, false);
     const votePage = await fetch(`${baseUrl}/vote/${LEGACY_ROOM_ID}`, { headers: { cookie } });
     assert.equal(votePage.status, 200);
-    assert.match(await votePage.text(), /Runner One/);
+    const votePageHtml = await votePage.text();
+    assert.match(votePageHtml, /id="vote-profile-menu"/);
+    assert.doesNotMatch(votePageHtml, /Runner One/, 'the authenticated display name is rendered after session verification, not in protected HTML');
   });
 });
 
