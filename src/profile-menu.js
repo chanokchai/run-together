@@ -138,12 +138,19 @@ export function mountProfileMenu(root, { displayName, role, returnTo }) {
     const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
     const availableHeight = Math.max(0, Math.floor(viewportHeight - trigger.getBoundingClientRect().bottom - 26));
     panel.style.maxHeight = `${Math.min(512, availableHeight)}px`;
+    const viewportWidth = document.documentElement.clientWidth;
+    const triggerBounds = trigger.getBoundingClientRect();
+    const rootBounds = root.getBoundingClientRect();
+    const panelWidth = panel.getBoundingClientRect().width;
+    const panelLeft = Math.max(8, Math.min(triggerBounds.right - panelWidth, viewportWidth - panelWidth - 8));
+    panel.style.left = `${panelLeft - rootBounds.left}px`;
+    panel.style.right = 'auto';
   };
   const setOpen = (open, focus = false) => {
     if (destroyed) return;
-    if (open) updatePanelConstraint();
     isOpen = open;
     panel.hidden = !open;
+    if (open) updatePanelConstraint();
     trigger.setAttribute('aria-expanded', String(open));
     if (open && focus) (menuItems()[0] ?? trigger).focus();
   };

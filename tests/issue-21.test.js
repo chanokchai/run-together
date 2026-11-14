@@ -98,7 +98,7 @@ test('Issue 21 keeps reset votes as an admin page action and moves Manage users 
     assert.match(adminBody, /mountProfileMenu/);
     assert.match(adminBody, /id="reset-week"[^>]+class="admin-action"/);
     assert.match(adminBody, /\.admin-action\s*\{\s*background:\s*#1769aa;/);
-    const profileMenu = await fetch(`${baseUrl}/profile-menu.js?v=issue-50-profile-menu-1`).then((response) => response.text());
+    const profileMenu = await fetch(`${baseUrl}/profile-menu.js?v=issue-50-profile-menu-2`).then((response) => response.text());
     assert.match(profileMenu, /if \(role === 'admin'\)\s*\{\s*panel\.append\(createLink\('Manage users'/);
   });
 });

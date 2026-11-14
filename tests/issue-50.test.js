@@ -38,7 +38,7 @@ async function startFixture() {
 test('Issue 50 serves the versioned shared profile-menu module', async (t) => {
   const fixture = await startFixture();
   t.after(() => fixture.close());
-  const response = await fetch(`${fixture.baseUrl}/profile-menu.js?v=issue-50-profile-menu-1`);
+  const response = await fetch(`${fixture.baseUrl}/profile-menu.js?v=issue-50-profile-menu-2`);
   assert.equal(response.status, 200);
   assert.match(response.headers.get('content-type') ?? '', /javascript/);
   assert.match(await response.text(), /export function mountProfileMenu/);
@@ -52,7 +52,7 @@ test('Issue 50 places one shared account menu on Rooms and preserves room-list a
   assert.equal(response.status, 200);
   const html = await response.text();
   assert.match(html, /id="rooms-profile-menu"[^>]+data-return-to="\/rooms"/);
-  assert.match(html, /room-list\.js\?v=issue-50-profile-menu-1/);
+  assert.match(html, /room-list\.js\?v=issue-50-profile-menu-2/);
   assert.doesNotMatch(html, /rooms-change-pin|rooms-manage-users|rooms-logout|rooms-display-name|rooms-toolbar__account/);
   assert.match(html, /id="rooms-heading"/);
   assert.match(html, /id="room-cards"/);
@@ -72,7 +72,7 @@ test('Issue 50 puts the shared profile menu after Back and keeps room and week c
   const menuIndex = html.indexOf('id="vote-profile-menu"');
   assert.ok(backIndex >= 0 && menuIndex > backIndex, 'Back precedes the profile trigger in the header actions');
   assert.match(html, /id="vote-profile-menu"[^>]+data-return-to="\/vote\/[0-9a-f-]+"/);
-  assert.match(html, /profile-menu\.js\?v=issue-50-profile-menu-1/);
+  assert.match(html, /profile-menu\.js\?v=issue-50-profile-menu-2/);
   assert.doesNotMatch(html, /id="display-name"|id="manage-users-link"|id="manage-user"|vote-page-identity[^>]*>\s*<span>/);
   assert.match(html, /id="room-information-heading"/);
   assert.match(html, /id="room-information-details"/);

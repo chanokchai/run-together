@@ -479,7 +479,7 @@ const roomListPage = () => page({
       <p id="rooms-message" class="message" role="status" aria-live="polite"></p>
     </section>
   </section>`,
-  script: `import { startRoomListPage } from '/room-list.js?v=issue-50-profile-menu-1'; startRoomListPage();`,
+  script: `import { startRoomListPage } from '/room-list.js?v=issue-50-profile-menu-2'; startRoomListPage();`,
 });
 
 const changePinPage = (returnTo = '/rooms') => page({
@@ -1352,7 +1352,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           </nav>
           ${resetControl}
         </section>`,
-        script: `import { mountProfileMenu } from '/profile-menu.js?v=issue-50-profile-menu-1';
+        script: `import { mountProfileMenu } from '/profile-menu.js?v=issue-50-profile-menu-2';
           import { applyVoteCardPresentation, colorForDay, configureVoterNamesMarquee, createScheduledEffectController, createSocketRepairController, createVoterNamesRegion as buildVoterNamesRegion, createVoteTimelineController, formatDisplayDate, patchVoteDay } from '/vote-board.js?v=issue-47-voter-names-2';
           import { attachHorizontalSwipe, formatRunEventDate, getDateCardSwipeAction, getDateCardSwipePreview, getRunEventBannerSwipeAction, getRunEventBannerSwipePreview, millisecondsUntilBangkokMidnight, sortRunEventsForPresentation } from '/run-events.js?v=issue-34-beam-1';
           import { formatBangkokRoomTime } from '/date-time.js?v=issue-47-room-time-1';

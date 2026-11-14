@@ -2,7 +2,7 @@ import { DEFAULT_ROOM_ICON, ROOM_ICONS } from './room-contract.js?v=issue-43-ico
 import { configureVoterNamesMarquee, createScheduledEffectController, createVoterNamesRegion, SCHEDULE_VOTER_MARQUEE_PIXELS_PER_SECOND } from './vote-board.js?v=issue-47-schedule-names-2';
 import { millisecondsUntilBangkokMidnight } from './run-events.js';
 import { addDays, getBangkokDate, parseIsoDate } from './calendar.js?v=issue-43-calendar-1';
-import { mountProfileMenu } from './profile-menu.js?v=issue-50-profile-menu-1';
+import { mountProfileMenu } from './profile-menu.js?v=issue-50-profile-menu-2';
 
 const ICONS = Object.freeze({
   running: { glyph: '🏃', label: 'Running' },

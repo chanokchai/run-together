@@ -305,6 +305,29 @@ test('Issue 50 profile menu works for admin and member in real Chromium', async 
   await evaluate(client, "document.querySelector('#admin-return').click()");
   assert.equal(await waitFor(client, `location.pathname === '/rooms' && Boolean(document.querySelector('#rooms-content') && !document.querySelector('#rooms-content').hidden)`), true);
 
+  await client.send('Emulation.setDeviceMetricsOverride', { width: 320, height: 844, deviceScaleFactor: 1, mobile: true });
+  const narrowRooms = await evaluate(client, `(() => ({
+    viewport: document.documentElement.clientWidth,
+    scrollWidth: document.documentElement.scrollWidth,
+    nameDisplay: getComputedStyle(document.querySelector('#rooms-profile-menu .profile-menu__trigger-name')).display,
+  }))()`);
+  assert.equal(narrowRooms.viewport, 320);
+  assert.ok(narrowRooms.scrollWidth <= 320, 'the narrow Rooms page has no horizontal overflow');
+  assert.equal(narrowRooms.nameDisplay, 'none', 'the Rooms trigger is avatar-only at 320 CSS pixels');
+  await evaluate(client, "document.querySelector('#rooms-profile-menu .profile-menu__trigger').click()");
+  const narrowRoomsPanel = await evaluate(client, `(() => {
+    const panel = document.querySelector('#rooms-profile-menu [role=menu]');
+    const box = panel.getBoundingClientRect();
+    const actions = [...panel.querySelectorAll('[role=menuitem]')].map((item) => item.getBoundingClientRect());
+    return { left: box.left, right: box.right, viewport: innerWidth, actions: actions.map((item) => ({ left: item.left, right: item.right, bottom: item.bottom, height: item.height })) };
+  })()`);
+  assert.ok(narrowRoomsPanel.left >= 0 && narrowRoomsPanel.right <= narrowRoomsPanel.viewport,
+    `the Rooms menu stays within the narrow viewport: ${JSON.stringify(narrowRoomsPanel)}`);
+  assert.equal(narrowRoomsPanel.actions.every((item) => item.left >= 0 && item.right <= narrowRoomsPanel.viewport && item.height >= 48 && item.bottom <= 844), true,
+    'every admin action remains visible and reachable in the narrow Rooms menu');
+  await evaluate(client, "document.querySelector('#rooms-profile-menu .profile-menu__trigger').click()");
+  await client.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 960, deviceScaleFactor: 1, mobile: false });
+
   await evaluate(client, `document.querySelector('.room-card[data-room-id="${room.id}"] .room-card__entry').click()`);
   assert.equal(await waitFor(client, `location.pathname === '/vote/${room.id}' && Boolean(document.querySelector('#protected-content') && !document.querySelector('#protected-content').hidden)`), true,
     'a real room-card action enters the voting page');
@@ -415,6 +438,8 @@ test('Issue 50 profile menu works for admin and member in real Chromium', async 
   await evaluate(client, 'window.fetch = window.__originalFetch');
   await client.send('Page.navigate', { url: `${fixture.baseUrl}/rooms` });
   assert.equal(await waitFor(client, `location.pathname === '/rooms' && Boolean(document.querySelector('#rooms-content') && !document.querySelector('#rooms-content').hidden)`), true);
+  assert.equal(await waitFor(client, `Boolean(document.querySelector('.room-card[data-room-id="${room.id}"] .room-card__entry'))`), true,
+    'the fixture room is ready before the next protected browser action');
   await evaluate(client, `document.querySelector('.room-card[data-room-id="${room.id}"] .room-card__entry').click()`);
   assert.equal(await waitFor(client, `location.pathname === '/vote/${room.id}' && Boolean(document.querySelector('#protected-content') && !document.querySelector('#protected-content').hidden)`), true);
   await evaluate(client, "document.querySelector('#vote-profile-menu .profile-menu__trigger').click()");
