@@ -247,7 +247,8 @@ test('Issue 50 profile menu works for admin and member in real Chromium', async 
       expanded: trigger.getAttribute('aria-expanded'),
       controls: trigger.getAttribute('aria-controls'),
       panelId: panel.id,
-      identity: root.querySelector('.profile-menu__identity').textContent.replace(/\\s+/g, ' ').trim(),
+      identityAvatar: Boolean(root.querySelector('.profile-menu__identity .profile-menu__avatar')),
+      identity: root.querySelector('.profile-menu__identity-copy').textContent.replace(/\\s+/g, ' ').trim(),
       actions: [...panel.querySelectorAll('[role=menuitem]')].map((item) => item.textContent.trim()),
       pinHref: panel.querySelector('a[href^="/change-pin"]')?.getAttribute('href'),
       adminHref: panel.querySelector('a[href^="/admin"]')?.getAttribute('href'),
@@ -310,10 +311,27 @@ test('Issue 50 profile menu works for admin and member in real Chromium', async 
     viewport: document.documentElement.clientWidth,
     scrollWidth: document.documentElement.scrollWidth,
     nameDisplay: getComputedStyle(document.querySelector('#rooms-profile-menu .profile-menu__trigger-name')).display,
+    toolbarRight: document.querySelector('.rooms-toolbar').getBoundingClientRect().right,
+    triggerRight: document.querySelector('#rooms-profile-menu .profile-menu__trigger').getBoundingClientRect().right,
   }))()`);
   assert.equal(narrowRooms.viewport, 320);
   assert.ok(narrowRooms.scrollWidth <= 320, 'the narrow Rooms page has no horizontal overflow');
   assert.equal(narrowRooms.nameDisplay, 'none', 'the Rooms trigger is avatar-only at 320 CSS pixels');
+  assert.ok(narrowRooms.toolbarRight - narrowRooms.triggerRight <= 1,
+    `the Rooms profile trigger stays at the top right when the heading wraps: ${JSON.stringify(narrowRooms)}`);
+  assert.equal(adminMenu.identityAvatar, true, 'the open identity block includes the specified avatar');
+  for (const width of [705, 704]) {
+    await client.send('Emulation.setDeviceMetricsOverride', { width, height: 844, deviceScaleFactor: 1, mobile: width <= 704 });
+    const toolbarAlignment = await evaluate(client, `(() => ({
+      viewport: innerWidth,
+      toolbarRight: document.querySelector('.rooms-toolbar').getBoundingClientRect().right,
+      triggerRight: document.querySelector('#rooms-profile-menu .profile-menu__trigger').getBoundingClientRect().right,
+    }))()`);
+    assert.equal(toolbarAlignment.viewport, width);
+    assert.ok(toolbarAlignment.toolbarRight - toolbarAlignment.triggerRight <= 1,
+      `the Rooms trigger stays right-aligned at ${width}px: ${JSON.stringify(toolbarAlignment)}`);
+  }
+  await client.send('Emulation.setDeviceMetricsOverride', { width: 320, height: 844, deviceScaleFactor: 1, mobile: true });
   await evaluate(client, "document.querySelector('#rooms-profile-menu .profile-menu__trigger').click()");
   const narrowRoomsPanel = await evaluate(client, `(() => {
     const panel = document.querySelector('#rooms-profile-menu [role=menu]');
@@ -369,11 +387,13 @@ test('Issue 50 profile menu works for admin and member in real Chromium', async 
       actions: [...panel.querySelectorAll('[role=menuitem]')].map((item) => item.textContent.trim()),
       pinHref: panel.querySelector('a[href^="/change-pin"]')?.getAttribute('href'),
       adminHref: panel.querySelector('a[href^="/admin"]')?.getAttribute('href'),
+      identityAvatar: Boolean(root.querySelector('.profile-menu__identity .profile-menu__avatar')),
     };
   })()`);
   assert.deepEqual(adminMenu.actions, ['Change PIN', 'Manage users', 'Logout']);
   assert.equal(adminMenu.pinHref, `/change-pin?returnTo=${encodeURIComponent(`/vote/${room.id}`)}`);
   assert.equal(adminMenu.adminHref, `/admin?returnTo=${encodeURIComponent(`/vote/${room.id}`)}`);
+  assert.equal(adminMenu.identityAvatar, true, 'the voting-page identity block includes the specified avatar');
   await evaluate(client, "document.querySelector('#vote-profile-menu a[href^=\"/change-pin\"]').click()");
   assert.equal(await waitFor(client, `location.pathname === '/change-pin' && document.querySelector('#return-to-vote')?.getAttribute('href') === '/vote/${room.id}'`), true,
     'Change PIN returns to the originating voting page');
@@ -482,7 +502,7 @@ test('Issue 50 profile menu works for admin and member in real Chromium', async 
     const root = document.querySelector('#rooms-profile-menu');
     const panel = root.querySelector('[role=menu]');
     return {
-      identity: root.querySelector('.profile-menu__identity').textContent.replace(/\\s+/g, ' ').trim(),
+      identity: root.querySelector('.profile-menu__identity-copy').textContent.replace(/\\s+/g, ' ').trim(),
       actions: [...panel.querySelectorAll('[role=menuitem]')].map((item) => item.textContent.trim()),
       hasManageRow: Boolean([...panel.querySelectorAll('[role=menuitem]')].find((item) => item.textContent.trim() === 'Manage users')),
     };
@@ -527,7 +547,7 @@ test('Issue 50 profile menu works for admin and member in real Chromium', async 
   assert.equal(await waitFor(client, `location.pathname === '/vote/${room.id}' && Boolean(document.querySelector('#protected-content') && !document.querySelector('#protected-content').hidden)`), true);
   await evaluate(client, "document.querySelector('#vote-profile-menu .profile-menu__trigger').click()");
   const memberVoteMenu = await evaluate(client, `(() => ({
-    identity: document.querySelector('#vote-profile-menu .profile-menu__identity').textContent.replace(/\\s+/g, ' ').trim(),
+    identity: document.querySelector('#vote-profile-menu .profile-menu__identity-copy').textContent.replace(/\\s+/g, ' ').trim(),
     actions: [...document.querySelectorAll('#vote-profile-menu [role=menuitem]')].map((item) => item.textContent.trim()),
     week: document.querySelector('#week-heading').textContent,
     voterNames: [...document.querySelectorAll('.vote-card__voter-name')].map((name) => name.textContent),
@@ -561,7 +581,7 @@ test('Issue 50 profile menu remains usable at actual 200% Chromium browser zoom'
   }), { mode: 0o600 });
   const browser = spawnChromium(chromePath, [
     '--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--no-first-run',
-    '--no-default-browser-check', '--disable-background-networking', '--window-size=1280,480', '--remote-debugging-port=0',
+    '--no-default-browser-check', '--disable-background-networking', '--window-size=640,720', '--remote-debugging-port=0',
     `--user-data-dir=${profile}`, 'about:blank',
   ]);
   let client;
@@ -581,6 +601,7 @@ test('Issue 50 profile menu remains usable at actual 200% Chromium browser zoom'
     const trigger = document.querySelector('#rooms-profile-menu .profile-menu__trigger').getBoundingClientRect();
     return {
       width: innerWidth,
+      height: innerHeight,
       dpr: devicePixelRatio,
       visualScale: visualViewport.scale,
       pageWidth: document.documentElement.scrollWidth,
@@ -589,7 +610,7 @@ test('Issue 50 profile menu remains usable at actual 200% Chromium browser zoom'
       nameDisplay: getComputedStyle(document.querySelector('#rooms-profile-menu .profile-menu__trigger-name')).display,
     };
   })()`);
-  assert.ok(roomsLayout.dpr >= 1.9 && roomsLayout.width <= 640,
+  assert.ok(roomsLayout.dpr >= 1.9 && roomsLayout.width === 320 && roomsLayout.height < 400,
     `the isolated Chromium profile applies 200% browser zoom: ${JSON.stringify(roomsLayout)}`);
   assert.equal(roomsLayout.visualScale, 1, 'actual browser zoom is not pinch/page-scale magnification');
   assert.equal(roomsLayout.bodyZoom, '1', 'the page does not simulate browser zoom with CSS');
@@ -601,7 +622,7 @@ test('Issue 50 profile menu remains usable at actual 200% Chromium browser zoom'
     const panel = document.querySelector('#rooms-profile-menu [role=menu]');
     const box = panel.getBoundingClientRect();
     const actions = [...panel.querySelectorAll('[role=menuitem]')].map((item) => item.getBoundingClientRect());
-    return { left: box.left, right: box.right, top: box.top, bottom: Math.max(...actions.map((item) => item.bottom)), width: innerWidth, height: innerHeight, actions: actions.map((item) => item.height) };
+    return { left: box.left, right: box.right, top: box.top, bottom: Math.max(...actions.map((item) => item.bottom)), panelBottom: box.bottom, width: innerWidth, height: innerHeight, visualHeight: visualViewport.height, triggerBottom: document.querySelector('#rooms-profile-menu .profile-menu__trigger').getBoundingClientRect().bottom, maxHeight: getComputedStyle(panel).maxHeight, inlineMaxHeight: panel.style.maxHeight, clientHeight: panel.clientHeight, scrollHeight: panel.scrollHeight, actions: actions.map((item) => item.height) };
   })()`);
   assert.ok(roomsPanel.left >= 0 && roomsPanel.right <= roomsPanel.width, 'the Rooms menu stays within the zoomed viewport');
   assert.ok(roomsPanel.top >= 0, 'the menu begins within the zoomed viewport');
@@ -619,9 +640,11 @@ test('Issue 50 profile menu remains usable at actual 200% Chromium browser zoom'
     const panel = document.querySelector('#rooms-profile-menu [role=menu]');
     const logout = panel.querySelector('.profile-menu__logout').getBoundingClientRect();
     const box = panel.getBoundingClientRect();
-    return { label: document.activeElement.textContent.trim(), visible: logout.top >= box.top && logout.bottom <= box.bottom };
+    return { label: document.activeElement.textContent.trim(), visible: logout.top >= box.top && logout.bottom <= box.bottom, viewportVisible: logout.top >= 0 && logout.bottom <= innerHeight };
   })()`);
-  assert.deepEqual(focusedLogout, { label: 'Logout', visible: true }, 'keyboard navigation scrolls the final action into view');
+  assert.deepEqual(focusedLogout, { label: 'Logout', visible: true, viewportVisible: true }, 'End scrolls the complete Logout action into view within the 320px/200% viewport');
+  assert.ok(roomsPanel.panelBottom <= roomsLayout.height,
+    `the constrained panel stays within the combined 320 CSS px / 200% viewport: ${JSON.stringify({ roomsPanel, roomsLayout, focusedLogout })}`);
 
   await client.send('Page.navigate', { url: `${fixture.baseUrl}/vote/${room.id}` });
   assert.equal(await waitFor(client, `location.pathname === '/vote/${room.id}' && Boolean(document.querySelector('#protected-content') && !document.querySelector('#protected-content').hidden)`), true,

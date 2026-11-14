@@ -98,7 +98,11 @@ export function mountProfileMenu(root, { displayName, role, returnTo }) {
   const identityRole = document.createElement('span');
   identityRole.className = 'profile-menu__identity-role';
   identityRole.textContent = roleLabel;
-  identity.append(identityLabel, identityName, identityRole);
+  const identityAvatar = avatar.cloneNode(true);
+  const identityCopy = document.createElement('div');
+  identityCopy.className = 'profile-menu__identity-copy';
+  identityCopy.append(identityLabel, identityName, identityRole);
+  identity.append(identityAvatar, identityCopy);
   panel.append(identity, separator());
 
   const changePin = createLink('Change PIN', 'lock', `/change-pin?returnTo=${encodeURIComponent(destination)}`);
@@ -135,7 +139,7 @@ export function mountProfileMenu(root, { displayName, role, returnTo }) {
   let csrfToken = '';
   const menuItems = () => [...panel.querySelectorAll('[role="menuitem"]')].filter((item) => !item.disabled);
   const updatePanelConstraint = () => {
-    const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+    const viewportHeight = Math.min(window.visualViewport?.height ?? window.innerHeight, window.innerHeight);
     const availableHeight = Math.max(0, Math.floor(viewportHeight - trigger.getBoundingClientRect().bottom - 26));
     panel.style.maxHeight = `${Math.min(512, availableHeight)}px`;
     const viewportWidth = document.documentElement.clientWidth;

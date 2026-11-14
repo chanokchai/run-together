@@ -83,7 +83,7 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       a.button[hidden] { display: none; }
       a.button:focus-visible { outline: 3px solid #f5c542; outline-offset: 2px; }
       .message { min-height: 1.5rem; margin-top: 1rem; }
-      .rooms-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem 1rem; }
+      .rooms-toolbar { display: flex; flex-wrap: nowrap; align-items: center; justify-content: space-between; gap: .5rem 1rem; }
       .rooms-toolbar h1 { min-width: 0; margin: 0; overflow-wrap: anywhere; }
       .profile-menu { position: relative; flex: 0 0 auto; }
       .profile-menu__trigger { display: inline-flex; box-sizing: border-box; width: auto; min-width: 44px; min-height: 44px; align-items: center; justify-content: center; gap: .55rem; margin: 0; padding: .3rem .65rem .3rem .35rem; border: 1px solid #b8c6d6; border-radius: 999px; background: #fff; color: #14213d; }
@@ -96,7 +96,8 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       .profile-menu__chevron svg { width: 1.15rem; height: 1.15rem; }
       .profile-menu__panel { position: absolute; z-index: 20; top: calc(100% + 10px); right: 0; box-sizing: border-box; width: min(18rem, calc(100vw - 2rem)); max-height: min(32rem, calc(100dvh - 5rem)); overflow: auto; overscroll-behavior: contain; padding: .55rem; border: 1px solid #cbd5e1; border-radius: 14px; background: #fff; color: #14213d; box-shadow: 0 .5rem 1.5rem #14213d30; }
       .profile-menu__panel[hidden], .profile-menu__status-group[hidden] { display: none; }
-      .profile-menu__identity { display: grid; min-width: 0; gap: .12rem; padding: .65rem .7rem .75rem; }
+      .profile-menu__identity { display: grid; grid-template-columns: 2.25rem minmax(0, 1fr); align-items: center; min-width: 0; gap: .7rem; padding: .65rem .7rem .75rem; }
+      .profile-menu__identity-copy { display: grid; min-width: 0; gap: .12rem; }
       .profile-menu__identity-label, .profile-menu__identity-role { color: #52606d; font-size: .875rem; }
       .profile-menu__identity-name { min-width: 0; overflow-wrap: anywhere; }
       .profile-menu__separator { height: 1px; margin: .35rem .45rem; background: #d9e2ec; }
@@ -479,7 +480,7 @@ const roomListPage = () => page({
       <p id="rooms-message" class="message" role="status" aria-live="polite"></p>
     </section>
   </section>`,
-  script: `import { startRoomListPage } from '/room-list.js?v=issue-50-profile-menu-2'; startRoomListPage();`,
+  script: `import { startRoomListPage } from '/room-list.js?v=issue-50-profile-menu-3'; startRoomListPage();`,
 });
 
 const changePinPage = (returnTo = '/rooms') => page({
@@ -1352,7 +1353,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           </nav>
           ${resetControl}
         </section>`,
-        script: `import { mountProfileMenu } from '/profile-menu.js?v=issue-50-profile-menu-2';
+        script: `import { mountProfileMenu } from '/profile-menu.js?v=issue-50-profile-menu-3';
           import { applyVoteCardPresentation, colorForDay, configureVoterNamesMarquee, createScheduledEffectController, createSocketRepairController, createVoterNamesRegion as buildVoterNamesRegion, createVoteTimelineController, formatDisplayDate, patchVoteDay } from '/vote-board.js?v=issue-47-voter-names-2';
           import { attachHorizontalSwipe, formatRunEventDate, getDateCardSwipeAction, getDateCardSwipePreview, getRunEventBannerSwipeAction, getRunEventBannerSwipePreview, millisecondsUntilBangkokMidnight, sortRunEventsForPresentation } from '/run-events.js?v=issue-34-beam-1';
           import { formatBangkokRoomTime } from '/date-time.js?v=issue-47-room-time-1';
