@@ -244,7 +244,7 @@ test('Issue 52 brand and upcoming rows meet responsive, date/time, motion, navig
       detailsTop: detailsRect.top, boxTop: boxRect.top, boxBottom: boxRect.bottom,
       votersTop: votersRect.top, votersLeft: votersRect.left, votersWidth: votersRect.width,
       rowLeft: rowRect.left, rowWidth: rowRect.width, rowHeight: rowRect.height,
-      number: number.textContent, title: title.textContent, titleHeight: title.getBoundingClientRect().height,
+      number: number.textContent, title: title.textContent,
       trackAnimation: getComputedStyle(track).animationName,
       trackDuration: getComputedStyle(track).animationDuration,
       currentUserHighlight: Boolean(voters.querySelector('.vote-card__voter-name.is-current-user')),
@@ -271,15 +271,19 @@ test('Issue 52 brand and upcoming rows meet responsive, date/time, motion, navig
   assert.notEqual(initialRows[0].trackDuration, initialRows[1].trackDuration,
     'different voter-name lengths change duration while preserving the same pixel speed');
   assert.ok(initialRows.every(({ href }) => href.startsWith('/vote/')));
-  assert.ok(initialRows.some(({ titleHeight }) => titleHeight > 20), 'long room titles wrap within the available title column');
-
   for (const width of [320, 375, 390, 1280]) {
     await client.send('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 1, mobile: width < 600 });
     const viewport = await evaluate(client, `(() => {
       const rows = [...document.querySelectorAll('.upcoming-schedule__row')].map((row) => ({
         right: row.getBoundingClientRect().right,
         titleRight: row.querySelector('.upcoming-schedule__title').getBoundingClientRect().right,
-        titleHeight: row.querySelector('.upcoming-schedule__title').getBoundingClientRect().height,
+        title: row.querySelector('.upcoming-schedule__title').textContent,
+        titleLineCount: (() => {
+          const title = row.querySelector('.upcoming-schedule__title');
+          const range = document.createRange();
+          range.selectNodeContents(title);
+          return new Set([...range.getClientRects()].map(({ top }) => top)).size;
+        })(),
         linkHeight: row.getBoundingClientRect().height,
       }));
       return { width: innerWidth, scrollWidth: document.documentElement.scrollWidth,
@@ -290,8 +294,8 @@ test('Issue 52 brand and upcoming rows meet responsive, date/time, motion, navig
     assert.ok(viewport.brandRight <= width, `brand stays inside ${width}px viewport`);
     assert.ok(viewport.rows.every(({ right, titleRight, linkHeight }) => right <= width && titleRight <= width && linkHeight >= 44),
       `schedule content and 44px links fit at ${width}px`);
-    if (width === 320) assert.ok(viewport.rows.some(({ titleHeight }) => titleHeight > 20),
-      'long English or Thai schedule title wraps at 320px');
+    if (width === 320) assert.ok(viewport.rows.every(({ titleLineCount }) => titleLineCount > 1),
+      `long English and Thai schedule titles wrap within the available title column at 320px: ${JSON.stringify(viewport.rows)}`);
   }
   await client.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await client.send('Emulation.setPageScaleFactor', { pageScaleFactor: 2 });
