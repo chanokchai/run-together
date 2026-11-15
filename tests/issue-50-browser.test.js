@@ -150,6 +150,59 @@ async function loginThroughForm(client, { name, pin, baseUrl, expectedPath = '/r
     'sign-in loads the authenticated room list');
 }
 
+async function getLoginLayout(client) {
+  return evaluate(client, `(() => {
+    const intro = document.querySelector('#login-introduction');
+    const lead = intro.querySelector('.login-introduction__lead');
+    const sentences = [...intro.querySelectorAll('.login-introduction__sentence')];
+    const section = intro.closest('section');
+    const form = document.querySelector('#login-form');
+    const introBox = intro.getBoundingClientRect();
+    const sectionBox = section.getBoundingClientRect();
+    const formBox = form.getBoundingClientRect();
+    const sectionStyle = getComputedStyle(section);
+    const introStyle = getComputedStyle(intro);
+    const leadStyle = getComputedStyle(lead);
+    const sentenceStyle = getComputedStyle(sentences[0]);
+    const luminance = (color) => {
+      const channels = color.match(/[\\d.]+/g).slice(0, 3).map(Number).map((channel) => {
+        const value = channel / 255;
+        return value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4;
+      });
+      return .2126 * channels[0] + .7152 * channels[1] + .0722 * channels[2];
+    };
+    const contrast = (foreground, background) => {
+      const values = [luminance(foreground), luminance(background)].sort((a, b) => b - a);
+      return (values[0] + .05) / (values[1] + .05);
+    };
+    const center = (box) => (box.left + box.right) / 2;
+    return {
+      width: innerWidth,
+      pageWidth: document.documentElement.scrollWidth,
+      text: intro.textContent.replace(/\\s+/g, ' ').trim(),
+      legacyCopyVisible: document.body.innerText.includes('Run together') || document.body.innerText.includes('วิ่งไปด้วยกัน'),
+      brand: document.querySelector('.app-brand')?.textContent,
+      textAlign: introStyle.textAlign,
+      centered: Math.abs(center(introBox) - center(sectionBox)) <= 1,
+      maxWidth: introStyle.maxWidth,
+      fontSize: parseFloat(introStyle.fontSize),
+      lineHeight: parseFloat(introStyle.lineHeight),
+      leadWeight: parseInt(leadStyle.fontWeight, 10),
+      sentenceWeight: parseInt(sentenceStyle.fontWeight, 10),
+      leadContrast: contrast(leadStyle.color, sectionStyle.backgroundColor),
+      sentenceContrast: contrast(sentenceStyle.color, sectionStyle.backgroundColor),
+      introScrollWidth: intro.scrollWidth,
+      introClientWidth: intro.clientWidth,
+      formWidth: formBox.width,
+      sectionContentWidth: section.clientWidth - parseFloat(sectionStyle.paddingLeft) - parseFloat(sectionStyle.paddingRight),
+      fields: [...form.querySelectorAll('input')].map((input) => input.name),
+      buttonLabel: form.querySelector('button')?.textContent.trim(),
+      signInLabel: section.querySelector('p')?.textContent.trim(),
+      registerHref: section.querySelector('a[href="/register"]')?.getAttribute('href'),
+    };
+  })()`);
+}
+
 test('Issue 50 profile menu works for admin and member in real Chromium', async (t) => {
   const fixture = await createFixture();
   const memberCookie = await register(fixture.baseUrl, MEMBER_NAME, MEMBER_PIN);
@@ -179,6 +232,32 @@ test('Issue 50 profile menu works for admin and member in real Chromium', async 
   const target = await createTarget(port);
   client = createCdpClient(target.webSocketDebuggerUrl);
   await openPage(client, `${fixture.baseUrl}/`);
+  for (const width of [320, 375, 390, 1280]) {
+    await client.send('Emulation.setDeviceMetricsOverride', { width, height: width < 600 ? 844 : 960, deviceScaleFactor: 1, mobile: width < 600 });
+    const login = await getLoginLayout(client);
+    assert.equal(login.width, width);
+    assert.equal(login.text, 'Vote for the days you can run. See when others are free, then suggest a day to your group. This App make planning your next run easier.');
+    assert.equal(login.legacyCopyVisible, false);
+    assert.equal(login.brand, 'VOTE&RUN!');
+    assert.equal(login.textAlign, 'center');
+    assert.equal(login.centered, true);
+    assert.ok(login.maxWidth === '480px' || login.maxWidth === '30rem');
+    assert.ok(login.fontSize >= 16 && login.lineHeight / login.fontSize >= 1.4);
+    assert.ok(login.leadWeight > login.sentenceWeight);
+    assert.ok(login.leadContrast >= 4.5 && login.sentenceContrast >= 4.5);
+    assert.ok(login.pageWidth <= width && login.introScrollWidth <= login.introClientWidth);
+    assert.ok(Math.abs(login.formWidth - login.sectionContentWidth) <= 1, 'login form width remains the section content width');
+    assert.deepEqual(login.fields, ['name', 'pin']);
+    assert.equal(login.buttonLabel, 'เข้าสู่ระบบ / Sign in');
+    assert.equal(login.signInLabel, 'เข้าสู่ระบบ / Sign in');
+    assert.equal(login.registerHref, '/register');
+  }
+  await press(client, 'Tab');
+  const loginKeyboardFocus = await evaluate(client, `({ field: document.activeElement.name, visible: document.activeElement.matches(':focus-visible'), outline: getComputedStyle(document.activeElement).outlineStyle })`);
+  assert.equal(loginKeyboardFocus.field, 'name');
+  assert.equal(loginKeyboardFocus.visible, true, 'keyboard focus remains visible on the first login field');
+  assert.notEqual(loginKeyboardFocus.outline, 'none');
+  await client.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 480, deviceScaleFactor: 1, mobile: false });
   await loginThroughForm(client, { baseUrl: fixture.baseUrl, name: 'admin', pin: ADMIN_PIN });
   await client.send('Page.reload', { ignoreCache: true });
   assert.equal(await waitFor(client, `location.pathname === '/rooms' && Boolean(document.querySelector('#rooms-content') && !document.querySelector('#rooms-content').hidden)`), true,
@@ -236,6 +315,15 @@ test('Issue 50 profile menu works for admin and member in real Chromium', async 
     roomHeading: 'VOTE&RUN!',
     oldControls: false,
   });
+  const createRoomNavigation = await evaluate(client, `(() => {
+    const button = document.querySelector('#create-room-navigation');
+    const style = getComputedStyle(button);
+    return { label: button.textContent.trim(), id: button.id, type: button.type, className: button.className, background: style.backgroundColor, color: style.color, minimumHeight: style.minHeight };
+  })()`);
+  assert.deepEqual(createRoomNavigation, {
+    label: 'to create room', id: 'create-room-navigation', type: 'button', className: 'secondary',
+    background: 'rgb(232, 238, 245)', color: 'rgb(20, 33, 61)', minimumHeight: '44px',
+  }, 'the out-of-scope Rooms navigation button retains its existing label, class, and styling');
 
   await evaluate(client, "document.querySelector('#rooms-profile-menu .profile-menu__trigger').click()");
   assert.equal(await waitFor(client, `!document.querySelector('#rooms-profile-menu [role=menu]').hidden`), true);
@@ -353,12 +441,20 @@ test('Issue 50 profile menu works for admin and member in real Chromium', async 
     const root = document.querySelector('#vote-profile-menu');
     const trigger = root.querySelector('.profile-menu__trigger');
     const header = document.querySelector('#room-page-header');
-    const back = document.querySelector('#back-to-rooms').getBoundingClientRect();
+    const backLink = document.querySelector('#back-to-rooms');
+    const back = backLink.getBoundingClientRect();
     const profileBox = root.getBoundingClientRect();
+    const arrow = new DOMMatrixReadOnly(getComputedStyle(backLink.querySelector('svg')).transform);
     return {
       closed: root.querySelector('[role=menu]').hidden,
       label: trigger.getAttribute('aria-label'),
-      backBeforeMenu: back.right <= profileBox.left,
+      profileBeforeBackInDocument: Boolean(root.compareDocumentPosition(backLink) & Node.DOCUMENT_POSITION_FOLLOWING),
+      profileAboveBack: profileBox.bottom <= back.top,
+      leftEdgesAlign: Math.abs(profileBox.left - back.left) <= 1,
+      backLabel: backLink.querySelector('span').textContent.trim(),
+      backName: backLink.getAttribute('aria-label'),
+      backHref: backLink.getAttribute('href'),
+      arrowPointsUp: Math.abs(arrow.a) < .001 && Math.abs(arrow.b + 1) < .001 && Math.abs(arrow.c - 1) < .001 && Math.abs(arrow.d) < .001,
       heading: document.querySelector('#room-information-heading').textContent,
       details: document.querySelector('#room-information-details').textContent,
       hasTimeline: Boolean(document.querySelector('#vote-timeline')),
@@ -370,7 +466,31 @@ test('Issue 50 profile menu works for admin and member in real Chromium', async 
   })()`);
   assert.equal(voteMenu.closed, true);
   assert.equal(voteMenu.label, 'Profile menu for admin');
-  assert.equal(voteMenu.backBeforeMenu, true, 'Back remains to the left of the profile trigger');
+  assert.equal(voteMenu.profileBeforeBackInDocument, true, 'profile precedes Back in the document');
+  assert.equal(voteMenu.profileAboveBack, true, 'the profile control is above Back');
+  assert.equal(voteMenu.leftEdgesAlign, true, 'the stacked controls share a left edge');
+  assert.equal(voteMenu.backLabel, 'Back');
+  assert.equal(voteMenu.backName, 'Back to rooms');
+  assert.equal(voteMenu.backHref, '/rooms');
+  assert.equal(voteMenu.arrowPointsUp, true, 'the existing Back arrow points up');
+  for (const width of [320, 375, 390, 1280]) {
+    await client.send('Emulation.setDeviceMetricsOverride', { width, height: width < 600 ? 844 : 960, deviceScaleFactor: 1, mobile: width < 600 });
+    const placement = await evaluate(client, `(() => {
+      const profile = document.querySelector('#vote-profile-menu');
+      const profileBox = profile.getBoundingClientRect();
+      const back = document.querySelector('#back-to-rooms');
+      const backBox = back.getBoundingClientRect();
+      return { width: innerWidth, pageWidth: document.documentElement.scrollWidth,
+        profileBeforeBack: Boolean(profile.compareDocumentPosition(back) & Node.DOCUMENT_POSITION_FOLLOWING),
+        profileAboveBack: profileBox.bottom <= backBox.top, leftEdgesAlign: Math.abs(profileBox.left - backBox.left) <= 1 };
+    })()`);
+    assert.equal(placement.width, width);
+    assert.ok(placement.pageWidth <= width, `voting page has no horizontal overflow at ${width}px`);
+    assert.equal(placement.profileBeforeBack, true, `profile precedes Back in DOM order at ${width}px`);
+    assert.equal(placement.profileAboveBack, true, `profile stacks above Back at ${width}px`);
+    assert.equal(placement.leftEdgesAlign, true, `profile and Back left edges align at ${width}px`);
+  }
+  await client.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 960, deviceScaleFactor: 1, mobile: false });
   assert.match(voteMenu.heading, /Profile menu room/);
   assert.equal(voteMenu.details, 'at Track on 6:30PM');
   assert.equal(voteMenu.hasTimeline, true);
@@ -414,9 +534,13 @@ test('Issue 50 profile menu works for admin and member in real Chromium', async 
     const trigger = root.querySelector('.profile-menu__trigger');
     const name = trigger.querySelector('.profile-menu__trigger-name');
     const rect = trigger.getBoundingClientRect();
+    const back = document.querySelector('#back-to-rooms').getBoundingClientRect();
+    const profile = root.getBoundingClientRect();
     return {
       viewport: document.documentElement.clientWidth,
       scrollWidth: document.documentElement.scrollWidth,
+      profileAboveBack: profile.bottom <= back.top,
+      leftEdgesAlign: Math.abs(profile.left - back.left) <= 1,
       width: rect.width,
       height: rect.height,
       nameDisplay: getComputedStyle(name).display,
@@ -426,6 +550,8 @@ test('Issue 50 profile menu works for admin and member in real Chromium', async 
   })()`);
   assert.equal(narrowTrigger.viewport, 320);
   assert.equal(narrowTrigger.scrollWidth <= 320, true, 'the narrow voting page has no horizontal page scroll');
+  assert.equal(narrowTrigger.profileAboveBack, true, 'profile remains above Back on mobile');
+  assert.equal(narrowTrigger.leftEdgesAlign, true, 'profile and Back remain left-aligned on mobile');
   assert.equal(narrowTrigger.nameDisplay, 'none', 'the trigger is avatar-only at 320 CSS pixels');
   assert.ok(narrowTrigger.width >= 44 && narrowTrigger.height >= 44);
   assert.ok(narrowTrigger.backWidth >= 44);
@@ -595,6 +721,22 @@ test('Issue 50 profile menu remains usable at actual 200% Chromium browser zoom'
   const target = await createTarget(port);
   client = createCdpClient(target.webSocketDebuggerUrl);
   await openPage(client, `${fixture.baseUrl}/`);
+  const zoomedLogin = await getLoginLayout(client);
+  const zoomedLoginEnvironment = await evaluate(client, `({ dpr: devicePixelRatio, visualScale: visualViewport.scale, bodyZoom: getComputedStyle(document.body).zoom,
+    controls: [...document.querySelectorAll('#login-form input, #login-form button')].map((control) => { const box = control.getBoundingClientRect(); return { width: box.width, height: box.height }; }) })`);
+  assert.equal(zoomedLogin.width, 320, 'login uses the 320 CSS-pixel viewport at actual 200% browser zoom');
+  assert.equal(zoomedLogin.text, 'Vote for the days you can run. See when others are free, then suggest a day to your group. This App make planning your next run easier.');
+  assert.equal(zoomedLogin.pageWidth <= 320, true, 'login has no page-level horizontal overflow at 200% zoom');
+  assert.equal(zoomedLogin.introScrollWidth <= zoomedLogin.introClientWidth, true, 'the introduction is not clipped at 200% zoom');
+  assert.equal(zoomedLogin.centered, true);
+  assert.ok(zoomedLogin.leadContrast >= 4.5 && zoomedLogin.sentenceContrast >= 4.5);
+  assert.ok(zoomedLoginEnvironment.dpr >= 1.9 && zoomedLoginEnvironment.visualScale === 1 && zoomedLoginEnvironment.bodyZoom === '1',
+    'the login check uses real browser zoom, not page-scale or CSS zoom');
+  assert.ok(zoomedLoginEnvironment.controls.every((control) => control.width >= 44 && control.height >= 44),
+    'login controls remain at least 44 by 44 CSS pixels under zoom');
+  await press(client, 'Tab');
+  assert.equal(await evaluate(client, `document.activeElement.name === 'name' && document.activeElement.matches(':focus-visible')`), true,
+    'keyboard focus remains visible on the first login field at 200% zoom');
   await loginThroughForm(client, { baseUrl: fixture.baseUrl, name: MEMBER_NAME, pin: MEMBER_PIN });
 
   const roomsLayout = await evaluate(client, `(() => {
@@ -652,11 +794,13 @@ test('Issue 50 profile menu remains usable at actual 200% Chromium browser zoom'
   const voteLayout = await evaluate(client, `(() => {
     const back = document.querySelector('#back-to-rooms').getBoundingClientRect();
     const trigger = document.querySelector('#vote-profile-menu .profile-menu__trigger').getBoundingClientRect();
-    return { width: innerWidth, pageWidth: document.documentElement.scrollWidth, back: { right: back.right, width: back.width, height: back.height }, trigger: { left: trigger.left, right: trigger.right, width: trigger.width, height: trigger.height }, nameDisplay: getComputedStyle(document.querySelector('#vote-profile-menu .profile-menu__trigger-name')).display };
+    const profile = document.querySelector('#vote-profile-menu').getBoundingClientRect();
+    return { width: innerWidth, pageWidth: document.documentElement.scrollWidth, profile: { left: profile.left, bottom: profile.bottom }, back: { left: back.left, top: back.top, width: back.width, height: back.height }, trigger: { left: trigger.left, right: trigger.right, width: trigger.width, height: trigger.height }, nameDisplay: getComputedStyle(document.querySelector('#vote-profile-menu .profile-menu__trigger-name')).display };
   })()`);
   assert.equal(voteLayout.width, roomsLayout.width);
   assert.ok(voteLayout.pageWidth <= voteLayout.width, 'the voting page has no page-level horizontal overflow at 200% zoom');
-  assert.ok(voteLayout.back.right <= voteLayout.trigger.left, 'Back stays to the left of the profile trigger');
+  assert.ok(voteLayout.profile.bottom <= voteLayout.back.top, 'profile stays above Back at actual 200% zoom');
+  assert.ok(Math.abs(voteLayout.profile.left - voteLayout.back.left) <= 1, 'profile and Back stay left-aligned at actual 200% zoom');
   assert.ok(voteLayout.back.width >= 44 && voteLayout.back.height >= 44);
   assert.ok(voteLayout.trigger.width >= 44 && voteLayout.trigger.height >= 44);
   assert.equal(voteLayout.nameDisplay, 'none');

@@ -162,7 +162,7 @@ test('Issue 52 brand and upcoming rows meet responsive, date/time, motion, navig
     return { text: mark.textContent, fontSize: style.fontSize, fontWeight: style.fontWeight,
       letterSpacing: style.letterSpacing, textTransform: style.textTransform,
       fontFamily: style.fontFamily, backgroundImage: style.backgroundImage,
-      linked: Boolean(mark.closest('a')), pageHeading: document.querySelector('main h1')?.textContent };
+      linked: Boolean(mark.closest('a')), pageHeading: document.querySelector('main h1')?.id };
   })()`);
   assert.deepEqual({
     text: brand.text, fontSize: brand.fontSize, fontWeight: brand.fontWeight,
@@ -170,7 +170,7 @@ test('Issue 52 brand and upcoming rows meet responsive, date/time, motion, navig
     linked: brand.linked, pageHeading: brand.pageHeading,
   }, {
     text: 'VOTE&RUN!', fontSize: '24px', fontWeight: '800', letterSpacing: '-0.48px',
-    textTransform: 'uppercase', linked: false, pageHeading: 'Run Together',
+    textTransform: 'uppercase', linked: false, pageHeading: 'login-introduction',
   });
   assert.match(brand.fontFamily, /Inter.*system-ui.*-apple-system.*sans-serif/);
   assert.match(brand.backgroundImage, /linear-gradient\(90deg/);

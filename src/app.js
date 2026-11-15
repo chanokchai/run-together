@@ -80,6 +80,9 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '', sho
       .rooms-page-main { max-width: 84rem; padding-inline: clamp(1rem, 4vw, 3rem); overflow-x: clip; }
       section { background: white; border-radius: 1rem; padding: 1.5rem; box-shadow: 0 0.25rem 1rem #14213d18; }
       .vote-page-main > section { padding: clamp(1rem, 3vw, 2rem); }
+      .login-introduction { max-width: 30rem; margin: 0 auto 1.25rem; color: #52606d; font-size: 1.05rem; font-weight: 500; line-height: 1.5; text-align: center; }
+      .login-introduction__lead, .login-introduction__sentence { display: block; }
+      .login-introduction__lead { color: #14213d; font-weight: 700; }
       label { display: block; margin-top: 1rem; font-weight: 600; }
       input, button { box-sizing: border-box; width: 100%; min-height: 2.75rem; margin-top: .35rem; padding: .55rem .7rem; font: inherit; }
       button { cursor: pointer; background: #1769aa; color: white; border: 0; border-radius: .45rem; font-weight: 700; }
@@ -113,11 +116,12 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '', sho
       .room-page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: .5rem; min-width: 0; }
       .room-page-header__identity { flex: 1 1 auto; min-width: 0; }
       .room-page-header__identity h1 { margin-top: 0; overflow-wrap: anywhere; }
-      .room-page-header__actions { display: flex; flex: 0 0 auto; align-items: center; gap: .4rem; }
+      .room-page-header__actions { display: flex; flex: 0 0 auto; flex-direction: column; align-items: flex-start; gap: .4rem; }
       .room-page-metadata { max-width: 100%; margin: .15rem 0; font-size: .9rem; line-height: 1.25; overflow-wrap: anywhere; }
       .room-page-header a.button { display: inline-flex; flex: 0 0 auto; width: auto; min-width: 44px; min-height: 44px; align-items: center; justify-content: center; gap: .35rem; margin: 0; padding: .45rem .7rem; background: #e8eef5; color: #14213d; white-space: nowrap; }
       .room-page-header a.button:focus-visible { outline: 3px solid #145da0; outline-offset: 2px; }
       .room-page-header a.button svg { width: 1.35rem; height: 1.35rem; }
+      #back-to-rooms svg { transform: rotate(-90deg); }
       .room-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 13rem), 1fr)); align-items: start; gap: 1rem; margin: 1rem 0 0; padding: 0; list-style: none; }
       .room-card { --room-title-size: clamp(.92rem, 2.07vw, 1.035rem); position: relative; display: grid; grid-template-columns: minmax(0, 1fr) minmax(3rem, max-content); grid-template-areas: "entry summary" "scheduled scheduled" "proposed proposed"; align-content: start; gap: .45rem .35rem; box-sizing: border-box; isolation: isolate; min-width: 0; min-height: 180px; padding: .65rem; border: 5px solid var(--room-color); border-radius: 1rem; background: transparent; color: #14213d; box-shadow: 0 .25rem .9rem #14213d30; }
       .room-card[hidden] { display: none; }
@@ -396,8 +400,10 @@ function runEventActionBody(body, { proposal = false, status = false } = {}) {
 const loginPage = () => page({
   title: 'Run Together | เข้าสู่ระบบ',
   content: `<section>
-    <h1>Run Together</h1>
-    <p>วิ่งไปด้วยกัน / Run together</p>
+    <h1 id="login-introduction" class="login-introduction"><strong class="login-introduction__lead">Vote for the days you can run.</strong>
+      <span class="login-introduction__sentence">See when others are free, then suggest a day to your group.</span>
+      <span class="login-introduction__sentence">This App make planning your next run easier.</span>
+    </h1>
     <p>เข้าสู่ระบบ / Sign in</p>
     <form id="login-form">
       <label>ชื่อ / Name <input name="name" autocomplete="username" required maxlength="40"></label>
@@ -1338,11 +1344,11 @@ export function createApp({ databaseReady = false, database, env = process.env, 
               <p id="room-information-details" class="room-page-metadata" aria-label="Room venue and Bangkok time"${roomDetails ? '' : ' hidden'}>${escapeHtml(roomDetails)}</p>
             </div>
             <div class="room-page-header__actions">
+              <div id="vote-profile-menu" data-return-to="/vote/${room.id}"></div>
               <a id="back-to-rooms" class="button" href="/rooms" aria-label="Back to rooms">
                 <span>Back</span>
                 <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M10 3H4v18h6M14 7l5 5-5 5M19 12H8" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></svg>
               </a>
-              <div id="vote-profile-menu" data-return-to="/vote/${room.id}"></div>
             </div>
           </header>
           <section id="vote-timeline" class="vote-timeline" aria-labelledby="vote-timeline-heading">
