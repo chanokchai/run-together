@@ -47,8 +47,7 @@ test('GET / renders the approved login introduction and sign-in controls', async
     assert.match(response.headers.get('content-type'), /text\/html/);
     assert.match(body, /<span class="app-brand">VOTE&RUN!<\/span>/, 'the shared brand remains unchanged');
     assert.match(body, /<strong class="login-introduction__lead">Vote for the days you can run\.<\/strong>/);
-    assert.match(body, /See when others are free, then suggest a day to your/);
-    assert.match(body, /<span class="login-introduction__nowrap">your group\.<\/span>/);
+    assert.match(body, /See when others are free, then suggest a day to <span class="login-introduction__nowrap">your group\.<\/span>/);
     assert.match(body, /This App make planning your next run easier\./);
     assert.doesNotMatch(body, /<h1>Run Together<\/h1>|<p>วิ่งไปด้วยกัน \/ Run together<\/p>/,
       'the legacy login-section heading and subtitle are removed');
