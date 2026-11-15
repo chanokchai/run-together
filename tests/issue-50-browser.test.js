@@ -233,7 +233,7 @@ test('Issue 50 profile menu works for admin and member in real Chromium', async 
     expanded: 'false',
     displayName: 'admin',
     desktopNameDisplay: 'block',
-    roomHeading: 'Choose a room / เลือกห้อง',
+    roomHeading: 'VOTE&RUN!',
     oldControls: false,
   });
 

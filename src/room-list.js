@@ -64,7 +64,7 @@ export function formatScheduleDate(value) {
   const fullDate = new Intl.DateTimeFormat('en-GB', {
     day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC',
   }).format(date);
-  return { shortDate: `${weekday},${day}-${month}`, fullDate };
+  return { shortDate: `${weekday},${day}-${month}`, weekday, dayMonth: `${Number(day)} ${month}`, fullDate };
 }
 
 function titleError(value) {
@@ -658,34 +658,62 @@ export function startRoomListPage() {
         row = document.createElement('li');
         const link = document.createElement('a');
         link.className = 'upcoming-schedule__row';
+        const dateBox = document.createElement('span');
+        dateBox.className = 'upcoming-schedule__date-box';
+        const date = document.createElement('time');
+        date.className = 'upcoming-schedule__date';
+        const weekday = addText(date, 'span', '');
+        weekday.className = 'upcoming-schedule__weekday';
+        const dayMonth = addText(date, 'span', '');
+        dayMonth.className = 'upcoming-schedule__day-month';
+        dateBox.append(date);
         const details = document.createElement('span');
         details.className = 'upcoming-schedule__details';
+        const roomNumber = addText(details, 'span', '');
+        roomNumber.className = 'upcoming-schedule__room-number';
         const title = document.createElement('span');
         title.className = 'upcoming-schedule__title';
         const voters = createVoterNamesRegion(document, [], { emptyText: '' });
         voters.classList.add('upcoming-schedule__voters');
-        const date = document.createElement('time');
-        date.className = 'upcoming-schedule__date';
-        details.append(title, date);
-        link.append(details, voters);
+        details.append(title);
+        link.append(dateBox, details, voters);
         row.append(link);
         scheduleNodes.set(key, row);
       }
       const link = row.firstElementChild;
-      const [details, previousVoters] = link.children;
-      const [title, date] = details.children;
+      const [dateBox, details, previousVoters] = link.children;
+      const [roomNumber, title] = details.children;
+      const date = dateBox.firstElementChild;
+      const [weekday, dayMonth] = date.children;
       link.href = `/vote/${encodeURIComponent(item.roomId)}?date=${encodeURIComponent(item.date)}`;
       const voters = Array.isArray(item.voters) ? item.voters : [];
       const voterNames = voters.map(({ name }) => String(name ?? '')).filter(Boolean);
-      link.setAttribute('aria-label', `Room ${String(item.displayNumber).padStart(2, '0')}: ${item.title}; ${voterNames.length ? `Voters: ${voterNames.join(', ')}` : 'No voters'}; ${formatted.fullDate}`);
-      title.textContent = `Room ${String(item.displayNumber).padStart(2, '0')}: ${item.title}`;
+      const roomLabel = `Room ${String(item.displayNumber).padStart(2, '0')}`;
+      const roomTime = typeof item.time === 'string' && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(item.time)
+        ? item.time
+        : '';
+      link.setAttribute('aria-label', `${roomLabel}: ${item.title}; ${formatted.fullDate}${roomTime ? ` at ${roomTime} Bangkok time` : ''}; ${voterNames.length ? `Voters: ${voterNames.join(', ')}` : 'No voters'}`);
+      roomNumber.textContent = roomLabel;
+      title.textContent = item.title;
       const voterRegion = createVoterNamesRegion(document, voters, { emptyText: '' });
       voterRegion.classList.add('upcoming-schedule__voters');
       voterRegion.setAttribute('aria-label', voterNames.length ? `Voters: ${voterNames.join(', ')}` : 'No voters for this event');
       previousVoters.replaceWith(voterRegion);
       date.dateTime = item.date;
       date.setAttribute('aria-label', formatted.fullDate);
-      date.textContent = formatted.shortDate;
+      weekday.textContent = formatted.weekday;
+      dayMonth.textContent = formatted.dayMonth;
+      let time = date.querySelector('.upcoming-schedule__time');
+      if (roomTime) {
+        if (!time) {
+          time = addText(date, 'span', roomTime);
+          time.className = 'upcoming-schedule__time';
+        } else {
+          time.textContent = roomTime;
+        }
+      } else {
+        time?.remove();
+      }
       return row;
     });
     ordered.forEach((row, index) => {
