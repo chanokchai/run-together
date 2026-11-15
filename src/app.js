@@ -59,7 +59,7 @@ function safeRoomReturn(value, session, database) {
     : '/rooms';
 }
 
-function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
+function page({ title, content, script = '', mainClass = '', scriptSrc = '', showBrandHeader = true }) {
   return `<!doctype html>
 <html lang="th">
   <head>
@@ -70,6 +70,11 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       :root { color-scheme: light; font-family: system-ui, sans-serif; }
       @property --beam-angle { syntax: "<angle>"; inherits: false; initial-value: 0deg; }
       body { margin: 0; background: #f3f6fa; color: #14213d; }
+      .app-brand-header { box-sizing: border-box; max-width: 34rem; margin: 0 auto; padding: .75rem 1rem 0; }
+      .app-brand-header--wide { max-width: 90rem; padding-inline: clamp(1rem, 4vw, 3rem); }
+      .app-brand { display: block; width: max-content; max-width: 100%; margin: 0; color: #b4235a; font-family: 'Inter', system-ui, -apple-system, sans-serif; font-size: 24px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.2; text-transform: uppercase; white-space: nowrap; }
+      @supports (-webkit-background-clip: text) { .app-brand { background-image: linear-gradient(90deg, #f093fb 0%, #f5576c 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; } }
+      @supports (background-clip: text) { .app-brand { background-image: linear-gradient(90deg, #f093fb 0%, #f5576c 100%); background-clip: text; color: transparent; } }
       main { max-width: 34rem; margin: 0 auto; padding: 2rem 1rem; }
       .vote-page-main { max-width: 90rem; padding-inline: clamp(1rem, 4vw, 3rem); }
       .rooms-page-main { max-width: 84rem; padding-inline: clamp(1rem, 4vw, 3rem); overflow-x: clip; }
@@ -172,15 +177,19 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       .your-upcoming-schedule h2 { margin: 0 0 .45rem; font-size: 1.05rem; }
       .upcoming-schedule__rows { display: grid; grid-template-columns: minmax(0, 1fr); gap: .35rem; margin: 0; padding: 0; list-style: none; }
       .upcoming-schedule__rows > li { min-width: 0; }
-      .upcoming-schedule__row { display: flex; box-sizing: border-box; width: 100%; min-width: 0; min-height: 44px; flex-direction: column; align-items: stretch; justify-content: flex-start; gap: .2rem; padding: .45rem .65rem; border: 1px solid #94a3b8; border-radius: .45rem; background: #fff; color: #14213d; text-decoration: none; }
+      .upcoming-schedule__row { display: grid; box-sizing: border-box; width: 100%; min-width: 0; min-height: 44px; grid-template-columns: minmax(60px, max-content) minmax(0, 1fr); grid-template-areas: "date details" "voters voters"; align-items: start; gap: .5rem .75rem; padding: .5rem .65rem; border: 1px solid #94a3b8; border-radius: .45rem; background: #fff; color: #14213d; text-decoration: none; }
       .upcoming-schedule__row:hover { background: #f1f5f9; }
       .upcoming-schedule__row:focus-visible { outline: 3px solid #145da0; outline-offset: 2px; }
-      .upcoming-schedule__details { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: .15rem .6rem; min-width: 0; }
-      .upcoming-schedule__title { flex: 1 1 5rem; min-width: 0; overflow-wrap: anywhere; }
-      .upcoming-schedule__row > .upcoming-schedule__voters { position: relative; display: block; flex: 0 0 auto; width: 100%; min-width: 0; max-width: 100%; min-height: 1.3rem; overflow: clip; contain: paint; }
+      .upcoming-schedule__details { grid-area: details; display: flex; min-width: 0; flex-direction: column; gap: .15rem; }
+      .upcoming-schedule__room-number { font-weight: 800; overflow-wrap: anywhere; }
+      .upcoming-schedule__title { min-width: 0; overflow-wrap: anywhere; }
+      .upcoming-schedule__date-box { grid-area: date; display: flex; box-sizing: border-box; width: 60px; min-width: 60px; min-height: 60px; align-items: center; justify-content: center; padding: 8px 6px; border-radius: 8px; background: #D3D66B; color: #14213d; text-align: center; font-size: 12px; font-variant-numeric: tabular-nums; font-weight: 700; line-height: 1.2; }
+      .upcoming-schedule__date { display: flex; flex-direction: column; align-items: center; gap: .08rem; white-space: nowrap; }
+      .upcoming-schedule__day-month { font-weight: 800; }
+      .upcoming-schedule__time { font-weight: 700; }
+      .upcoming-schedule__row > .upcoming-schedule__voters { position: relative; display: block; grid-area: voters; width: 100%; min-width: 0; max-width: 100%; min-height: 1.3rem; overflow: clip; contain: paint; }
       .upcoming-schedule__voters .vote-card__names-track { position: absolute; top: 0; left: 0; height: 100%; max-width: max-content; align-items: center; }
       .upcoming-schedule__voters .vote-card__voter-name.is-current-user { border-radius: .15rem; background: #ffff00; color: #111827; }
-      .upcoming-schedule__date { flex: 0 0 auto; color: #14213d; font-size: .9rem; font-variant-numeric: tabular-nums; font-weight: 700; white-space: nowrap; }
       #rooms-no-matches { margin: 1rem 0; }
       .room-edit-dialog { width: min(32rem, calc(100vw - 2rem)); }
       .room-edit-dialog input[name="title"], .room-edit-dialog input[name="venue"], .room-edit-dialog input[name="time"] { width: 100%; }
@@ -322,7 +331,7 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '' }) {
       }
     </style>
   </head>
-  <body><main${mainClass ? ` class="${mainClass}"` : ''}>${content}</main>${scriptSrc ? `<script src="${scriptSrc}"></script>` : ''}${script ? `<script type="module">${script}</script>` : ''}</body>
+  <body>${showBrandHeader ? `<header class="app-brand-header${mainClass === 'vote-page-main' ? ' app-brand-header--wide' : ''}"><span class="app-brand">VOTE&RUN!</span></header>` : ''}<main${mainClass ? ` class="${mainClass}"` : ''}>${content}</main>${scriptSrc ? `<script src="${scriptSrc}"></script>` : ''}${script ? `<script type="module">${script}</script>` : ''}</body>
 </html>`;
 }
 
@@ -435,10 +444,11 @@ const registerPage = () => page({
 const roomListPage = () => page({
   title: 'Run Together | Rooms',
   mainClass: 'rooms-page-main',
+  showBrandHeader: false,
   scriptSrc: '/socket.io/socket.io.js',
   content: `<section id="rooms-content" hidden aria-labelledby="rooms-heading">
     <header class="rooms-toolbar">
-      <h1 id="rooms-heading">Choose a room / เลือกห้อง</h1>
+      <h1 id="rooms-heading" class="app-brand">VOTE&RUN!</h1>
       <div id="rooms-profile-menu" data-return-to="/rooms"></div>
     </header>
     <section id="upcoming-schedule" class="your-upcoming-schedule" aria-labelledby="upcoming-schedule-heading" hidden>

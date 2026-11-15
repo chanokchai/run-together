@@ -187,7 +187,7 @@ export function getPersonalUpcomingSchedule(database, { currentUserId, now = () 
   if (!Number.isSafeInteger(currentUserId) || currentUserId < 1) return [];
   const today = getBangkokDate(now);
   const events = database.prepare(`
-    SELECT rooms.id AS roomId, rooms.display_number AS displayNumber, rooms.title,
+    SELECT rooms.id AS roomId, rooms.display_number AS displayNumber, rooms.title, rooms.time,
       run_events.event_date AS date
     FROM run_events
     JOIN rooms ON rooms.id = run_events.room_id

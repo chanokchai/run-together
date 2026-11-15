@@ -697,11 +697,13 @@ test('Issue 47 schedule voters, reconnect repair, time picker, and responsive co
       const track = names.querySelector('.vote-card__names-track');
       const own = names.querySelectorAll('.is-current-user');
       const date = link.querySelector('time');
+      const dateBox = link.querySelector('.upcoming-schedule__date-box');
       const title = link.querySelector('.upcoming-schedule__title');
       const details = link.querySelector('.upcoming-schedule__details');
       const nameBox = names.getBoundingClientRect();
       const titleBox = title.getBoundingClientRect();
       const detailsBox = details?.getBoundingClientRect();
+      const dateBoxBounds = dateBox.getBoundingClientRect();
       const rowBox = link.getBoundingClientRect();
       const duration = Number.parseFloat(track.style.getPropertyValue('--vote-marquee-duration'));
       const relativeLuminance = (color) => {
@@ -724,13 +726,18 @@ test('Issue 47 schedule voters, reconnect repair, time picker, and responsive co
           / (Math.min(relativeLuminance(selfBackground), relativeLuminance(selfColor)) + 0.05)
         : null;
       return {
-        href: link.getAttribute('href'), date: date.dateTime, dateLabel: date.textContent,
-        accessibleDate: date.getAttribute('aria-label'), dateOnDetailsLine: date.parentElement === details,
+        href: link.getAttribute('href'), date: date.dateTime,
+        weekday: date.querySelector('.upcoming-schedule__weekday')?.textContent,
+        dayMonth: date.querySelector('.upcoming-schedule__day-month')?.textContent,
+        accessibleDate: date.getAttribute('aria-label'), dateBoxWidth: dateBoxBounds.width,
+        dateBoxColor: getComputedStyle(dateBox).backgroundColor,
+        dateBoxLeftOfDetails: dateBoxBounds.left < detailsBox.left,
+        dateBoxAndDetailsAligned: Math.abs(dateBoxBounds.top - detailsBox.top) < 1,
         voters: [...names.querySelectorAll('.vote-card__voter-name')].map((name) => name.textContent),
         own: own.length, fakeEmpty: Boolean(names.querySelector('.vote-card__names-empty')),
         selfBackground, selfColor, selfContrast,
         namesOnSecondLine: Boolean(detailsBox && nameBox.top >= detailsBox.bottom - 1),
-        titleAndDateFirstLine: Boolean(detailsBox && titleBox.top < nameBox.top && date.getBoundingClientRect().top < nameBox.top),
+        titleAndDateFirstLine: Boolean(detailsBox && titleBox.top < nameBox.top && dateBoxBounds.top < nameBox.top),
         width: rowBox.width, height: rowBox.height,
         speed: (names.clientWidth + track.scrollWidth) / duration,
       };
@@ -738,8 +745,10 @@ test('Issue 47 schedule voters, reconnect repair, time picker, and responsive co
   })()`);
   assert.deepEqual(schedule.map(({ date }) => date), ['2026-10-27', '2026-10-28', '2026-10-29', '2026-10-30']);
   recordCorrectionResult(
-    JSON.stringify(schedule.map(({ dateLabel }) => dateLabel)) === JSON.stringify(['TUE,27-OCT', 'WED,28-OCT', 'THU,29-OCT', 'FRI,30-OCT']),
-    'scheduled date labels use actual uppercase weekday and DAY,DD-MON format', schedule.map(({ dateLabel, date }) => [date, dateLabel]),
+    JSON.stringify(schedule.map(({ weekday, dayMonth }) => [weekday, dayMonth]))
+      === JSON.stringify([['TUE', '27 OCT'], ['WED', '28 OCT'], ['THU', '29 OCT'], ['FRI', '30 OCT']]),
+    'scheduled date boxes use separate actual uppercase weekday and DAY MON lines',
+    schedule.map(({ weekday, dayMonth, date }) => [date, weekday, dayMonth]),
   );
   recordCorrectionResult(schedule.every(({ accessibleDate }) => /2026/.test(accessibleDate ?? '')),
     'accessible date retains the complete scheduled date', schedule.map(({ accessibleDate }) => accessibleDate));
@@ -756,10 +765,14 @@ test('Issue 47 schedule voters, reconnect repair, time picker, and responsive co
   assert.deepEqual(schedule[3].voters, [], 'a scheduled event without voters remains visible without a fake name');
   assert.equal(schedule[3].fakeEmpty, false);
   assert.ok(schedule.every(({ width, height }) => width >= 44 && height >= 44), 'schedule rows meet touch-target size');
-  recordCorrectionResult(schedule.every(({ namesOnSecondLine, titleAndDateFirstLine, dateOnDetailsLine }) => (
-    namesOnSecondLine && titleAndDateFirstLine && dateOnDetailsLine
-  )), 'room information and date stay on the first line with voters on the separate second line',
-  schedule.map(({ namesOnSecondLine, titleAndDateFirstLine, dateOnDetailsLine }) => ({ namesOnSecondLine, titleAndDateFirstLine, dateOnDetailsLine })));
+  recordCorrectionResult(schedule.every(({ namesOnSecondLine, titleAndDateFirstLine, dateBoxLeftOfDetails,
+    dateBoxAndDetailsAligned, dateBoxWidth, dateBoxColor }) => (
+    namesOnSecondLine && titleAndDateFirstLine && dateBoxLeftOfDetails && dateBoxAndDetailsAligned
+    && dateBoxWidth >= 60 && dateBoxColor === 'rgb(211, 214, 107)'
+  )), 'date box stays left of room details and voters occupy the full-width row below',
+  schedule.map(({ namesOnSecondLine, titleAndDateFirstLine, dateBoxLeftOfDetails,
+    dateBoxAndDetailsAligned, dateBoxWidth, dateBoxColor }) => ({ namesOnSecondLine,
+    titleAndDateFirstLine, dateBoxLeftOfDetails, dateBoxAndDetailsAligned, dateBoxWidth, dateBoxColor })));
   recordCorrectionResult(schedule.slice(0, 3).every(({ speed }) => Math.abs(speed - 9.34375) < 0.1),
     'short and long schedule voter lists travel at the schedule-only 30% faster constant pixel speed', schedule.slice(0, 3).map(({ speed }) => speed));
   assert.equal(await evaluate(client, 'document.documentElement.scrollWidth <= document.documentElement.clientWidth'), true,
@@ -917,14 +930,17 @@ test('Issue 47 schedule voters, reconnect repair, time picker, and responsive co
       rows: rows.map((link) => {
         const details = link.querySelector('.upcoming-schedule__details');
         const title = link.querySelector('.upcoming-schedule__title');
-        const date = link.querySelector('.upcoming-schedule__date');
+        const dateBox = link.querySelector('.upcoming-schedule__date-box');
         const voters = link.querySelector('.upcoming-schedule__voters');
         const detailsBox = details.getBoundingClientRect();
+        const dateBoxBounds = dateBox.getBoundingClientRect();
         const votersBox = voters.getBoundingClientRect();
         const titleStyle = getComputedStyle(title);
         return {
-          firstLine: date.parentElement === details,
-          namesSecond: votersBox.top >= detailsBox.bottom - 1,
+          dateBoxLeftOfDetails: dateBoxBounds.left < detailsBox.left,
+          dateBoxAndDetailsAligned: Math.abs(dateBoxBounds.top - detailsBox.top) < 1,
+          namesSecond: votersBox.top >= Math.max(dateBoxBounds.bottom, detailsBox.bottom) - 1,
+          dateBoxWidth: dateBoxBounds.width, dateBoxColor: getComputedStyle(dateBox).backgroundColor,
           titleWrapsSafely: title.scrollWidth <= title.clientWidth && details.scrollWidth <= details.clientWidth,
           titleScroll: title.scrollWidth, titleClient: title.clientWidth, titleHeight: title.scrollHeight,
           detailsScroll: details.scrollWidth, detailsClient: details.clientWidth,
@@ -936,11 +952,13 @@ test('Issue 47 schedule voters, reconnect repair, time picker, and responsive co
     };
   })()`);
   recordCorrectionResult(zoomScheduleLayout.rows.length === 4
-    && zoomScheduleLayout.rows.every(({ firstLine, namesSecond, titleWrapsSafely, rowWidth, rowHeight }) => (
-      firstLine && namesSecond && titleWrapsSafely && rowWidth >= 44 && rowHeight >= 44
+    && zoomScheduleLayout.rows.every(({ dateBoxLeftOfDetails, dateBoxAndDetailsAligned, namesSecond,
+      dateBoxWidth, dateBoxColor, titleWrapsSafely, rowWidth, rowHeight }) => (
+      dateBoxLeftOfDetails && dateBoxAndDetailsAligned && namesSecond && dateBoxWidth >= 60
+      && dateBoxColor === 'rgb(211, 214, 107)' && titleWrapsSafely && rowWidth >= 44 && rowHeight >= 44
     ))
     && zoomScheduleLayout.pageWidth <= zoomScheduleLayout.viewportWidth,
-  'long room titles, first-line dates, second-line voters and tappable rows remain usable at 200% zoom', zoomScheduleLayout);
+  'date boxes, long room titles, full-width voter rows and tappable links remain usable at 200% zoom', zoomScheduleLayout);
   const zoomLayout = await evaluate(client, `(() => ({ rootScroll: document.documentElement.scrollWidth,
     rootClient: document.documentElement.clientWidth, mainScroll: document.querySelector('main').scrollWidth,
     mainClient: document.querySelector('main').clientWidth }))()`);
