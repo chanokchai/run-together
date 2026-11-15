@@ -83,6 +83,7 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '', sho
       .login-introduction { max-width: 30rem; margin: 0 auto 1.25rem; color: #52606d; font-size: 1.05rem; font-weight: 500; line-height: 1.5; text-align: center; }
       .login-introduction__lead, .login-introduction__sentence { display: block; }
       .login-introduction__lead { color: #14213d; font-weight: 700; }
+      .login-introduction__nowrap { white-space: nowrap; }
       label { display: block; margin-top: 1rem; font-weight: 600; }
       input, button { box-sizing: border-box; width: 100%; min-height: 2.75rem; margin-top: .35rem; padding: .55rem .7rem; font: inherit; }
       button { cursor: pointer; background: #1769aa; color: white; border: 0; border-radius: .45rem; font-weight: 700; }
@@ -401,7 +402,7 @@ const loginPage = () => page({
   title: 'Run Together | เข้าสู่ระบบ',
   content: `<section>
     <h1 id="login-introduction" class="login-introduction"><strong class="login-introduction__lead">Vote for the days you can run.</strong>
-      <span class="login-introduction__sentence">See when others are free, then suggest a day to your group.</span>
+      <span class="login-introduction__sentence">See when others are free, then suggest a day to <span class="login-introduction__nowrap">your group.</span></span>
       <span class="login-introduction__sentence">This App make planning your next run easier.</span>
     </h1>
     <p>เข้าสู่ระบบ / Sign in</p>
