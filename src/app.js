@@ -1,5 +1,6 @@
 import express from 'express';
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import {
   CANONICAL_TIME_ZONE,
   getCurrentWeekMonday,
@@ -37,6 +38,8 @@ const runEventsScript = readFileSync(new URL('./run-events.js', import.meta.url)
 const roomContractScript = readFileSync(new URL('./room-contract.js', import.meta.url), 'utf8');
 const roomListScript = readFileSync(new URL('./room-list.js', import.meta.url), 'utf8');
 const profileMenuScript = readFileSync(new URL('./profile-menu.js', import.meta.url), 'utf8');
+const pwaContractScript = readFileSync(new URL('./pwa-contract.js', import.meta.url), 'utf8');
+const PUBLIC_DIRECTORY = fileURLToPath(new URL('../public/', import.meta.url));
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (character) => ({
@@ -65,6 +68,12 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '', sho
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#172554">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="icon" href="/icons/run-together-192.png" sizes="192x192" type="image/png">
+    <link rel="apple-touch-icon" href="/icons/run-together-192.png">
     <title>${title}</title>
     <style>
       :root { color-scheme: light; font-family: system-ui, sans-serif; }
@@ -114,6 +123,7 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '', sho
       .profile-menu__action svg { flex: 0 0 1.25rem; width: 1.25rem; height: 1.25rem; }
       .profile-menu__logout { cursor: pointer; }
       .profile-menu__status { max-width: 18rem; margin: .4rem 0 0; padding: .45rem .6rem; border: 1px solid #b91c1c; border-radius: .4rem; background: #fff; color: #7f1d1d; font-size: .9rem; font-weight: 600; }
+      .profile-menu__status-detail { max-width: 18rem; margin: .3rem .25rem 0; color: #52606d; font-size: .82rem; line-height: 1.4; }
       .room-page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: .5rem; min-width: 0; }
       .room-page-header__identity { flex: 1 1 auto; min-width: 0; }
       .room-page-header__identity h1 { margin-top: 0; overflow-wrap: anywhere; }
@@ -335,6 +345,7 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '', sho
         .create-room-time-picker__segments { gap: .1rem; }
       }
     </style>
+    <script defer src="/pwa-client.js?v=issue-9-pwa-1"></script>
   </head>
   <body>${showBrandHeader ? `<header class="app-brand-header${mainClass === 'vote-page-main' ? ' app-brand-header--wide' : ''}"><span class="app-brand">VOTE&RUN!</span></header>` : ''}<main${mainClass ? ` class="${mainClass}"` : ''}>${content}</main>${scriptSrc ? `<script src="${scriptSrc}"></script>` : ''}${script ? `<script type="module">${script}</script>` : ''}</body>
 </html>`;
@@ -417,10 +428,14 @@ const loginPage = () => page({
   script: `document.querySelector('#login-form').addEventListener('submit', async (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    const response = await fetch('/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: form.get('name'), pin: form.get('pin') }) });
-    const result = await response.json();
-    if (response.ok) location.href = '/rooms';
-    else document.querySelector('#message').textContent = result.message;
+    try {
+      const response = await fetch('/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: form.get('name'), pin: form.get('pin') }) });
+      const result = await response.json();
+      if (response.ok) location.href = '/rooms';
+      else document.querySelector('#message').textContent = result.message;
+    } catch {
+      document.querySelector('#message').textContent = 'Offline / ออฟไลน์ — sign-in is unavailable until reconnecting. / เข้าสู่ระบบไม่ได้จนกว่าจะเชื่อมต่ออีกครั้ง';
+    }
   });`,
 });
 
@@ -441,10 +456,14 @@ const registerPage = () => page({
   script: `document.querySelector('#register-form').addEventListener('submit', async (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    const response = await fetch('/api/auth/register', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: form.get('name'), pin: form.get('pin'), pinConfirmation: form.get('pinConfirmation') }) });
-    const result = await response.json();
-    if (response.ok) location.href = '/rooms';
-    else document.querySelector('#message').textContent = result.message;
+    try {
+      const response = await fetch('/api/auth/register', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: form.get('name'), pin: form.get('pin'), pinConfirmation: form.get('pinConfirmation') }) });
+      const result = await response.json();
+      if (response.ok) location.href = '/rooms';
+      else document.querySelector('#message').textContent = result.message;
+    } catch {
+      document.querySelector('#message').textContent = 'Offline / ออฟไลน์ — registration is unavailable until reconnecting. / สมัครสมาชิกไม่ได้จนกว่าจะเชื่อมต่ออีกครั้ง';
+    }
   });`,
 });
 
@@ -706,6 +725,13 @@ export function createApp({ databaseReady = false, database, env = process.env, 
   const app = express();
   app.disable('x-powered-by');
   app.use(express.json({ limit: '10kb' }));
+  app.use(express.static(PUBLIC_DIRECTORY, {
+    index: false,
+    dotfiles: 'ignore',
+    setHeaders(response, filePath) {
+      response.setHeader('Cache-Control', filePath.endsWith('/sw.js') ? 'no-cache' : 'public, max-age=0, must-revalidate');
+    },
+  }));
   const auth = database ? createAuthService({ database, env, now }) : null;
 
   const sendError = (response, error) => {
@@ -750,13 +776,22 @@ export function createApp({ databaseReady = false, database, env = process.env, 
     });
   });
 
+  app.get('/offline', (_request, response) => {
+    response.setHeader('Cache-Control', 'no-store');
+    response.sendFile(fileURLToPath(new URL('../public/offline.html', import.meta.url)));
+  });
+
   app.get('/', (request, response) => {
+    response.setHeader('Cache-Control', 'no-store');
     const session = auth?.findSession(request, response);
     if (session) return response.redirect('/rooms');
     response.type('html').send(loginPage());
   });
 
-  app.get('/register', (_request, response) => response.type('html').send(registerPage()));
+  app.get('/register', (_request, response) => {
+    response.setHeader('Cache-Control', 'no-store');
+    response.type('html').send(registerPage());
+  });
 
   app.get('/vote-board.js', (_request, response) => response.type('application/javascript').send(voteBoardScript));
 
@@ -771,6 +806,11 @@ export function createApp({ databaseReady = false, database, env = process.env, 
   app.get('/room-list.js', (_request, response) => response.type('application/javascript').send(roomListScript));
 
   app.get('/profile-menu.js', (_request, response) => response.type('application/javascript').send(profileMenuScript));
+
+  app.get('/pwa-contract.js', (_request, response) => {
+    response.setHeader('Cache-Control', 'no-cache');
+    response.type('application/javascript').send(pwaContractScript);
+  });
 
   if (auth) {
     app.get('/rooms', (request, response) => {
@@ -1338,7 +1378,8 @@ export function createApp({ databaseReady = false, database, env = process.env, 
         title: `Run Together | ${escapeHtml(room.title)}`,
         mainClass: 'vote-page-main',
         scriptSrc: '/socket.io/socket.io.js',
-        content: `<section id="protected-content" hidden data-room-id="${room.id}">
+        content: `<p id="reconnect-status" class="message" role="status" aria-live="polite">Checking session and room access… / กำลังตรวจสอบเซสชันและสิทธิ์เข้าห้อง…</p>
+        <section id="protected-content" hidden data-room-id="${room.id}">
           <header id="room-page-header" class="room-page-header">
             <div id="room-information" class="room-page-header__identity">
               <h1 id="room-information-heading"><span id="room-number">Room ${String(room.displayNumber).padStart(2, '0')} : </span><span id="room-heading">${escapeHtml(room.title)}</span></h1>
@@ -1371,11 +1412,18 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           ${resetControl}
         </section>`,
         script: `import { mountProfileMenu } from '/profile-menu.js?v=issue-50-profile-menu-3';
+          import { projectOfflineSnapshot } from '/pwa-contract.js?v=issue-9-pwa-1';
           import { applyVoteCardPresentation, colorForDay, configureVoterNamesMarquee, createScheduledEffectController, createSocketRepairController, createVoterNamesRegion as buildVoterNamesRegion, createVoteTimelineController, formatDisplayDate, patchVoteDay } from '/vote-board.js?v=issue-47-voter-names-2';
           import { attachHorizontalSwipe, formatRunEventDate, getDateCardSwipeAction, getDateCardSwipePreview, getRunEventBannerSwipeAction, getRunEventBannerSwipePreview, millisecondsUntilBangkokMidnight, sortRunEventsForPresentation } from '/run-events.js?v=issue-34-beam-1';
           import { formatBangkokRoomTime } from '/date-time.js?v=issue-47-room-time-1';
           let csrfToken = '';
           let sessionCheck = 0;
+          let sessionCheckInFlight = false;
+          let queuedSessionCheck = false;
+          let queuedPreserveContent = false;
+          let sessionReady = false;
+          let offlineScopeGeneration = null;
+          let authoritativeRoom = null;
           let weekLoadSequence = 0;
           let roomMetadataSequence = 0;
           let roomUnavailable = false;
@@ -1409,11 +1457,41 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           const currentWeekButton = document.querySelector('#current-week');
           const nextWeek = document.querySelector('#next-week');
           const resetWeek = document.querySelector('#reset-week');
+          const reconnectStatus = document.querySelector('#reconnect-status');
 
           const message = document.querySelector('#message');
           const runEvents = document.querySelector('#run-events');
           function roomApiPath(_legacyPath, scopedPath) { return roomApiPrefix + scopedPath; }
-          function guardProtectedContent() { weekLoadSequence += 1; roomMetadataSequence += 1; window.clearTimeout(rolloverTimer); pendingEventDates.clear(); protectedContent.hidden = true; csrfToken = ''; profileMenu?.destroy(); profileMenu = null; weekDays.replaceChildren(); runEvents.replaceChildren(); timelineDays.replaceChildren(); scheduledEffects.sync('banner', []); scheduledEffects.sync('date-card', []); scheduledEffects.sync('timeline', []); runEventHandlers.forEach(({ abort, disposeSwipe }) => { abort.abort(); disposeSwipe?.(); }); runEventHandlers.clear(); runEventElements.clear(); weekState = null; eventsByDate = new Map(); message.textContent = ''; }
+          function guardProtectedContent({ preserveContent = false, invalidateSessionCheck = true } = {}) {
+            if (invalidateSessionCheck) sessionCheck += 1;
+            sessionReady = false;
+            weekLoadSequence += 1;
+            roomMetadataSequence += 1;
+            window.clearTimeout(rolloverTimer);
+            window.runTogetherPwa?.pauseCapture();
+            csrfToken = '';
+            if (preserveContent) {
+              protectedContent.inert = true;
+              return;
+            }
+            pendingEventDates.clear();
+            protectedContent.hidden = true;
+            protectedContent.inert = true;
+            profileMenu?.destroy();
+            profileMenu = null;
+            weekDays.replaceChildren();
+            runEvents.replaceChildren();
+            timelineDays.replaceChildren();
+            scheduledEffects.sync('banner', []);
+            scheduledEffects.sync('date-card', []);
+            scheduledEffects.sync('timeline', []);
+            runEventHandlers.forEach(({ abort, disposeSwipe }) => { abort.abort(); disposeSwipe?.(); });
+            runEventHandlers.clear();
+            runEventElements.clear();
+            weekState = null;
+            eventsByDate = new Map();
+            message.textContent = '';
+          }
           function redirectToLogin() { guardProtectedContent(); location.replace('/'); }
           function exitDeletedRoom() { if (roomUnavailable) return; roomUnavailable = true; guardProtectedContent(); if (socket.connected) socket.emit('room:unsubscribe', { roomId }); location.replace('/rooms'); }
           function handleDeletedRoomResponse(response, result) { if (response.status !== 404 || result?.code !== 'ROOM_NOT_FOUND') return false; exitDeletedRoom(); return true; }
@@ -1427,6 +1505,22 @@ export function createApp({ databaseReady = false, database, env = process.env, 
               .filter(Boolean).join(' ');
             roomInformationDetails.textContent = details;
             roomInformationDetails.hidden = details.length === 0;
+          }
+          function persistOfflineSnapshot() {
+            if (!sessionReady || !authoritativeRoom || !weekState || !Number.isSafeInteger(offlineScopeGeneration)
+              || navigator.onLine === false || !window.runTogetherPwa) return;
+            try {
+              const snapshot = projectOfflineSnapshot({
+                room: authoritativeRoom,
+                weekState: {
+                  roomId,
+                  week: weekState.week,
+                  days: weekState.days,
+                  events: weekState.events,
+                },
+              });
+              void window.runTogetherPwa.saveSnapshot(snapshot, offlineScopeGeneration).catch(() => {});
+            } catch {}
           }
           function applyRoomMetadata(room) {
             if (roomUnavailable || room?.id !== roomId || typeof room.title !== 'string') return;
@@ -1442,7 +1536,15 @@ export function createApp({ databaseReady = false, database, env = process.env, 
               if (response.status === 401) { redirectToLogin(); return false; }
               if (handleDeletedRoomResponse(response, result)) return false;
               if (!response.ok || result.room?.id !== roomId || typeof result.room.title !== 'string') return false;
+              authoritativeRoom = {
+                id: result.room.id,
+                displayNumber: result.room.displayNumber,
+                title: result.room.title,
+                venue: typeof result.room.venue === 'string' ? result.room.venue : '',
+                time: typeof result.room.time === 'string' ? result.room.time : '',
+              };
               renderRoomMetadata(result.room);
+              persistOfflineSnapshot();
               return true;
             } catch { return false; }
           }
@@ -1841,7 +1943,9 @@ export function createApp({ databaseReady = false, database, env = process.env, 
               const row = weekDays.querySelector('.vote-day[data-date="' + patch.date + '"]');
               if (row) makeDayEventAction(row, day);
             }
-            return patchVoteDay({ weekDays, patch, createVoterNamesRegion, configureVoterNamesMarquee });
+            const result = patchVoteDay({ weekDays, patch, createVoterNamesRegion, configureVoterNamesMarquee });
+            persistOfflineSnapshot();
+            return result;
           }
           function createVoterNamesRegion(names) { return buildVoterNamesRegion(document, names); }
           async function toggleVote(date, selected) {
@@ -1870,6 +1974,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
             const row = weekDays.querySelector('.vote-day[data-date="' + date + '"]');
             const card = row?.querySelector('.vote-card');
             if (!row || !card) return false;
+            if (protectedContent.hidden) { pendingTargetDate = date; return false; }
             const target = card.disabled ? row : card;
             if (target === row) row.tabIndex = -1;
             target.classList.add('is-deep-link-target');
@@ -1921,6 +2026,7 @@ export function createApp({ databaseReady = false, database, env = process.env, 
               if (!response.ok) { message.textContent = state.message; return false; }
               if (state.roomId !== roomId) return false;
               renderWeek(state);
+              persistOfflineSnapshot();
               return true;
             } catch {
               if (sequence === weekLoadSequence) message.textContent = 'โหลดสัปดาห์ไม่สำเร็จ / Could not load this week.';
@@ -1934,7 +2040,63 @@ export function createApp({ databaseReady = false, database, env = process.env, 
               scheduleBangkokDayRefresh();
             }, millisecondsUntilBangkokMidnight());
           }
-          async function loadSession() { const currentCheck = ++sessionCheck; guardProtectedContent(); try { const response = await fetch('/api/session', { cache: 'no-store' }); if (currentCheck !== sessionCheck) return; if (!response.ok) { redirectToLogin(); return; } const session = await response.json(); if (currentCheck !== sessionCheck) return; csrfToken = session.csrfToken; isAdmin = session.role === 'admin'; profileMenu = mountProfileMenu(profileRoot, { displayName: session.displayName, role: session.role, returnTo: '/vote/' + roomId }); profileMenu.setCsrfToken(csrfToken); protectedContent.hidden = false; await Promise.all([loadWeek(weekMonday), loadTimeline(), refreshRoomMetadata()]); scheduleBangkokDayRefresh(); } catch { if (currentCheck === sessionCheck) redirectToLogin(); } }
+          function loadSession(options = {}) {
+            if (sessionCheckInFlight) {
+              queuedSessionCheck = true;
+              queuedPreserveContent ||= options.preserveContent === true;
+              return;
+            }
+            sessionCheckInFlight = true;
+            void performSessionCheck(options).finally(() => {
+              sessionCheckInFlight = false;
+              if (!queuedSessionCheck) return;
+              const preserveContent = queuedPreserveContent;
+              queuedSessionCheck = false;
+              queuedPreserveContent = false;
+              loadSession({ preserveContent });
+            });
+          }
+          async function performSessionCheck({ preserveContent = false } = {}) {
+            const currentCheck = ++sessionCheck;
+            const keepContent = preserveContent && sessionReady && !protectedContent.hidden;
+            guardProtectedContent({ preserveContent: keepContent, invalidateSessionCheck: false });
+            reconnectStatus.hidden = false;
+            reconnectStatus.textContent = 'Checking session and room access… / กำลังตรวจสอบเซสชันและสิทธิ์เข้าห้อง…';
+            try {
+              offlineScopeGeneration = await window.runTogetherPwa?.beginRoomScope(roomId);
+              const response = await fetch('/api/session', { cache: 'no-store' });
+              if (currentCheck !== sessionCheck) return;
+              if (!response.ok) { redirectToLogin(); return; }
+              const session = await response.json();
+              if (currentCheck !== sessionCheck) return;
+              csrfToken = session.csrfToken;
+              isAdmin = session.role === 'admin';
+              profileMenu?.destroy();
+              profileMenu = mountProfileMenu(profileRoot, { displayName: session.displayName, role: session.role, returnTo: '/vote/' + roomId });
+              profileMenu.setCsrfToken(csrfToken);
+              const [weekReady, , roomReady] = await Promise.all([loadWeek(weekMonday), loadTimeline(), refreshRoomMetadata()]);
+              if (currentCheck !== sessionCheck) return;
+              if (!weekReady || !roomReady) {
+                if (keepContent) guardProtectedContent();
+                reconnectStatus.textContent = 'Room access could not be confirmed. Changes remain disabled. / ยืนยันสิทธิ์เข้าห้องไม่ได้ จึงปิดการแก้ไขไว้';
+                return;
+              }
+              window.runTogetherPwa?.resumeOnline();
+              sessionReady = true;
+              persistOfflineSnapshot();
+              protectedContent.inert = false;
+              protectedContent.hidden = false;
+              focusPendingTargetDate();
+              reconnectStatus.hidden = true;
+              subscribeToRoom();
+              scheduleBangkokDayRefresh();
+            } catch {
+              if (currentCheck === sessionCheck) {
+                reconnectStatus.textContent = 'Session could not be confirmed. Changes remain disabled. / ยืนยันเซสชันไม่ได้ จึงปิดการแก้ไขไว้';
+                redirectToLogin();
+              }
+            }
+          }
           previousWeek.addEventListener('click', () => loadWeek(previousWeek.dataset.monday));
           currentWeekButton.addEventListener('click', () => loadWeek(currentWeekMonday));
           nextWeek.addEventListener('click', () => { if (!nextWeek.disabled) loadWeek(nextWeek.dataset.monday); });
@@ -1953,21 +2115,25 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           socket.on('rooms:summary-changed', ({ room }) => { applyRoomMetadata(room); });
           socket.on('week:reset', ({ roomId: changedRoomId, monday }) => { if (roomUnavailable || changedRoomId !== roomId) return; if (monday === weekMonday) loadWeek(weekMonday); loadTimeline(); });
           socket.on('room:deleted', ({ roomId: deletedRoomId }) => { if (deletedRoomId === roomId) exitDeletedRoom(); });
-          socket.on('connect', () => {
-            if (roomUnavailable) return;
-            const repair = () => { void socketRepair.handleConnect(); void loadTimeline(); void refreshRoomMetadata(); };
+          function subscribeToRoom(afterSubscribe) {
+            if (roomUnavailable || !sessionReady || !socket.connected) return;
             socket.emit('room:subscribe', { roomId }, (result) => {
               if (roomUnavailable) return;
               if (result?.code === 'ROOM_NOT_FOUND') { exitDeletedRoom(); return; }
               if (!result?.ok || result.roomId !== roomId) { message.textContent = 'Room access changed. Re-enter the room.'; return; }
-              repair();
+              afterSubscribe?.();
             });
+          }
+          socket.on('connect', () => {
+            if (roomUnavailable || !sessionReady) return;
+            subscribeToRoom(() => { void socketRepair.handleConnect(); void loadTimeline(); void refreshRoomMetadata(); });
           });
           socket.on('auth:revoked', redirectToLogin);
           socket.on('connect_error', (error) => { if (error.message === 'unauthenticated') redirectToLogin(); });
           window.addEventListener('pageshow', loadSession);
+          window.addEventListener('run-together:online', () => loadSession({ preserveContent: true }));
           window.addEventListener('pagehide', guardProtectedContent);
-          loadSession();`,
+`,
       }));
     });
 

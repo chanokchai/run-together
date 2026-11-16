@@ -130,7 +130,9 @@ export function mountProfileMenu(root, { displayName, role, returnTo }) {
   const status = document.createElement('p');
   status.className = 'profile-menu__status';
   status.setAttribute('role', 'alert');
-  statusGroup.append(status);
+  const statusDetail = document.createElement('p');
+  statusDetail.className = 'profile-menu__status-detail';
+  statusGroup.append(status, statusDetail);
   panel.append(statusGroup);
   root.append(trigger, panel);
 
@@ -223,8 +225,28 @@ export function mountProfileMenu(root, { displayName, role, returnTo }) {
   const onLogout = async () => {
     logout.disabled = true;
     status.textContent = '';
+    statusDetail.textContent = '';
     statusGroup.hidden = true;
+    let localDataCleared = false;
     try {
+      try {
+        const clearSnapshot = window.runTogetherPwa?.clearSnapshot;
+        if (typeof clearSnapshot !== 'function') throw new Error('Offline data clearing is unavailable.');
+        await clearSnapshot('logout');
+        localDataCleared = true;
+      } catch {
+        if (!navigator.onLine) {
+          location.replace('/offline?clearFailed=1');
+          return;
+        }
+        status.textContent = 'Could not confirm local offline data was cleared. Please retry before signing out. / ยืนยันการล้างข้อมูลออฟไลน์ไม่ได้ กรุณาลองอีกครั้งก่อนออกจากระบบ';
+        statusGroup.hidden = false;
+        return;
+      }
+      if (!navigator.onLine) {
+        location.replace(localDataCleared ? '/offline?cleared=1' : '/offline?clearFailed=1');
+        return;
+      }
       const response = await fetch('/api/auth/logout', {
         method: 'POST',
         headers: { 'x-csrf-token': csrfToken },
@@ -234,9 +256,15 @@ export function mountProfileMenu(root, { displayName, role, returnTo }) {
         return;
       }
       status.textContent = 'Could not log out. Please retry.';
+      statusDetail.textContent = localDataCleared
+        ? 'Local offline data was cleared, but the server session is still active. / ล้างข้อมูลออฟไลน์แล้ว แต่เซสชันบนเซิร์ฟเวอร์ยังใช้งานอยู่'
+        : '';
       statusGroup.hidden = false;
     } catch {
       status.textContent = 'Could not log out. Please retry.';
+      statusDetail.textContent = localDataCleared
+        ? 'Local offline data was cleared, but the server session is still active. / ล้างข้อมูลออฟไลน์แล้ว แต่เซสชันบนเซิร์ฟเวอร์ยังใช้งานอยู่'
+        : '';
       statusGroup.hidden = false;
     } finally {
       logout.disabled = false;

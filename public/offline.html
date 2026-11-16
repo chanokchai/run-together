@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en" data-offline-shell="true">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#172554">
+    <meta name="robots" content="noindex, nofollow">
+    <title>Run Together | Offline view</title>
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="icon" href="/icons/run-together-192.png" sizes="192x192" type="image/png">
+    <link rel="stylesheet" href="/offline.css?v=issue-9-pwa-1">
+    <script src="/pwa-client.js?v=issue-9-pwa-1"></script>
+    <script type="module" src="/offline.js?v=issue-9-pwa-1"></script>
+  </head>
+  <body>
+    <main class="offline-shell">
+      <header>
+        <p class="offline-shell__brand">VOTE&RUN!</p>
+        <h1>Saved week / สัปดาห์ที่บันทึกไว้</h1>
+      </header>
+      <p id="offline-status" class="offline-banner" role="status" aria-live="polite">
+        Offline / ออฟไลน์ — read-only view; saved data may be stale. / ดูได้อย่างเดียว ข้อมูลที่บันทึกไว้อาจไม่เป็นปัจจุบัน
+      </p>
+      <p id="offline-identity-note" class="offline-note">
+        This view does not confirm that you are signed in. / หน้านี้ไม่ยืนยันว่าคุณเข้าสู่ระบบอยู่
+      </p>
+      <section id="saved-week" class="saved-week" hidden aria-labelledby="saved-week-heading">
+        <h2 id="saved-week-heading"></h2>
+        <p id="saved-room-details" class="saved-room-details"></p>
+        <ol id="saved-days" class="saved-days" aria-label="Saved week days / วันที่บันทึกไว้"></ol>
+        <section id="saved-events-region" class="saved-events-region" hidden aria-labelledby="saved-events-heading">
+          <h3 id="saved-events-heading">Run events / กิจกรรมวิ่ง</h3>
+          <ul id="saved-events" class="saved-events"></ul>
+        </section>
+      </section>
+      <p id="no-saved-week" class="empty-state" hidden>No matching saved week is available on this device. / ไม่มีสัปดาห์ที่ตรงกันซึ่งบันทึกไว้ในอุปกรณ์นี้</p>
+      <div class="offline-actions">
+        <a id="return-to-room" class="offline-button" href="/" hidden>Return to room / กลับไปที่ห้อง</a>
+        <button id="clear-offline-data" type="button" class="offline-button offline-button--secondary">Clear saved offline data / ล้างข้อมูลออฟไลน์ที่บันทึกไว้</button>
+      </div>
+      <p id="offline-message" class="offline-message" role="status" aria-live="polite">
+        Clearing saved offline data does not sign you out or revoke a server session. / การล้างข้อมูลออฟไลน์ไม่ได้ออกจากระบบหรือเพิกถอนเซสชันบนเซิร์ฟเวอร์
+      </p>
+    </main>
+  </body>
+</html>
