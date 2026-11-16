@@ -1525,17 +1525,26 @@ export function createApp({ databaseReady = false, database, env = process.env, 
           function applyRoomMetadata(room) {
             if (roomUnavailable || room?.id !== roomId || typeof room.title !== 'string') return;
             roomMetadataSequence += 1;
-            renderRoomMetadata(room);
+            authoritativeRoom = {
+              id: room.id,
+              displayNumber: room.displayNumber,
+              title: room.title,
+              venue: typeof room.venue === 'string' ? room.venue : '',
+              time: typeof room.time === 'string' ? room.time : '',
+            };
+            renderRoomMetadata(authoritativeRoom);
+            persistOfflineSnapshot();
           }
           async function refreshRoomMetadata() {
             const sequence = ++roomMetadataSequence;
             try {
               const response = await fetch('/api/rooms/' + encodeURIComponent(roomId), { cache: 'no-store' });
               const result = await response.json();
-              if (sequence !== roomMetadataSequence || roomUnavailable) return false;
+              if (roomUnavailable) return false;
               if (response.status === 401) { redirectToLogin(); return false; }
               if (handleDeletedRoomResponse(response, result)) return false;
               if (!response.ok || result.room?.id !== roomId || typeof result.room.title !== 'string') return false;
+              if (sequence !== roomMetadataSequence) return authoritativeRoom?.id === roomId;
               authoritativeRoom = {
                 id: result.room.id,
                 displayNumber: result.room.displayNumber,
