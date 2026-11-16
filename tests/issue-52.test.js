@@ -72,7 +72,7 @@ test('Issue 52 shared heading covers signed-out, member, room, PIN, and admin pa
     addRoomMember(server.database, { roomId: room.id, userId: viewerId, now: () => NOW });
     const adminCookie = await loginAdmin(baseUrl);
     const pages = [
-      { path: '/', cookie: '', heading: 'Run Together' },
+      { path: '/', cookie: '', heading: null },
       { path: '/register', cookie: '', heading: 'Run Together' },
       { path: '/rooms', cookie: viewer.cookie, heading: null },
       { path: `/vote/${room.id}`, cookie: viewer.cookie, heading: 'Weekday running' },
@@ -93,6 +93,14 @@ test('Issue 52 shared heading covers signed-out, member, room, PIN, and admin pa
         assert.doesNotMatch(html, /class="app-brand-header"/,
           'Rooms does not duplicate the brand in a second header');
         assert.match(html, /id="rooms-profile-menu"/);
+      } else if (path === '/') {
+        assert.match(html, /<h1 id="login-introduction" class="login-introduction">/,
+          'the login introduction remains the page primary heading');
+        assert.match(html, /Vote for the days you can run\./);
+        assert.match(html, /See when others are free, then suggest a day to <span class="login-introduction__nowrap">your group\.<\/span>/);
+        assert.match(html, /This App make planning your next run easier\./);
+        assert.doesNotMatch(html, /<h1>Run Together<\/h1>|<p>วิ่งไปด้วยกัน \/ Run together<\/p>/,
+          'the legacy login heading and subtitle are removed');
       } else {
         assert.match(html, /class="app-brand-header(?:\s|")/,
           `${path} has the shared non-heading brand header`);

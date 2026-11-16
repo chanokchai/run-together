@@ -59,7 +59,7 @@ test('Issue 50 places one shared account menu on Rooms and preserves room-list a
   assert.match(html, /id="create-room-form"/);
 });
 
-test('Issue 50 puts the shared profile menu after Back and keeps room and week content', async (t) => {
+test('Issue 54 puts the shared profile menu before Back and keeps room and week content', async (t) => {
   const fixture = await startFixture();
   t.after(() => fixture.close());
   const cookie = await fixture.login('admin');
@@ -70,7 +70,7 @@ test('Issue 50 puts the shared profile menu after Back and keeps room and week c
   const html = await response.text();
   const backIndex = html.indexOf('id="back-to-rooms"');
   const menuIndex = html.indexOf('id="vote-profile-menu"');
-  assert.ok(backIndex >= 0 && menuIndex > backIndex, 'Back precedes the profile trigger in the header actions');
+  assert.ok(menuIndex >= 0 && backIndex > menuIndex, 'the profile control precedes Back in the header actions');
   assert.match(html, /id="vote-profile-menu"[^>]+data-return-to="\/vote\/[0-9a-f-]+"/);
   assert.match(html, /profile-menu\.js\?v=issue-50-profile-menu-3/);
   assert.doesNotMatch(html, /id="display-name"|id="manage-users-link"|id="manage-user"|vote-page-identity[^>]*>\s*<span>/);
