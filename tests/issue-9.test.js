@@ -38,7 +38,7 @@ test('Issue 9 serves an installable public offline shell without caching protect
     const loginHtml = await login.text();
     assert.match(loginHtml, /rel="manifest" href="\/manifest\.webmanifest"/);
     assert.match(loginHtml, /name="theme-color"/);
-    assert.match(loginHtml, /pwa-client\.js\?v=issue-9-pwa-1/);
+    assert.match(loginHtml, /pwa-client\.js\?v=issue-9-pwa-2/);
     assert.match(login.headers.get('cache-control') ?? '', /no-store/);
 
     const manifest = await manifestResponse.json();
@@ -56,7 +56,7 @@ test('Issue 9 serves an installable public offline shell without caching protect
     }
 
     const worker = await serviceWorkerResponse.text();
-    assert.match(worker, /run-together-pwa-shell-v1/);
+    assert.match(worker, /run-together-pwa-shell-v2/);
     assert.match(worker, /request\.mode\s*===\s*['"]navigate['"]/);
     assert.match(worker, /request\.method\s*!==\s*['"]GET['"]/);
     assert.doesNotMatch(worker, /sync['"]|backgroundSync|BackgroundSync/);
@@ -64,7 +64,7 @@ test('Issue 9 serves an installable public offline shell without caching protect
     const offlineHtml = await offlineResponse.text();
     assert.match(offlineHtml, /Offline|ออฟไลน์/);
     assert.match(offlineHtml, /Clear saved offline data/);
-    assert.match(offlineHtml, /offline\.js\?v=issue-9-pwa-1/);
+    assert.match(offlineHtml, /offline\.js\?v=issue-9-pwa-2/);
     assert.match(offlineResponse.headers.get('cache-control') ?? '', /no-store/);
   });
 });

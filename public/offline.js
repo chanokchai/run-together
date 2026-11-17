@@ -81,7 +81,8 @@ async function render() {
   savedWeek.hidden = true;
   returnLink.hidden = true;
   const pathRoom = /^\/vote\/([0-9a-f-]+)$/i.exec(location.pathname)?.[1] ?? null;
-  const routeAllowsSnapshot = location.pathname === '/offline' || location.pathname === '/' || Boolean(pathRoom);
+  const offlineFallback = document.documentElement.dataset.offlineShell === 'true';
+  const routeAllowsSnapshot = offlineFallback || location.pathname === '/offline' || location.pathname === '/' || Boolean(pathRoom);
   if (!routeAllowsSnapshot && !nonRoomNavigationCleared) {
     nonRoomNavigationCleared = true;
     await window.runTogetherPwa?.clearSnapshot('non-room-offline-navigation');

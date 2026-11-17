@@ -283,7 +283,7 @@ test('Issue 9 protects private page caches, persists one sanitized week, and rem
   assert.equal(browserProof.cachedProtectedPage, false, 'protected HTML and API responses are absent from CacheStorage');
   assert.deepEqual(browserProof.cacheKeys.sort(), [
     '/icons/run-together-192.png', '/icons/run-together-512.png', '/manifest.webmanifest',
-    '/offline', '/offline.css?v=issue-9-pwa-1', '/offline.js?v=issue-9-pwa-1', '/pwa-client.js?v=issue-9-pwa-1',
+    '/offline', '/offline.css?v=issue-9-pwa-2', '/offline.js?v=issue-9-pwa-2', '/pwa-client.js?v=issue-9-pwa-2',
   ].sort(), 'CacheStorage contains only the versioned, credential-free shell assets');
 
   secondPage = await connectPage(instance.port);
@@ -313,6 +313,19 @@ test('Issue 9 protects private page caches, persists one sanitized week, and rem
     'opening registration clears a prior account snapshot before identity changes');
   await client.send('Page.navigate', { url: `${baseUrl}/vote/${LEGACY_ROOM_ID}` });
   assert.equal(await waitFor(client, `window.runTogetherPwa?.getLatestSnapshot().then(Boolean)`), true);
+  await setOffline(client, true);
+  const savedBeforeInterruptedLaunch = await evaluate(client, 'window.runTogetherPwa.getLatestSnapshot()');
+  await client.send('Page.navigate', { url: `${baseUrl}/rooms` });
+  assert.equal(await waitFor(client, `document.documentElement?.dataset.offlineShell === 'true' && location.pathname === '/rooms' && document.querySelector('#saved-week') && !document.querySelector('#saved-week').hidden && document.querySelector('#no-saved-week').hidden`), true,
+    'an offline fallback for the installed app route shows the saved same-device week');
+  assert.deepEqual(await storedSnapshot(client), savedBeforeInterruptedLaunch,
+    'an unscoped offline fallback preserves the existing same-device snapshot for a later room-scoped open');
+  await client.send('Page.navigate', { url: `${baseUrl}/vote/${LEGACY_ROOM_ID}` });
+  assert.equal(await waitFor(client, `document.documentElement?.dataset.offlineShell === 'true' && document.querySelector('#saved-week') && !document.querySelector('#saved-week').hidden`), true,
+    'the preserved snapshot remains available from its matching room route after an interrupted app launch');
+  await setOffline(client, false);
+  assert.equal(await waitFor(client, 'navigator.onLine === true'), true);
+
   await secondPage.client.send('Page.navigate', { url: 'about:blank' });
   secondPage.client.close();
   secondPage = null;
@@ -476,4 +489,79 @@ test('Issue 9 protects private page caches, persists one sanitized week, and rem
   assert.equal(postUpgrade.caches.includes('run-together-pwa-shell-obsolete'), false, 'worker activation removes obsolete shell caches');
   assert.equal(await storedSnapshot(client), null, 'worker upgrade does not resurrect a cleared snapshot');
   assert.deepEqual(await postUpgrade.queuedSyncTags, [], 'no background sync or queued mutation is registered');
+});
+
+test('Issue 9 restores the saved week after a browser restart at the install start URL when the server is unreachable', async (t) => {
+  const directory = await mkdtemp(join(process.env.TMPDIR || tmpdir(), 'run-together-issue-9-restart-'));
+  const profile = await mkdtemp(join(process.env.TMPDIR || tmpdir(), 'run-together-issue-9-restart-chrome-'));
+  const server = createServer({ databasePath: join(directory, 'preview.sqlite'), env: ENV, now: () => NOW });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const port = server.address().port;
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const cookie = await seedBrowserSession(baseUrl, server);
+  let instance;
+  t.after(async () => {
+    await stopBrowser(instance);
+    await removeProfileWithRetry(profile);
+    if (server.listening) {
+      await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+    server.database.close();
+    await rm(directory, { recursive: true, force: true });
+  });
+
+  instance = await launchBrowser(profile);
+  const firstClient = instance.client;
+  const [cookieName, ...cookieValue] = cookie.split('=');
+  const cookieResult = await firstClient.send('Network.setCookie', {
+    url: baseUrl,
+    name: cookieName,
+    value: cookieValue.join('='),
+    path: '/',
+  });
+  assert.equal(cookieResult.success, true);
+  await firstClient.send('Page.navigate', { url: `${baseUrl}/vote/${LEGACY_ROOM_ID}` });
+  assert.equal(await waitFor(firstClient, `Boolean(document.querySelector('#protected-content') && !document.querySelector('#protected-content').hidden && navigator.serviceWorker?.controller && window.runTogetherPwa)`), true,
+    'the authenticated room is loaded under the active service worker');
+  assert.equal(await waitFor(firstClient, 'window.runTogetherPwa?.getLatestSnapshot().then(Boolean)'), true,
+    'the same-room sanitized week has been saved before closing the browser');
+  const savedBeforeRestart = await evaluate(firstClient, 'window.runTogetherPwa.getLatestSnapshot()');
+  assert.equal(savedBeforeRestart.room.id, LEGACY_ROOM_ID);
+
+  await stopBrowser(instance);
+  instance = null;
+  await rm(join(profile, 'DevToolsActivePort'), { force: true });
+  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+
+  instance = await launchBrowser(profile);
+  const reopenedClient = instance.client;
+  await reopenedClient.send('Page.navigate', { url: `${baseUrl}/` });
+  assert.equal(await waitFor(reopenedClient, 'navigator.onLine === true'), true,
+    'the browser reports online even though this app server is unavailable');
+  assert.equal(await waitFor(reopenedClient, `document.documentElement?.dataset.offlineShell === 'true' && location.pathname === '/' && document.querySelector('#saved-week') && !document.querySelector('#saved-week').hidden`), true,
+    'the manifest start URL falls back to the cached read-only shell after a normal browser restart');
+  const reopenedSnapshot = await evaluate(reopenedClient, `(async () => ({
+    snapshot: await window.runTogetherPwa.getLatestSnapshot(),
+    title: document.querySelector('#saved-week-heading').textContent,
+    status: document.querySelector('#offline-status').textContent,
+    noAuthClaim: document.querySelector('#offline-identity-note').textContent,
+  }))()`);
+  assert.deepEqual(reopenedSnapshot.snapshot, savedBeforeRestart,
+    'the same sanitized room/week persists in IndexedDB across browser process restart');
+  assert.match(reopenedSnapshot.title, /Room 01/);
+  assert.match(reopenedSnapshot.status, /read-only/);
+  assert.match(reopenedSnapshot.noAuthClaim, /does not confirm/i);
+  await reopenedClient.send('Page.navigate', { url: `${baseUrl}/rooms` });
+  assert.equal(await waitFor(reopenedClient, `document.documentElement?.dataset.offlineShell === 'true' && location.pathname === '/rooms' && document.querySelector('#saved-week') && !document.querySelector('#saved-week').hidden`), true,
+    'a failed protected-route fetch also shows the saved week while navigator.onLine remains true');
+  assert.equal(await evaluate(reopenedClient, 'navigator.onLine'), true,
+    'the app-server network failure does not change the browser online flag');
+  assert.deepEqual(await storedSnapshot(reopenedClient), savedBeforeRestart,
+    'the same scoped week remains stored after the unscoped route fallback');
+  await reopenedClient.send('Page.navigate', { url: `${baseUrl}/vote/00000000-0000-4000-8000-000000000010` });
+  assert.equal(await waitFor(reopenedClient, `document.documentElement?.dataset.offlineShell === 'true' && document.querySelector('#no-saved-week') && !document.querySelector('#no-saved-week').hidden && document.querySelector('#saved-week').hidden`), true,
+    'the offline fallback does not show Room 01 data for a different room route');
+  assert.deepEqual(await storedSnapshot(reopenedClient), savedBeforeRestart,
+    'a mismatched room fallback hides but does not erase the Room 01 snapshot');
 });

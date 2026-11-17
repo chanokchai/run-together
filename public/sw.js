@@ -1,10 +1,10 @@
 const CACHE_PREFIX = 'run-together-pwa-shell-';
-const CACHE_NAME = 'run-together-pwa-shell-v1';
+const CACHE_NAME = 'run-together-pwa-shell-v2';
 const SHELL_ASSETS = [
   '/offline',
-  '/offline.css?v=issue-9-pwa-1',
-  '/offline.js?v=issue-9-pwa-1',
-  '/pwa-client.js?v=issue-9-pwa-1',
+  '/offline.css?v=issue-9-pwa-2',
+  '/offline.js?v=issue-9-pwa-2',
+  '/pwa-client.js?v=issue-9-pwa-2',
   '/manifest.webmanifest',
   '/icons/run-together-192.png',
   '/icons/run-together-512.png',

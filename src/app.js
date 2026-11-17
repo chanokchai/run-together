@@ -345,7 +345,7 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '', sho
         .create-room-time-picker__segments { gap: .1rem; }
       }
     </style>
-    <script defer src="/pwa-client.js?v=issue-9-pwa-1"></script>
+    <script defer src="/pwa-client.js?v=issue-9-pwa-2"></script>
   </head>
   <body>${showBrandHeader ? `<header class="app-brand-header${mainClass === 'vote-page-main' ? ' app-brand-header--wide' : ''}"><span class="app-brand">VOTE&RUN!</span></header>` : ''}<main${mainClass ? ` class="${mainClass}"` : ''}>${content}</main>${scriptSrc ? `<script src="${scriptSrc}"></script>` : ''}${script ? `<script type="module">${script}</script>` : ''}</body>
 </html>`;

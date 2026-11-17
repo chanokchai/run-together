@@ -315,7 +315,7 @@
     }
     if (navigator.onLine === false) enterOfflineMode();
     if ('serviceWorker' in navigator && window.isSecureContext) {
-      navigator.serviceWorker.register('/sw.js?v=issue-9-pwa-1', { scope: '/', updateViaCache: 'none' }).catch(() => {});
+      navigator.serviceWorker.register('/sw.js?v=issue-9-pwa-2', { scope: '/', updateViaCache: 'none' }).catch(() => {});
     }
   }, { once: true });
 })();
