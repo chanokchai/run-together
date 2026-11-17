@@ -1,0 +1,26 @@
+:root { color-scheme: light; font-family: system-ui, sans-serif; background: #f3f6fa; color: #14213d; }
+* { box-sizing: border-box; }
+body { margin: 0; padding: 1rem; }
+.offline-shell { width: min(100%, 46rem); margin: 0 auto; padding: clamp(1rem, 4vw, 2rem); border-radius: 1rem; background: #fff; box-shadow: 0 .25rem 1rem #14213d18; }
+.offline-shell__brand { margin: 0; color: #b4235a; font-size: 1.25rem; font-weight: 900; letter-spacing: -.02em; }
+h1 { margin: .35rem 0 1rem; font-size: clamp(1.35rem, 5vw, 1.8rem); }
+.offline-banner { padding: .85rem 1rem; border: 2px solid #854d0e; border-radius: .6rem; background: #fef3c7; color: #422006; font-weight: 800; line-height: 1.45; }
+.offline-note { line-height: 1.5; }
+.saved-week { margin-top: 1.25rem; }
+.saved-week h2 { margin-bottom: .35rem; overflow-wrap: anywhere; }
+.saved-room-details { margin-top: 0; color: #52606d; }
+.saved-days { display: grid; gap: .45rem; margin: .75rem 0; padding: 0; list-style: none; }
+.saved-day { padding: .7rem; border: 1px solid #94a3b8; border-radius: .5rem; background: #f8fafc; }
+.saved-day__date { font-weight: 800; }
+.saved-day__voters { margin: .25rem 0 0; overflow-wrap: anywhere; }
+.saved-events-region { margin-top: 1rem; padding-top: .5rem; border-top: 1px solid #cbd5e1; }
+.saved-events-region h3 { font-size: 1rem; }
+.saved-events { display: grid; gap: .35rem; margin: 0; padding-left: 1.25rem; }
+.empty-state { margin-top: 1.25rem; padding: 1rem; border: 1px dashed #64748b; border-radius: .5rem; background: #f8fafc; line-height: 1.5; }
+.offline-actions { display: grid; gap: .6rem; margin-top: 1.25rem; }
+.offline-button { display: inline-flex; min-height: 48px; align-items: center; justify-content: center; padding: .65rem .9rem; border: 0; border-radius: .5rem; background: #1769aa; color: #fff; font: inherit; font-weight: 800; text-align: center; text-decoration: none; cursor: pointer; }
+.offline-button:focus-visible { outline: 3px solid #f5c542; outline-offset: 2px; }
+.offline-button--secondary { border: 2px solid #334155; background: #fff; color: #14213d; }
+.offline-button[hidden] { display: none; }
+.offline-message { min-height: 1.5rem; margin-bottom: 0; color: #334155; line-height: 1.45; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; } }
