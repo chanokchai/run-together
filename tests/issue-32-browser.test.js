@@ -417,6 +417,21 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
   assert.ok(regular.pageWidth <= 390, 'keeps the stacked banner layout inside a 390px viewport');
   assert.ok(regular.banners.every(({ left, right }) => left >= 0 && right <= 390), 'keeps every event banner within the viewport');
 
+  await client.send('Emulation.setDeviceMetricsOverride', { width: 375, height: 844, deviceScaleFactor: 1, mobile: true });
+  const sevenDayViewport = await evaluate(client, `(() => ({
+    width: innerWidth,
+    pageWidth: document.documentElement.scrollWidth,
+    cards: [...document.querySelectorAll('#week-days .vote-card')].map((card) => {
+      const box = card.getBoundingClientRect();
+      return { date: card.dataset.date, left: box.left, right: box.right, height: box.height };
+    }),
+  }))()`);
+  assert.equal(sevenDayViewport.cards.length, 7, 'renders all seven interactive day cards at 375px');
+  assert.ok(sevenDayViewport.pageWidth <= 375, 'the seven-day board has no horizontal page overflow at 375px');
+  assert.ok(sevenDayViewport.cards.every(({ left, right }) => left >= 0 && right <= 375),
+    'each of the seven day cards stays within the 375px viewport');
+  t.diagnostic(`375px board PASS: seven day cards; page width ${sevenDayViewport.pageWidth}px; no horizontal overflow.`);
+
   await evaluate(client, `document.querySelector('#previous-week').click()`);
   assert.equal(await waitFor(client, `document.querySelector('#week-heading').textContent === 'Week 8 (2024)'`), true, 'week navigation loads the selected earlier week');
   assert.equal(await evaluate(client, `document.querySelectorAll('.run-event-banner').length`), 0, 'does not show events from another week');
@@ -449,6 +464,8 @@ test('Issue 32 vote page renders stacked event banners and remains keyboard/mobi
     t.diagnostic(`proposal rows in SQLite: ${server.database.prepare('SELECT COUNT(*) AS count FROM run_events').get().count}`);
   }
   assert.equal(keyboardProposalCreated, true, 'keyboard Enter creates a shared proposal using the accessible date action');
+  assert.equal(await waitFor(client, `document.querySelector('#message').textContent === 'Run proposed.'`), true,
+    'the proposal action announces its result after the asynchronous refresh completes');
   assert.equal(await evaluate(client, `document.querySelector('#message').textContent`), 'Run proposed.');
 
   const focusedWithdrawalAction = await evaluate(client, `(() => { const button = document.querySelector('.run-event-day-action[data-date="2024-02-29"]'); button?.focus(); return Boolean(button && document.activeElement === button); })()`);
