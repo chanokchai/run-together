@@ -721,6 +721,8 @@ test('Issue 50 profile menu remains usable at actual 200% Chromium browser zoom'
   const target = await createTarget(port);
   client = createCdpClient(target.webSocketDebuggerUrl);
   await openPage(client, `${fixture.baseUrl}/`);
+  assert.equal(await waitFor(client, `Boolean(document.querySelector('#login-form') && document.querySelector('#login-introduction'))`), true,
+    'waits for the login page to finish rendering before measuring real browser zoom');
   const zoomedLogin = await getLoginLayout(client);
   const zoomedLoginEnvironment = await evaluate(client, `({ dpr: devicePixelRatio, visualScale: visualViewport.scale, bodyZoom: getComputedStyle(document.body).zoom,
     controls: [...document.querySelectorAll('#login-form input, #login-form button')].map((control) => { const box = control.getBoundingClientRect(); return { width: box.width, height: box.height }; }) })`);
