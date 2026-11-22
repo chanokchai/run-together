@@ -92,6 +92,29 @@ async function waitFor(client, expression, timeoutMs = 10000) {
   return false;
 }
 
+async function toggleDisclosureAndWaitForArrowTransition(client, expectedOpen, expectedTransform) {
+  return evaluate(client, `((expectedOpen, expectedTransform) => {
+    const icon = document.querySelector('#room-filters .filter-collapsible__icon');
+    const summary = document.querySelector('#room-filters summary');
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        icon.removeEventListener('transitionend', onTransitionEnd);
+        reject(new Error('Timed out waiting for the filter arrow transform transition to finish'));
+      }, 2000);
+      function onTransitionEnd(event) {
+        if (event.target !== icon || event.propertyName !== 'transform') return;
+        if (document.querySelector('#room-filters details').open !== expectedOpen
+          || getComputedStyle(icon).transform !== expectedTransform) return;
+        clearTimeout(timeout);
+        icon.removeEventListener('transitionend', onTransitionEnd);
+        resolve(getComputedStyle(icon).transform);
+      }
+      icon.addEventListener('transitionend', onTransitionEnd);
+      summary.click();
+    });
+  })(${JSON.stringify(expectedOpen)}, ${JSON.stringify(expectedTransform)})`);
+}
+
 async function openPage(client, url) {
   await client.send('Page.enable');
   await client.send('Runtime.enable');
@@ -271,19 +294,15 @@ test('Issue 46 room page, switches, personal schedule and deep link work at mobi
   assert.deepEqual(await evaluate(client, `[...document.querySelectorAll('.room-card')].map((card) => card.dataset.roomId)`), baselineOrder,
     'all off displays rooms in their existing sorted order');
 
-  await evaluate(client, `document.querySelector('#room-filters summary').click()`);
+  assert.equal(await toggleDisclosureAndWaitForArrowTransition(client, true, 'matrix(-1, 0, 0, -1, 0, 0)'),
+    'matrix(-1, 0, 0, -1, 0, 0)', 'the custom arrow finishes rotating up when the native disclosure opens');
   assert.equal(await evaluate(client, `document.querySelector('#room-filters details').open`), true,
     'a pointer click opens the native details disclosure and reveals all switches');
   assert.equal(await evaluate(client, `document.querySelectorAll('#room-filters .filter-content .room-filter').length`), 4);
-  await delay(220);
-  assert.equal(await evaluate(client, `getComputedStyle(document.querySelector('#room-filters .filter-collapsible__icon')).transform`), 'matrix(-1, 0, 0, -1, 0, 0)',
-    'the custom arrow points up only while the native details element is open');
-  await evaluate(client, `document.querySelector('#room-filters summary').click()`);
-  await delay(220);
+  assert.equal(await toggleDisclosureAndWaitForArrowTransition(client, false, 'matrix(1, 0, 0, 1, 0, 0)'),
+    'matrix(1, 0, 0, 1, 0, 0)', 'the custom arrow finishes rotating down when the native disclosure closes');
   assert.equal(await evaluate(client, `document.querySelector('#room-filters details').open`), false,
     'a second pointer click closes the native disclosure');
-  assert.equal(await evaluate(client, `getComputedStyle(document.querySelector('#room-filters .filter-collapsible__icon')).transform`), 'matrix(1, 0, 0, 1, 0, 0)',
-    'the custom arrow points down when the disclosure is closed');
   assert.equal(await evaluate(client, `getComputedStyle(document.querySelector('#room-filters .filter-collapsible__icon')).transitionProperty`), 'transform',
     'arrow rotation transitions when reduced motion is not requested');
   await evaluate(client, `document.querySelector('#create-room-navigation').focus()`);
@@ -445,9 +464,21 @@ test('Issue 46 room page, switches, personal schedule and deep link work at mobi
     'reduced-motion mode disables the arrow transition');
   await evaluate(client, `document.querySelector('#room-filters details').open = false`);
   await evaluate(client, `document.querySelector('#room-filters summary').click()`);
-  assert.equal(await evaluate(client, `getComputedStyle(document.querySelector('#room-filters .filter-collapsible__icon')).transform`), 'matrix(-1, 0, 0, -1, 0, 0)',
-    'reduced-motion mode still shows the correct open arrow direction');
+  assert.deepEqual(await evaluate(client, `(() => {
+    const icon = document.querySelector('#room-filters .filter-collapsible__icon');
+    return { open: document.querySelector('#room-filters details').open, transform: getComputedStyle(icon).transform,
+      transitionDuration: getComputedStyle(icon).transitionDuration,
+      transitioning: icon.getAnimations().some((animation) => animation.transitionProperty === 'transform') };
+  })()`), { open: true, transform: 'matrix(-1, 0, 0, -1, 0, 0)', transitionDuration: '0s', transitioning: false },
+  'reduced-motion mode immediately points the arrow up without a transition');
   await evaluate(client, `document.querySelector('#room-filters summary').click()`);
+  assert.deepEqual(await evaluate(client, `(() => {
+    const icon = document.querySelector('#room-filters .filter-collapsible__icon');
+    return { open: document.querySelector('#room-filters details').open, transform: getComputedStyle(icon).transform,
+      transitionDuration: getComputedStyle(icon).transitionDuration,
+      transitioning: icon.getAnimations().some((animation) => animation.transitionProperty === 'transform') };
+  })()`), { open: false, transform: 'matrix(1, 0, 0, 1, 0, 0)', transitionDuration: '0s', transitioning: false },
+  'reduced-motion mode immediately points the arrow down without a transition');
   await evaluate(client, `document.querySelector('#room-filters summary').click()`);
   await evaluate(client, `document.querySelector('#create-room-navigation').click()`);
   assert.equal(await evaluate(client, 'window.__issue46ScrollBehavior'), 'auto', 'creation navigation respects reduced motion');
