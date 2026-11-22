@@ -190,6 +190,35 @@ test('Issue 46 room page, switches, personal schedule and deep link work at mobi
 
   const initial = await evaluate(client, `(() => ({
     filters: [...document.querySelectorAll('#room-filters input[type=checkbox]')].map((input) => ({ label: input.parentElement.textContent.trim(), checked: input.checked, role: input.getAttribute('role') })),
+    disclosure: (() => {
+      const fieldset = document.querySelector('#room-filters');
+      const details = fieldset.querySelector('details.filter-collapsible');
+      const summary = details.querySelector('summary');
+      const bounds = summary.getBoundingClientRect();
+      return {
+        immediateSibling: document.querySelector('#create-room-navigation').nextElementSibling === fieldset,
+        ariaLabel: fieldset.getAttribute('aria-label'),
+        legends: fieldset.querySelectorAll('legend').length,
+        detailsCount: fieldset.querySelectorAll('details.filter-collapsible').length,
+        closed: !details.open,
+        summaryText: summary.textContent.trim(),
+        summaryFirstChild: details.firstElementChild === summary,
+        content: details.querySelectorAll(':scope > .filter-content').length,
+        contentLabels: details.querySelectorAll('.filter-content > label.room-filter').length,
+        summaryHeight: bounds.height,
+        summaryCursor: getComputedStyle(summary).cursor,
+        summaryWeight: getComputedStyle(summary).fontWeight,
+        contentDisplay: getComputedStyle(details.querySelector('.filter-content')).display,
+        contentFlexWrap: getComputedStyle(details.querySelector('.filter-content')).flexWrap,
+        contentGap: getComputedStyle(details.querySelector('.filter-content')).gap,
+        buttonDisplay: getComputedStyle(document.querySelector('#create-room-navigation')).display,
+        filterDisplay: getComputedStyle(fieldset).display,
+        buttonVerticalAlign: getComputedStyle(document.querySelector('#create-room-navigation')).verticalAlign,
+        filterVerticalAlign: getComputedStyle(fieldset).verticalAlign,
+        buttonBounds: (() => { const rect = document.querySelector('#create-room-navigation').getBoundingClientRect(); return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom }; })(),
+        filterBounds: (() => { const rect = fieldset.getBoundingClientRect(); return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom }; })(),
+      };
+    })(),
     sectionOrder: ['.rooms-toolbar', '#upcoming-schedule', '#create-room-navigation', '#room-filters', '#room-cards', '#rooms-empty', '#rooms-no-matches', '#create-room-heading'].map((selector) => {
       const selected = document.querySelector(selector);
       const node = selector === '#create-room-heading' ? selected?.parentElement : selected;
@@ -199,10 +228,65 @@ test('Issue 46 room page, switches, personal schedule and deep link work at mobi
   assert.deepEqual(initial.filters.map(({ label, checked, role }) => [label, checked, role]), [
     ['My voted', false, 'switch'], ['My created room', false, 'switch'], ['Scheduled', false, 'switch'], ['Proposed', false, 'switch'],
   ], 'four independent, initially-off native switches expose their on/off state');
+  assert.deepEqual(initial.disclosure, {
+    immediateSibling: true, ariaLabel: 'Filter rooms / กรองห้อง', legends: 0,
+    detailsCount: 1, closed: true, summaryText: 'Filter rooms', summaryFirstChild: true,
+    content: 1, contentLabels: 4, summaryHeight: 44, summaryCursor: 'pointer', summaryWeight: '700',
+    contentDisplay: 'flex', contentFlexWrap: 'wrap', contentGap: '8px',
+    buttonDisplay: 'inline-block', filterDisplay: 'inline-block', buttonVerticalAlign: 'middle', filterVerticalAlign: 'middle',
+    buttonBounds: initial.disclosure.buttonBounds, filterBounds: initial.disclosure.filterBounds,
+  }, 'the filter fieldset contains one closed, native, accessible disclosure beside the create-room control');
+  await client.send('Emulation.setDeviceMetricsOverride', { width: 1024, height: 844, deviceScaleFactor: 1, mobile: false });
+  const wideControls = await evaluate(client, `(() => {
+    const button = document.querySelector('#create-room-navigation').getBoundingClientRect();
+    const filters = document.querySelector('#room-filters').getBoundingClientRect();
+    return { buttonTop: button.top, filterTop: filters.top, buttonRight: button.right, filterLeft: filters.left,
+      pageWidth: document.documentElement.scrollWidth, viewportWidth: innerWidth };
+  })()`);
+  assert.ok(Math.abs(wideControls.buttonTop - wideControls.filterTop) <= 1,
+    'the create-room and filter controls are vertically aligned when space allows');
+  assert.ok(wideControls.buttonRight <= wideControls.filterLeft,
+    'the create-room and filter controls display side by side when space allows');
+  assert.ok(wideControls.pageWidth <= wideControls.viewportWidth, 'the wide room page has no horizontal overflow');
+  await client.send('Emulation.setDeviceMetricsOverride', { width: 320, height: 844, deviceScaleFactor: 2, mobile: true });
   assert.equal(initial.sectionOrder.every((index) => index >= 0), true, 'all required page sections exist');
   assert.deepEqual(initial.sectionOrder, [...initial.sectionOrder].sort((left, right) => left - right), 'the page follows the requested account/schedule/navigation/filter/cards/form order');
   assert.deepEqual(await evaluate(client, `[...document.querySelectorAll('.room-card')].map((card) => card.dataset.roomId)`), baselineOrder,
     'all off displays rooms in their existing sorted order');
+
+  await evaluate(client, `document.querySelector('#room-filters summary').click()`);
+  assert.equal(await evaluate(client, `document.querySelector('#room-filters details').open`), true,
+    'a pointer click opens the native details disclosure and reveals all switches');
+  assert.equal(await evaluate(client, `document.querySelectorAll('#room-filters .filter-content .room-filter').length`), 4);
+  await evaluate(client, `document.querySelector('#room-filters summary').click()`);
+  assert.equal(await evaluate(client, `document.querySelector('#room-filters details').open`), false,
+    'a second pointer click closes the native disclosure');
+  await evaluate(client, `document.querySelector('#create-room-navigation').focus()`);
+  await client.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab' });
+  await client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab' });
+  assert.equal(await evaluate(client, `document.activeElement === document.querySelector('#room-filters summary')`), true,
+    'the summary is reachable by keyboard navigation');
+  const summaryFocus = await evaluate(client, `(() => ({ outline: getComputedStyle(document.querySelector('#room-filters summary')).outlineStyle, outlineWidth: getComputedStyle(document.querySelector('#room-filters summary')).outlineWidth }))()`);
+  assert.equal(summaryFocus.outline, 'solid', 'the summary has a visible focus indicator');
+  assert.equal(summaryFocus.outlineWidth, '3px');
+  await client.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', text: '\r', unmodifiedText: '\r', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
+  await client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
+  assert.equal(await evaluate(client, `document.querySelector('#room-filters details').open`), true,
+    'Enter toggles the native disclosure from the keyboard');
+  await client.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: ' ', code: 'Space', windowsVirtualKeyCode: 32, nativeVirtualKeyCode: 32 });
+  await client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: ' ', code: 'Space', windowsVirtualKeyCode: 32, nativeVirtualKeyCode: 32 });
+  assert.equal(await evaluate(client, `document.querySelector('#room-filters details').open`), false,
+    'Space toggles the native disclosure from the keyboard');
+  await evaluate(client, `document.querySelector('#room-filters summary').click()`);
+  await client.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9, nativeVirtualKeyCode: 9 });
+  await client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9, nativeVirtualKeyCode: 9 });
+  const switchFocus = await evaluate(client, `(() => ({
+    focused: document.activeElement?.id,
+    outline: getComputedStyle(document.activeElement?.nextElementSibling).outlineStyle,
+    outlineWidth: getComputedStyle(document.activeElement?.nextElementSibling).outlineWidth,
+  }))()`);
+  assert.deepEqual(switchFocus, { focused: 'filter-my-voted', outline: 'solid', outlineWidth: '3px' },
+    'the visible switch has a keyboard focus indicator');
 
   const scheduleState = await evaluate(client, `(() => {
     const section = document.querySelector('#upcoming-schedule');
@@ -286,6 +370,20 @@ test('Issue 46 room page, switches, personal schedule and deep link work at mobi
     };
   })()`);
   assert.deepEqual(noMatch, { hidden: false, empty: true, createEnabled: true }, 'no-match differs from no rooms and creation remains available');
+  const filteredBeforeDisclosure = await evaluate(client, `JSON.stringify({
+    filters: [...document.querySelectorAll('#room-filters input[type=checkbox]')].map((input) => input.checked),
+    visibleRooms: [...document.querySelectorAll('.room-card:not([hidden])')].map((card) => card.dataset.roomId),
+    noMatchesHidden: document.querySelector('#rooms-no-matches').hidden,
+  })`);
+  await evaluate(client, `document.querySelector('#room-filters summary').click()`);
+  assert.equal(await evaluate(client, `document.querySelector('#room-filters details').open`), false);
+  await evaluate(client, `document.querySelector('#room-filters summary').click()`);
+  assert.equal(await evaluate(client, `document.querySelector('#room-filters details').open`), true);
+  assert.equal(await evaluate(client, `JSON.stringify({
+    filters: [...document.querySelectorAll('#room-filters input[type=checkbox]')].map((input) => input.checked),
+    visibleRooms: [...document.querySelectorAll('.room-card:not([hidden])')].map((card) => card.dataset.roomId),
+    noMatchesHidden: document.querySelector('#rooms-no-matches').hidden,
+  })`), filteredBeforeDisclosure, 'closing and reopening preserves selected filters, matching rooms, and no-match state');
   assert.equal(await evaluate(client, `document.querySelector('#upcoming-schedule').hidden`), false,
     'room filters do not change the personal schedule section');
 
