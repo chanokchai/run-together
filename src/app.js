@@ -178,7 +178,13 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '', sho
       #create-room-time-error { margin: 0; font-size: .9rem; line-height: 1.35; }
       #create-room-time-error { color: #7f1d1d; font-weight: 700; }
       #room-filters { display: inline-block; vertical-align: middle; margin: .85rem 0 0 .35rem; padding: 0; border: 0; }
-      .filter-collapsible summary { display: flex; min-height: 44px; align-items: center; padding: 0 .25rem; cursor: pointer; font-weight: 700; }
+      .filter-collapsible { padding: .25rem; border: 1px solid #94a3b8; border-radius: .4rem; }
+      .filter-collapsible summary { display: flex; min-height: 44px; align-items: center; gap: .4rem; padding: 0 .25rem; cursor: pointer; font-weight: 700; list-style: none; }
+      .filter-collapsible summary::-webkit-details-marker { display: none; }
+      .filter-collapsible summary::marker { content: ""; }
+      .filter-collapsible__icon { flex: 0 0 1rem; width: 1rem; height: 1rem; transform: rotate(0deg); }
+      .filter-collapsible[open] .filter-collapsible__icon { transform: rotate(180deg); }
+      @media (prefers-reduced-motion: no-preference) { .filter-collapsible__icon { transition: transform .18s ease; } }
       .filter-collapsible summary:focus-visible { outline: 3px solid #145da0; outline-offset: 2px; }
       .filter-content { display: flex; flex-wrap: wrap; gap: .5rem; }
       #room-filters .room-filter { display: inline-flex; flex: 0 1 auto; min-width: 0; min-height: 44px; align-items: center; gap: .45rem; margin: 0; padding: .15rem .25rem; cursor: pointer; }
@@ -487,7 +493,7 @@ const roomListPage = () => page({
     <button id="create-room-navigation" type="button" class="secondary">to create room</button>
     <fieldset id="room-filters" aria-label="Filter rooms / กรองห้อง">
       <details class="filter-collapsible">
-        <summary>Filter rooms</summary>
+        <summary>Filter rooms<svg class="filter-collapsible__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></svg></summary>
         <div class="filter-content">
           <label class="room-filter"><input id="filter-my-voted" type="checkbox" role="switch"><span class="room-filter__switch" aria-hidden="true"></span><span>My voted</span></label>
           <label class="room-filter"><input id="filter-my-created" type="checkbox" role="switch"><span class="room-filter__switch" aria-hidden="true"></span><span>My created room</span></label>
