@@ -115,6 +115,34 @@ async function toggleDisclosureAndWaitForArrowTransition(client, expectedOpen, e
   })(${JSON.stringify(expectedOpen)}, ${JSON.stringify(expectedTransform)})`);
 }
 
+async function waitForStableDisclosureArrow(client, expectedOpen, expectedTransform, timeoutMs = 2000) {
+  const startedAt = Date.now();
+  let stableSamples = 0;
+  let lastObserved;
+  while (Date.now() - startedAt < timeoutMs) {
+    lastObserved = await evaluate(client, `(() => {
+      const details = document.querySelector('#room-filters details');
+      const icon = document.querySelector('#room-filters .filter-collapsible__icon');
+      return {
+        open: details?.open,
+        transform: icon ? getComputedStyle(icon).transform : null,
+        activeTransformTransitions: icon?.getAnimations()
+          .filter((animation) => animation.transitionProperty === 'transform' && animation.playState !== 'finished')
+          .map((animation) => animation.playState) ?? [],
+      };
+    })()`);
+    if (lastObserved.open === expectedOpen && lastObserved.transform === expectedTransform
+      && lastObserved.activeTransformTransitions.length === 0) {
+      stableSamples += 1;
+      if (stableSamples === 2) return lastObserved;
+    } else {
+      stableSamples = 0;
+    }
+    await delay(25);
+  }
+  throw new Error(`Timed out after ${timeoutMs}ms waiting for a stable disclosure arrow; expected open=${expectedOpen}, transform=${expectedTransform}; last observed=${JSON.stringify(lastObserved)}`);
+}
+
 async function openPage(client, url) {
   await client.send('Page.enable');
   await client.send('Runtime.enable');
@@ -440,6 +468,7 @@ test('Issue 46 room page, switches, personal schedule and deep link work at mobi
   })`), filteredBeforeDisclosure, 'closing and reopening preserves selected filters, matching rooms, and no-match state');
   assert.equal(await evaluate(client, `document.querySelector('#upcoming-schedule').hidden`), false,
     'room filters do not change the personal schedule section');
+  await waitForStableDisclosureArrow(client, true, 'matrix(-1, 0, 0, -1, 0, 0)');
 
   await evaluate(client, `(() => {
     const input = document.querySelector('#create-room-title');
