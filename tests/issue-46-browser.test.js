@@ -414,7 +414,8 @@ test('Issue 46 room page, switches, personal schedule and deep link work at mobi
     'the filter boundary fits the 320 CSS pixel viewport');
   assert.ok(narrowDisclosure.pageWidth <= narrowDisclosure.viewportWidth, 'the 320 CSS pixel page has no horizontal overflow');
   await client.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }).then(async ({ data }) => {
-    const { writeFile } = await import('node:fs/promises');
+    const { mkdir, writeFile } = await import('node:fs/promises');
+    await mkdir(join(process.cwd(), 'outputs'), { recursive: true });
     await writeFile(join(process.cwd(), 'outputs/issue-46-room-page-320.png'), Buffer.from(data, 'base64'));
   });
 
