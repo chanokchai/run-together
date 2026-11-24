@@ -177,7 +177,16 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '', sho
       #create-room-time-clear { width: auto; max-width: 100%; min-width: 44px; min-height: 44px; margin: 0; padding-inline: .8rem; white-space: normal; overflow-wrap: anywhere; }
       #create-room-time-error { margin: 0; font-size: .9rem; line-height: 1.35; }
       #create-room-time-error { color: #7f1d1d; font-weight: 700; }
-      #room-filters { display: flex; flex-wrap: wrap; gap: .35rem .75rem; margin: 1rem 0; padding: .5rem .75rem; border: 1px solid #94a3b8; border-radius: .5rem; }
+      #room-filters { display: inline-block; vertical-align: middle; margin: .85rem 0 0 .35rem; padding: 0; border: 0; }
+      .filter-collapsible { padding: .25rem; border: 1px solid #94a3b8; border-radius: .4rem; }
+      .filter-collapsible summary { display: flex; min-height: 44px; align-items: center; gap: .4rem; padding: 0 .25rem; cursor: pointer; font-weight: 700; list-style: none; }
+      .filter-collapsible summary::-webkit-details-marker { display: none; }
+      .filter-collapsible summary::marker { content: ""; }
+      .filter-collapsible__icon { flex: 0 0 1rem; width: 1rem; height: 1rem; transform: rotate(0deg); }
+      .filter-collapsible[open] .filter-collapsible__icon { transform: rotate(180deg); }
+      @media (prefers-reduced-motion: no-preference) { .filter-collapsible__icon { transition: transform .18s ease; } }
+      .filter-collapsible summary:focus-visible { outline: 3px solid #145da0; outline-offset: 2px; }
+      .filter-content { display: flex; flex-wrap: wrap; gap: .5rem; }
       #room-filters .room-filter { display: inline-flex; flex: 0 1 auto; min-width: 0; min-height: 44px; align-items: center; gap: .45rem; margin: 0; padding: .15rem .25rem; cursor: pointer; }
       .room-filter input { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
       .room-filter__switch { position: relative; flex: 0 0 2.8rem; width: 2.8rem; height: 1.55rem; box-sizing: border-box; border: 2px solid #52606d; border-radius: 999px; background: #e2e8f0; }
@@ -185,7 +194,7 @@ function page({ title, content, script = '', mainClass = '', scriptSrc = '', sho
       .room-filter input:checked + .room-filter__switch { border-color: #14532d; background: #166534; }
       .room-filter input:checked + .room-filter__switch::after { transform: translateX(1.2rem); }
       .room-filter input:focus-visible + .room-filter__switch { outline: 3px solid #145da0; outline-offset: 2px; }
-      #create-room-navigation { width: auto; min-width: 44px; min-height: 44px; margin: .85rem 0 0; padding-inline: 1rem; border: 1px solid #52606d; background: #e8eef5; color: #14213d; }
+      #create-room-navigation { width: auto; min-width: 44px; min-height: 44px; margin: .85rem 0 0; padding-inline: 1rem; border: 1px solid #52606d; background: #e8eef5; color: #14213d; vertical-align: middle; }
       #create-room-navigation:hover { background: #dbe5ef; }
       #create-room-navigation:focus-visible { outline: 3px solid #145da0; outline-offset: 2px; }
       .your-upcoming-schedule { margin: .85rem 0 0; padding: .8rem; border: 1px solid #cbd5e1; border-radius: .7rem; background: #f8fafc; box-shadow: none; }
@@ -483,11 +492,15 @@ const roomListPage = () => page({
     </section>
     <button id="create-room-navigation" type="button" class="secondary">to create room</button>
     <fieldset id="room-filters" aria-label="Filter rooms / กรองห้อง">
-      <legend>Filter rooms / กรองห้อง</legend>
-      <label class="room-filter"><input id="filter-my-voted" type="checkbox" role="switch"><span class="room-filter__switch" aria-hidden="true"></span><span>My voted</span></label>
-      <label class="room-filter"><input id="filter-my-created" type="checkbox" role="switch"><span class="room-filter__switch" aria-hidden="true"></span><span>My created room</span></label>
-      <label class="room-filter"><input id="filter-scheduled" type="checkbox" role="switch"><span class="room-filter__switch" aria-hidden="true"></span><span>Scheduled</span></label>
-      <label class="room-filter"><input id="filter-proposed" type="checkbox" role="switch"><span class="room-filter__switch" aria-hidden="true"></span><span>Proposed</span></label>
+      <details class="filter-collapsible">
+        <summary>Filter rooms<svg class="filter-collapsible__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></svg></summary>
+        <div class="filter-content">
+          <label class="room-filter"><input id="filter-my-voted" type="checkbox" role="switch"><span class="room-filter__switch" aria-hidden="true"></span><span>My voted</span></label>
+          <label class="room-filter"><input id="filter-my-created" type="checkbox" role="switch"><span class="room-filter__switch" aria-hidden="true"></span><span>My created room</span></label>
+          <label class="room-filter"><input id="filter-scheduled" type="checkbox" role="switch"><span class="room-filter__switch" aria-hidden="true"></span><span>Scheduled</span></label>
+          <label class="room-filter"><input id="filter-proposed" type="checkbox" role="switch"><span class="room-filter__switch" aria-hidden="true"></span><span>Proposed</span></label>
+        </div>
+      </details>
     </fieldset>
     <div id="room-cards" class="room-cards" role="list" aria-label="Rooms"></div>
     <p id="rooms-empty" hidden>No rooms yet. Create a room to get started. / ยังไม่มีห้อง กรุณาสร้างห้องใหม่</p>
